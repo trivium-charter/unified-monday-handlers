@@ -11,10 +11,11 @@ if CELERY_BROKER_URL.startswith('rediss://'):
     }
 
 celery_app = Celery(
-    'monday_tasks', # App name must match the one used by the worker
+    'monday_tasks', # App name
     broker=CELERY_BROKER_URL,
-    backend=CELERY_RESULT_BACKEND
-    # NO include=[] here, as this app does not define tasks itself
+    backend=CELERY_RESULT_BACKEND,
+    # THIS LINE MUST BE PRESENT FOR THE WORKER TO DISCOVER TASKS
+    include=['monday_tasks'] # This tells Celery where to find your tasks
 )
 
 if broker_use_ssl_config:
