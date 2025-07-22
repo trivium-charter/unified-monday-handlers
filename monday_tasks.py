@@ -142,14 +142,21 @@ def process_general_webhook(event_data, config_rule):
             
             item_name = monday.get_item_name(item_id_from_webhook, webhook_board_id)
             if item_name:
-                new_name = item_name.upper() # Example: Simple uppercase reformat.
+                new_name = item_name.upper() # The reformat logic (e.g., "BECK DOUGLAS")
                 
                 # Check if a specific target column is provided, otherwise update item name
                 if target_text_column_id:
-                    print(f"INFO: MONDAY_TASKS: NameReformat - Would update column '{target_text_column_id}' on item {item_id_from_webhook} with '{new_name}'.")
-                    # No direct utility for generic text column updates via change_column_value exists in utils yet, so this is illustrative.
-                    success = True # Assuming success if the logic runs without error.
+                    # --- ACTUAL API CALL ---
+                    print(f"INFO: MONDAY_TASKS: NameReformat - Attempting to update column '{target_text_column_id}' on item {item_id_from_webhook} with '{new_name}'.")
+                    success = monday.change_column_value_generic( # <-- ACTUAL API CALL
+                        board_id=webhook_board_id,
+                        item_id=item_id_from_webhook,
+                        column_id=target_text_column_id,
+                        value=new_name # Pass the reformatted name
+                    )
                 else:
+                    # If target_text_column_id is NOT provided, it defaults to updating the item's main name
+                    print(f"INFO: MONDAY_TASKS: NameReformat - Attempting to update item name on {item_id_from_webhook} to '{new_name}'.")
                     success = monday.update_item_name(item_id_from_webhook, webhook_board_id, new_name)
             else:
                 print(f"INFO: MONDAY_TASKS: NameReformat - Could not retrieve item name for {item_id_from_webhook}. Skipping NameReformat.")
@@ -258,12 +265,8 @@ def process_general_webhook(event_data, config_rule):
             success = True # Placeholder if not fully implemented
 
         else:
-            print(f"INFO: MONDAY_TASKS: Unknown log_type '{log_type}' for update_column_value. Skipping.")
-            success = False
-
-    else:
-        print(f"INFO: MONDAY_TASKS: Webhook type '{webhook_type}' or column ID '{trigger_column_id_from_webhook}' did not match rule '{log_type}'. Ignoring in task.")
-        return True
+            print(f"INFO: MONDAY_TASKS: Webhook type '{webhook_type}' or column ID '{trigger_column_id_from_webhook}' did not match rule '{log_type}'. Ignoring in task.")
+            return True
 
     return success
 
