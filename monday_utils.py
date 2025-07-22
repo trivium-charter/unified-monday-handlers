@@ -222,6 +222,20 @@ def get_linked_ids_from_connect_column_value(value_data):
     print(f"DEBUG: Parsed linked IDs from value data: {linked_ids}")
     return linked_ids
 
+def get_linked_items_from_board_relation(item_id, board_id, connect_column_id):
+    """
+    Fetches the linked item IDs from a specific Connect Boards column for a given item.
+    It combines get_column_value and get_linked_ids_from_connect_column_value.
+    Returns a set of linked item IDs.
+    """
+    print(f"DEBUG: monday_utils: Calling get_column_value for item {item_id} on board {board_id}, column {connect_column_id}")
+    column_data = get_column_value(item_id, board_id, connect_column_id)
+    if column_data and column_data.get('value') is not None:
+        print(f"DEBUG: monday_utils: Calling get_linked_ids_from_connect_column_value with data: {column_data['value']}")
+        return get_linked_ids_from_connect_column_value(column_data['value'])
+    print(f"DEBUG: monday_utils: No linked items found or column data missing for item {item_id}, column {connect_column_id}.")
+    return set()
+
 def update_item_name(item_id, board_id, new_name):
     """Updates the name of a Monday.com item."""
     column_values_json_dict = {"name": new_name}
@@ -248,6 +262,43 @@ def update_item_name(item_id, board_id, new_name):
         return True
     else:
         print(f"Failed to update item {item_id} name. Result: {result}")
+        if result and 'errors' in result:
+            print(f"Monday API Errors: {result['errors']}")
+        return False
+
+def change_column_value_generic(board_id, item_id, column_id, value):
+    """
+    Updates a generic text or number column on a Monday.com item.
+    This is for simple string or number values. For complex types (people, connect boards, status),
+    you might need more specific helpers (like update_people_column, update_connect_board_column).
+    """
+    # GraphQL requires the 'value' parameter to be a JSON string literal.
+    # json.dumps() the value once to get a JSON string, then json.dumps() that result again
+    # to make it a string literal suitable for GraphQL.
+    graphql_value_string_literal = json.dumps(str(value))
+    
+    mutation = f"""
+    mutation {{
+      change_column_value (
+        board_id: {board_id},
+        item_id: {item_id},
+        column_id: "{column_id}",
+        value: {graphql_value_string_literal}
+      ) {{
+        id
+      }}
+    }}
+    """
+    print(f"DEBUG: monday_utils: Attempting to update column '{column_id}' for item {item_id} on board {board_id} with value: '{value}'")
+    print(f"DEBUG: monday_utils: Full Mutation Query:\n{mutation}")
+    
+    result = execute_monday_graphql(mutation)
+
+    if result and 'data' in result and result['data'].get('change_column_value'):
+        print(f"Successfully updated column '{column_id}' for item {item_id} on board {board_id}.")
+        return True
+    else:
+        print(f"ERROR: monday_utils: Failed to update column '{column_id}' for item {item_id} on board {board_id}. Result: {result}")
         if result and 'errors' in result:
             print(f"Monday API Errors: {result['errors']}")
         return False
@@ -315,7 +366,7 @@ def create_update(item_id, update_text):
     mutation {{
       create_update (
         item_id: {item_id},
-        body: {json.dumps(update_text)} # Ensure text is properly quoted/escaped for GraphQL
+        body: {json.dumps(update_text)}
       ) {{
         id
       }}
