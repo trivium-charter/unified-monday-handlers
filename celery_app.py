@@ -1,3 +1,4 @@
+# celery_app.py
 import os
 from celery import Celery
 
@@ -11,11 +12,10 @@ if CELERY_BROKER_URL.startswith('rediss://'):
     }
 
 celery_app = Celery(
-    'monday_tasks', # App name
+    'monday_tasks',
     broker=CELERY_BROKER_URL,
     backend=CELERY_RESULT_BACKEND,
-    # THIS LINE MUST BE PRESENT FOR THE WORKER TO DISCOVER TASKS
-    include=['monday_tasks'] # This tells Celery where to find your tasks
+    include=['monday_tasks']
 )
 
 if broker_use_ssl_config:
@@ -23,3 +23,6 @@ if broker_use_ssl_config:
     celery_app.conf.redis_backend_use_ssl = broker_use_ssl_config
 
 celery_app.conf.timezone = 'America/Los_Angeles'
+
+# Add this line for broker heartbeat configuration
+celery_app.conf.broker_heartbeat = 30 # Sends heartbeat every 30 seconds
