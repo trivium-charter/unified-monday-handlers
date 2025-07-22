@@ -146,10 +146,6 @@ def process_general_webhook(event_data, config_rule):
                 
                 # Check if a specific target column is provided, otherwise update item name
                 if target_text_column_id:
-                    # Assuming monday_utils has a generic change_multiple_column_values or specific column update
-                    # For a text column, you might use: monday.change_column_value(board_id, item_id, column_id, value)
-                    # For simplicity and given existing utils, we'll log what would happen.
-                    # If this is the main item name, then update_item_name is correct.
                     print(f"INFO: MONDAY_TASKS: NameReformat - Would update column '{target_text_column_id}' on item {item_id_from_webhook} with '{new_name}'.")
                     # No direct utility for generic text column updates via change_column_value exists in utils yet, so this is illustrative.
                     success = True # Assuming success if the logic runs without error.
@@ -164,17 +160,13 @@ def process_general_webhook(event_data, config_rule):
             print(f"DEBUG: MONDAY_TASKS: ConnectBoardChange: params received: {params}")
 
             main_item_id = item_id_from_webhook # The item that triggered the webhook (parent for subitem creation)
-            # main_board_id = webhook_board_id # Already available as webhook_board_id
-
             connected_board_id = params.get('linked_board_id') # The board being linked to
             subitem_name_prefix = params.get('subitem_name_prefix') # e.g., "Math", "ELA", "ACE", "Other/Elective"
             subitem_entry_type = params.get('subitem_entry_type') # e.g., "Curriculum Change"
             entry_type_column_id_from_params = params.get('entry_type_column_id') # Column for "Curriculum Change" on subitem board
             
-            # --- BEGIN NEW DEBUG PRINTS FOR PREFIX ISSUE ---
             print(f"DEBUG: MONDAY_TASKS: ConnectBoardChange: subitem_name_prefix from params: '{subitem_name_prefix}'")
             print(f"DEBUG: MONDAY_TASKS: ConnectBoardChange: subitem_entry_type from params: '{subitem_entry_type}'")
-            # --- END NEW DEBUG PRINTS ---
 
             if not all([connected_board_id, subitem_name_prefix, subitem_entry_type, entry_type_column_id_from_params]):
                 print(f"ERROR: MONDAY_TASKS: ConnectBoardChange: Missing required parameters for subitem creation from params: {params}")
@@ -201,13 +193,11 @@ def process_general_webhook(event_data, config_rule):
             elif event_user_id == -4:
                 user_log_text = " by automation"
 
-            # Prepare subject prefix for subitem name (now uses subitem_name_prefix from params)
             subject_prefix_text = ""
             if subitem_name_prefix: # This condition checks if the value is not None or empty string
                 subject_prefix_text = f"{subitem_name_prefix} " # Add a space after the subject if it exists
             print(f"DEBUG: MONDAY_TASKS: ConnectBoardChange: Constructed subject_prefix_text: '{subject_prefix_text}'")
 
-            # Prepare additional column values for the new subitem
             additional_subitem_columns = {}
             if entry_type_column_id_from_params:
                 # Set the value to "Curriculum Change" for the Entry Type column, formatted for dropdown
@@ -217,7 +207,7 @@ def process_general_webhook(event_data, config_rule):
                  print(f"WARNING: MONDAY_TASKS: ConnectBoardChange: entry_type_column_id_from_params is not set. Subitem entry type will not be set.")
 
 
-            # Create subitems for Added Items
+            # --- Create subitems for Added Items ---
             for item_id_linked in added_links:
                 linked_item_name = monday.get_item_name(item_id_linked, connected_board_id)
                 if linked_item_name:
@@ -230,7 +220,8 @@ def process_general_webhook(event_data, config_rule):
                     print(f"WARNING: MONDAY_TASKS: ConnectBoardChange: Could not retrieve name for added item ID: {item_id_linked}. Skipping subitem creation.")
                     overall_op_successful = False
 
-            # Create subitems for Removed Items
+            # --- Create subitems for Removed Items ---
+            # This loop ensures that subitems are created for removed items as well, with the correct prefix.
             for item_id_linked in removed_links:
                 linked_item_name = monday.get_item_name(item_id_linked, connected_board_id)
                 if linked_item_name:
@@ -267,7 +258,7 @@ def process_general_webhook(event_data, config_rule):
             success = True # Placeholder if not fully implemented
 
         else:
-            print(f"WARNING: MONDAY_TASKS: Unknown log_type '{log_type}' for update_column_value. Skipping.")
+            print(f"INFO: MONDAY_TASKS: Unknown log_type '{log_type}' for update_column_value. Skipping.")
             success = False
 
     else:
@@ -386,7 +377,7 @@ def process_master_student_person_sync_webhook(event_data):
     master_item_id = event_data.get('pulseId')
     master_board_id = event_data.get('boardId')
     trigger_column_id = event_data.get('columnId')
-    current_column_value_raw = event_data.get('value') # This is the raw value from the webhook
+    current_column_value_raw = event_data.get('value')
 
     print(f"DEBUG: MONDAY_TASKS: process_master_student_person_sync_webhook - Entering for item {master_item_id} on board {master_board_id}.")
     print(f"DEBUG: MONDAY_TASKS: process_master_student_person_sync_webhook - Trigger column ID: {trigger_column_id}")
