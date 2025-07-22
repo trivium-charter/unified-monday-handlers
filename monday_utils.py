@@ -287,26 +287,37 @@ def create_subitem(parent_item_id, subitem_name, column_values=None):
     :param parent_item_id: The ID of the parent item.
     :param subitem_name: The name of the new subitem.
     :param column_values: A dictionary of column values for the new subitem.
+                          Keys are column_ids, values are Python native objects.
+                          Example: {"text_col": "some text", "status_col": {"label": "Done"}}
     :return: The ID of the created subitem, or None if creation failed.
     """
-    column_values_json = {}
+    # This dictionary will hold the Python native dictionary/list/string structures for each column's value.
+    # Example: { "entry_type__1": {"labels": ["Curriculum Change"]}, "text_column": "Hello" }
+    values_for_monday_api = {}
     if column_values:
         for col_id, value in column_values.items():
-            if isinstance(value, str):
-                column_values_json[col_id] = value
-            elif isinstance(value, dict):
-                column_values_json[col_id] = json.dumps(value)
+            # If the value is already a dictionary (like for Status/Dropdown {"label": "X"} or People {"personsAndTeams": [...]})
+            if isinstance(value, dict):
+                values_for_monday_api[col_id] = value
+            # If the value is a simple string (for Text, Numbers, etc.)
             else:
-                column_values_json[col_id] = str(value)
+                values_for_monday_api[col_id] = str(value) # Ensure it's a string
 
-    graphql_column_values_string_literal = json.dumps(json.dumps(column_values_json))
+
+    # Now, json.dumps this dictionary once. This creates the final JSON string
+    # that Monday.com's API expects for the 'column_values' argument.
+    # It's crucial this is only dumped *once* at this stage.
+    column_values_json_string_for_graphql = json.dumps(values_for_monday_api)
+
+    print(f"DEBUG: monday_utils: Subitem column_values sent to GraphQL (inner JSON): {column_values_json_string_for_graphql}")
+
 
     mutation = f"""
     mutation {{
       create_subitem (
         parent_item_id: {parent_item_id},
-        item_name: "{subitem_name}",
-        column_values: {graphql_column_values_string_literal}
+        item_name: {json.dumps(subitem_name)}, # item_name needs to be a JSON string literal
+        column_values: {json.dumps(column_values_json_string_for_graphql)} # Double-dumps the *entire* inner JSON string for GraphQL
       ) {{
         id
         name
@@ -316,7 +327,7 @@ def create_subitem(parent_item_id, subitem_name, column_values=None):
       }}
     }}
     """
-    print(f"DEBUG: Attempting to create subitem '{subitem_name}' under parent {parent_item_id} with mutation:\n{mutation}")
+    print(f"DEBUG: monday_utils: Attempting to create subitem '{subitem_name}' under parent {parent_item_id} with mutation:\n{mutation}")
     result = execute_monday_graphql(mutation)
 
     if result and 'data' in result and result['data'].get('create_subitem'):
@@ -324,7 +335,7 @@ def create_subitem(parent_item_id, subitem_name, column_values=None):
         print(f"Successfully created subitem '{subitem_name}' (ID: {new_subitem_id}) under item {parent_item_id}.")
         return new_subitem_id
     else:
-        print(f"ERROR: Failed to create subitem '{subitem_name}' under item {parent_item_id}. Result: {result}")
+        print(f"ERROR: monday_utils: Failed to create subitem '{subitem_name}' under item {parent_item_id}. Result: {result}")
         if result and 'errors' in result:
             print(f"Monday API Errors: {result['errors']}")
         return None
