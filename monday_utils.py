@@ -267,6 +267,20 @@ def update_item_name(item_id, board_id, new_name):
             print(f"Monday API Errors: {result['errors']}")
         return False
 
+def get_linked_items_from_board_relation(item_id, board_id, connect_column_id):
+    """
+    Fetches the linked item IDs from a specific Connect Boards column for a given item.
+    It combines get_column_value and get_linked_ids_from_connect_column_value.
+    Returns a set of linked item IDs.
+    """
+    print(f"DEBUG: monday_utils: Calling get_column_value for item {item_id} on board {board_id}, column {connect_column_id}")
+    column_data = get_column_value(item_id, board_id, connect_column_id)
+    if column_data and column_data.get('value') is not None: # Ensure 'value' exists and is not None
+        print(f"DEBUG: monday_utils: Calling get_linked_ids_from_connect_column_value with data: {column_data['value']}")
+        return get_linked_ids_from_connect_column_value(column_data['value'])
+    print(f"DEBUG: monday_utils: No linked items found or column data missing for item {item_id}, column {connect_column_id}.")
+    return set() # Return an empty set if no linked items or data problem
+    
 def create_subitem(parent_item_id, subitem_name, column_values=None):
     """
     Creates a new subitem under a specified parent item.
