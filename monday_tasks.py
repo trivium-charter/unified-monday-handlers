@@ -79,6 +79,23 @@ MONDAY_ENTRY_TYPE_COLUMN_ID_FOR_SUBITEM_LOGGER = os.environ.get("MONDAY_ENTRY_TY
 print(f"DEBUG: MONDAY_TASKS: Subitem Logger MONDAY_MAIN_BOARD_ID: '{MONDAY_MAIN_BOARD_ID_FOR_SUBITEM_LOGGER}'")
 
 
+# --- Helper for Name Formatting ---
+def format_name_last_first(name_str):
+    """
+    Reformats a 'First Last' string to 'Last, First'.
+    Handles multiple first names or middle initials.
+    """
+    if not name_str or not isinstance(name_str, str):
+        return name_str # Return as is if not a valid string
+
+    parts = name_str.strip().split()
+    if len(parts) >= 2:
+        last_name = parts[-1]
+        first_names = " ".join(parts[:-1])
+        return f"{last_name}, {first_names}"
+    else:
+        return name_str # Return original if not enough parts to reformat
+
 # --- Celery Tasks ---
 
 @celery_app.task
@@ -142,13 +159,13 @@ def process_general_webhook(event_data, config_rule):
             
             item_name = monday.get_item_name(item_id_from_webhook, webhook_board_id)
             if item_name:
-                new_name = item_name.upper() # The reformat logic (e.g., "BECK DOUGLAS")
+                # --- APPLY LAST, FIRST FORMATTING ---
+                new_name = format_name_last_first(item_name) # Call the new helper function
+                print(f"DEBUG: MONDAY_TASKS: NameReformat - Original name: '{item_name}', Reformatted name: '{new_name}'")
                 
-                # Check if a specific target column is provided, otherwise update item name
                 if target_text_column_id:
-                    # --- ACTUAL API CALL ---
                     print(f"INFO: MONDAY_TASKS: NameReformat - Attempting to update column '{target_text_column_id}' on item {item_id_from_webhook} with '{new_name}'.")
-                    success = monday.change_column_value_generic( # <-- ACTUAL API CALL
+                    success = monday.change_column_value_generic(
                         board_id=webhook_board_id,
                         item_id=item_id_from_webhook,
                         column_id=target_text_column_id,
@@ -160,7 +177,7 @@ def process_general_webhook(event_data, config_rule):
                     success = monday.update_item_name(item_id_from_webhook, webhook_board_id, new_name)
             else:
                 print(f"INFO: MONDAY_TASKS: NameReformat - Could not retrieve item name for {item_id_from_webhook}. Skipping NameReformat.")
-                success = True # Considered successful if no action needed
+                success = True
 
         elif log_type == "ConnectBoardChange":
             print(f"DEBUG: MONDAY_TASKS: ConnectBoardChange: Entered ConnectBoardChange logic block.")
@@ -201,13 +218,12 @@ def process_general_webhook(event_data, config_rule):
                 user_log_text = " by automation"
 
             subject_prefix_text = ""
-            if subitem_name_prefix: # This condition checks if the value is not None or empty string
-                subject_prefix_text = f"{subitem_name_prefix} " # Add a space after the subject if it exists
+            if subitem_name_prefix:
+                subject_prefix_text = f"{subitem_name_prefix} "
             print(f"DEBUG: MONDAY_TASKS: ConnectBoardChange: Constructed subject_prefix_text: '{subject_prefix_text}'")
 
             additional_subitem_columns = {}
             if entry_type_column_id_from_params:
-                # Set the value to "Curriculum Change" for the Entry Type column, formatted for dropdown
                 additional_subitem_columns[entry_type_column_id_from_params] = {"labels": [str(subitem_entry_type)]}
                 print(f"DEBUG: MONDAY_TASKS: ConnectBoardChange: Added entry type column value: {additional_subitem_columns}")
             else:
@@ -228,7 +244,6 @@ def process_general_webhook(event_data, config_rule):
                     overall_op_successful = False
 
             # --- Create subitems for Removed Items ---
-            # This loop ensures that subitems are created for removed items as well, with the correct prefix.
             for item_id_linked in removed_links:
                 linked_item_name = monday.get_item_name(item_id_linked, connected_board_id)
                 if linked_item_name:
@@ -266,9 +281,13 @@ def process_general_webhook(event_data, config_rule):
 
         else:
             print(f"INFO: MONDAY_TASKS: Webhook type '{webhook_type}' or column ID '{trigger_column_id_from_webhook}' did not match rule '{log_type}'. Ignoring in task.")
-            return True
+            success = True # Task successfully processed (nothing to do)
 
+    # Note: This return value is from the `elif` block.
+    # The `process_general_webhook` should always return True unless a critical unhandled error occurs.
+    # If the rule didn't match, or if it skipped due to a warning, it should still be considered "processed".
     return success
+
 
 @celery_app.task
 def process_plp_course_sync_webhook(event_data):
