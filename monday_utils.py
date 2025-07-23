@@ -272,9 +272,6 @@ def change_column_value_generic(board_id, item_id, column_id, value):
     This is for simple string or number values. For complex types (people, connect boards, status),
     you might need more specific helpers (like update_people_column, update_connect_board_column).
     """
-    # GraphQL requires the 'value' parameter to be a JSON string literal.
-    # json.dumps() the value once to get a JSON string, then json.dumps() that result again
-    # to make it a string literal suitable for GraphQL.
     graphql_value_string_literal = json.dumps(str(value))
     
     mutation = f"""
