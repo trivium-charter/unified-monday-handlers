@@ -269,26 +269,29 @@ def update_item_name(item_id, board_id, new_name):
 def change_column_value_generic(board_id, item_id, column_id, value):
     """
     Updates a generic text or number column on a Monday.com item.
-    This is for simple string or number values. For complex types (people, connect boards, status),
-    you might need more specific helpers (like update_people_column, update_connect_board_column).
+    This is for simple string or number values.
     """
-    graphql_value_string_literal = json.dumps(str(value))
-    
+    # CRITICAL FIX: The 'value' argument in GraphQL mutation expects a JSON string literal.
+    # 1. Convert the Python 'value' to a JSON string (e.g., "BECK DOUGLAS" -> "\"BECK DOUGLAS\"").
+    # 2. Then, dump it again to make it a JSON string literal within the F-string (e.g., "\"BECK DOUGLAS\"" -> "\"\\\"BECK DOUGLAS\\\"\"").
+    graphql_value_string_literal = json.dumps(json.dumps(str(value))) # Ensure value is string, then double-dump
+
     mutation = f"""
     mutation {{
       change_column_value (
         board_id: {board_id},
         item_id: {item_id},
         column_id: "{column_id}",
-        value: {graphql_value_string_literal}
+        value: {graphql_value_string_literal} # <-- Use the double-dumped literal here
       ) {{
         id
       }}
     }}
     """
     print(f"DEBUG: monday_utils: Attempting to update column '{column_id}' for item {item_id} on board {board_id} with value: '{value}'")
+    print(f"DEBUG: monday_utils: Constructed GraphQL value: {graphql_value_string_literal}") # Add this for debugging
     print(f"DEBUG: monday_utils: Full Mutation Query:\n{mutation}")
-    
+
     result = execute_monday_graphql(mutation)
 
     if result and 'data' in result and result['data'].get('change_column_value'):
