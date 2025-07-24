@@ -150,8 +150,19 @@ def process_general_webhook(event_data, config_rule):
             print(f"INFO: MONDAY_TASKS: CopyToItemName - Source column '{source_column_id}' for item {item_id_from_webhook} is empty. Skipping name update.")
             success = True # Consider this a success if no action needed
         else:
-            print(f"INFO: MONDAY_TASKS: CopyToItemName - Attempting to update item {item_id_from_webhook} name on board {webhook_board_id} to '{source_text}'.")
-            success = monday.update_item_name(item_id_from_webhook, webhook_board_id, source_text)
+            # --- ADD TRUNCATION LOGIC HERE ---
+            MAX_ITEM_NAME_LENGTH = 150 # You can adjust this limit based on your Monday.com board's actual limits
+            if len(source_text) > MAX_ITEM_NAME_LENGTH:
+                # Truncate and add ellipsis, or just truncate
+                truncated_name = source_text[:MAX_ITEM_NAME_LENGTH] + "..." if MAX_ITEM_NAME_LENGTH > 3 else source_text[:MAX_ITEM_NAME_LENGTH]
+                print(f"INFO: MONDAY_TASKS: CopyToItemName - Truncating item name from {len(source_text)} to {len(truncated_name)} characters.")
+                final_item_name = truncated_name
+            else:
+                final_item_name = source_text
+            
+            print(f"INFO: MONDAY_TASKS: CopyToItemName - Attempting to update item {item_id_from_webhook} name on board {webhook_board_id} to '{final_item_name}'.")
+            success = monday.update_item_name(item_id_from_webhook, webhook_board_id, final_item_name) # Use final_item_name here
+
 
     elif webhook_type == "update_column_value" and trigger_column_id_from_webhook == configured_trigger_col_id:
         if log_type == "NameReformat":
