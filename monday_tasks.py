@@ -1,6 +1,7 @@
 import os
 import json
 from datetime import datetime
+import pytz # <-- ADDED IMPORT
 from celery_app import celery_app
 import monday_utils as monday # Import your shared utility functions
 
@@ -224,7 +225,9 @@ def process_general_webhook(event_data, config_rule):
             print(f"INFO: MONDAY_TASKS: ConnectBoardChange (Subitem Creation) detected for item {main_item_id}. Added: {added_links}, Removed: {removed_links}")
 
             overall_op_successful = True
-            current_date = datetime.now().strftime('%Y-%m-%d')
+            # --- MODIFIED: Use timezone-aware datetime ---
+            pacific_tz = pytz.timezone('America/Los_Angeles')
+            current_date = datetime.now(pacific_tz).strftime('%Y-%m-%d')
             changer_user_name = monday.get_user_name(event_user_id)
             user_log_text = ""
             if changer_user_name:
@@ -515,8 +518,10 @@ def process_master_student_person_sync_webhook(event_data):
                 if PLP_BOARD_ID_FOR_LOGGING and int(target_board_id) == int(PLP_BOARD_ID_FOR_LOGGING):
                     print(f"INFO: MONDAY_TASKS: Target board {target_board_id} matches PLP logging board. Proceeding with subitem creation check.")
                     
+                    # --- MODIFIED: Use timezone-aware datetime ---
+                    pacific_tz = pytz.timezone('America/Los_Angeles')
+                    current_date = datetime.now(pacific_tz).strftime('%Y-%m-%d')
                     column_name = MASTER_STUDENT_PEOPLE_COLUMNS.get(trigger_column_id, "Unknown Column")
-                    current_date = datetime.now().strftime('%Y-%m-%d')
 
                     # Handle additions
                     for person_id in added_person_ids:
