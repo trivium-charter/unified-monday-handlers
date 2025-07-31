@@ -419,6 +419,8 @@ def process_master_student_person_sync_webhook(event_data):
     trigger_column_id = event_data.get('columnId')
     current_column_value_raw = event_data.get('value')
     previous_column_value_raw = event_data.get('previousValue')
+    # --- MODIFIED: Get the user ID of the person who made the change ---
+    event_user_id = event_data.get('userId')
 
     print(f"DEBUG: MONDAY_TASKS: process_master_student_person_sync_webhook - Entering for item {master_item_id} on board {master_board_id}.")
     print(f"DEBUG: MONDAY_TASKS: process_master_student_person_sync_webhook - Trigger column ID: {trigger_column_id}")
@@ -518,7 +520,14 @@ def process_master_student_person_sync_webhook(event_data):
                 if PLP_BOARD_ID_FOR_LOGGING and int(target_board_id) == int(PLP_BOARD_ID_FOR_LOGGING):
                     print(f"INFO: MONDAY_TASKS: Target board {target_board_id} matches PLP logging board. Proceeding with subitem creation check.")
                     
-                    # --- MODIFIED: Use timezone-aware datetime ---
+                    # --- MODIFIED: Get changer's name and construct log text ---
+                    changer_user_name = monday.get_user_name(event_user_id)
+                    user_log_text = ""
+                    if changer_user_name:
+                        user_log_text = f" by {changer_user_name}"
+                    elif event_user_id == -4: # Special case for automations
+                        user_log_text = " by automation"
+
                     pacific_tz = pytz.timezone('America/Los_Angeles')
                     current_date = datetime.now(pacific_tz).strftime('%Y-%m-%d')
                     column_name = MASTER_STUDENT_PEOPLE_COLUMNS.get(trigger_column_id, "Unknown Column")
@@ -526,7 +535,7 @@ def process_master_student_person_sync_webhook(event_data):
                     # Handle additions
                     for person_id in added_person_ids:
                         person_name = monday.get_user_name(person_id) or "Unknown Person"
-                        subitem_name = f"{column_name} - {person_name} added on {current_date}"
+                        subitem_name = f"{column_name} - {person_name} added on {current_date}{user_log_text}"
 
                         print(f"INFO: MONDAY_TASKS: Creating subitem on PLP board for item {linked_target_item_id} with name: '{subitem_name}'")
                         if not monday.create_subitem(parent_item_id=linked_target_item_id, subitem_name=subitem_name):
@@ -536,7 +545,7 @@ def process_master_student_person_sync_webhook(event_data):
                     # Handle removals
                     for person_id in removed_person_ids:
                         person_name = monday.get_user_name(person_id) or "Unknown Person"
-                        subitem_name = f"{column_name} - {person_name} removed on {current_date}"
+                        subitem_name = f"{column_name} - {person_name} removed on {current_date}{user_log_text}"
 
                         print(f"INFO: MONDAY_TASKS: Creating subitem on PLP board for item {linked_target_item_id} with name: '{subitem_name}'")
                         if not monday.create_subitem(parent_item_id=linked_target_item_id, subitem_name=subitem_name):
