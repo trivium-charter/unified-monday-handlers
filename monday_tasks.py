@@ -415,7 +415,6 @@ def process_master_student_person_sync_webhook(event_data):
     master_board_id = event_data.get('boardId')
     trigger_column_id = event_data.get('columnId')
     current_column_value_raw = event_data.get('value')
-    # --- NEW: Get previous value to determine who was added ---
     previous_column_value_raw = event_data.get('previousValue')
 
     print(f"DEBUG: MONDAY_TASKS: process_master_student_person_sync_webhook - Entering for item {master_item_id} on board {master_board_id}.")
@@ -436,9 +435,9 @@ def process_master_student_person_sync_webhook(event_data):
 
     operation_successful = True
 
-    # --- NEW: Helper function to find newly added people ---
-    def get_added_person_ids(current_val_raw, prev_val_raw):
-        """Compares current and previous people column values to find added person IDs."""
+    # --- UPDATED: Helper function to find newly added AND removed people ---
+    def get_person_id_changes(current_val_raw, prev_val_raw):
+        """Compares current and previous people column values to find added and removed person IDs."""
         def parse_value_for_ids(raw_val):
             """Safely parses webhook value and returns a set of person IDs."""
             person_ids = set()
@@ -459,11 +458,16 @@ def process_master_student_person_sync_webhook(event_data):
 
         current_ids = parse_value_for_ids(current_val_raw)
         previous_ids = parse_value_for_ids(prev_val_raw)
-        return current_ids - previous_ids
+        
+        added_ids = current_ids - previous_ids
+        removed_ids = previous_ids - current_ids
+        
+        return added_ids, removed_ids
 
-    added_person_ids = get_added_person_ids(current_column_value_raw, previous_column_value_raw)
-    if not added_person_ids:
-        print("INFO: MONDAY_TASKS: process_master_student_person_sync_webhook - No new people were added in this change. Subitem log will be skipped.")
+    added_person_ids, removed_person_ids = get_person_id_changes(current_column_value_raw, previous_column_value_raw)
+    
+    if not added_person_ids and not removed_person_ids:
+        print("INFO: MONDAY_TASKS: process_master_student_person_sync_webhook - No people were added or removed in this change. Subitem log will be skipped.")
 
 
     # 2. Iterate through all target boards configured for this people column
@@ -506,28 +510,33 @@ def process_master_student_person_sync_webhook(event_data):
                 operation_successful = False
                 print(f"ERROR: MONDAY_TASKS: process_master_student_person_sync_webhook - Failed to sync people column for linked item {linked_target_item_id} on board {target_board_id}.")
 
-            # --- NEW LOGIC: Create a subitem log if this is the PLP board ---
+            # --- UPDATED LOGIC: Create a subitem log for additions AND removals if this is the PLP board ---
             try:
                 if PLP_BOARD_ID_FOR_LOGGING and int(target_board_id) == int(PLP_BOARD_ID_FOR_LOGGING):
                     print(f"INFO: MONDAY_TASKS: Target board {target_board_id} matches PLP logging board. Proceeding with subitem creation check.")
-                    if not added_person_ids:
-                        continue # Skip if no one was added
-
+                    
                     column_name = MASTER_STUDENT_PEOPLE_COLUMNS.get(trigger_column_id, "Unknown Column")
                     current_date = datetime.now().strftime('%Y-%m-%d')
 
+                    # Handle additions
                     for person_id in added_person_ids:
                         person_name = monday.get_user_name(person_id) or "Unknown Person"
                         subitem_name = f"{column_name} - {person_name} added on {current_date}"
 
                         print(f"INFO: MONDAY_TASKS: Creating subitem on PLP board for item {linked_target_item_id} with name: '{subitem_name}'")
-                        subitem_creation_success = monday.create_subitem(
-                            parent_item_id=linked_target_item_id,
-                            subitem_name=subitem_name
-                        )
-                        if not subitem_creation_success:
-                            print(f"ERROR: MONDAY_TASKS: Failed to create PLP log subitem for person {person_name} on item {linked_target_item_id}.")
-                            operation_successful = False # Log failure but don't stop other operations
+                        if not monday.create_subitem(parent_item_id=linked_target_item_id, subitem_name=subitem_name):
+                            print(f"ERROR: MONDAY_TASKS: Failed to create PLP log subitem for added person {person_name} on item {linked_target_item_id}.")
+                            operation_successful = False
+
+                    # Handle removals
+                    for person_id in removed_person_ids:
+                        person_name = monday.get_user_name(person_id) or "Unknown Person"
+                        subitem_name = f"{column_name} - {person_name} removed on {current_date}"
+
+                        print(f"INFO: MONDAY_TASKS: Creating subitem on PLP board for item {linked_target_item_id} with name: '{subitem_name}'")
+                        if not monday.create_subitem(parent_item_id=linked_target_item_id, subitem_name=subitem_name):
+                            print(f"ERROR: MONDAY_TASKS: Failed to create PLP log subitem for removed person {person_name} on item {linked_target_item_id}.")
+                            operation_successful = False
                 else:
                     print(f"DEBUG: MONDAY_TASKS: Target board {target_board_id} is not the PLP logging board. Skipping subitem creation.")
             except (ValueError, TypeError) as e:
