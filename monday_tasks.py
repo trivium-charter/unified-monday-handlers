@@ -49,9 +49,13 @@ try:
 except json.JSONDecodeError as e:
     print(f"ERROR: MONDAY_TASKS: MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS environment variable is not valid JSON: {e}. Defaulting to empty map.")
     COLUMN_MAPPINGS = {}
+# --- NEW: Environment variable for the PLP board ID for logging ---
+PLP_BOARD_ID_FOR_LOGGING = os.environ.get("PLP_BOARD_ID_FOR_LOGGING", "8993025745")
+
 print(f"DEBUG: MONDAY_TASKS: MASTER_STUDENT_LIST_BOARD_ID: '{MASTER_STUDENT_LIST_BOARD_ID}'")
 print(f"DEBUG: MONDAY_TASKS: MASTER_STUDENT_PEOPLE_COLUMNS loaded (type: {type(MASTER_STUDENT_PEOPLE_COLUMNS)}, keys: {list(MASTER_STUDENT_PEOPLE_COLUMNS.keys())}): {MASTER_STUDENT_PEOPLE_COLUMNS}")
 print(f"DEBUG: MONDAY_TASKS: COLUMN_MAPPINGS loaded (type: {type(COLUMN_MAPPINGS)}, keys: {list(COLUMN_MAPPINGS.keys())}): {COLUMN_MAPPINGS}")
+print(f"DEBUG: MONDAY_TASKS: PLP_BOARD_ID_FOR_LOGGING: '{PLP_BOARD_ID_FOR_LOGGING}'")
 
 
 # Environment variables for SpEd Students Person Sync
@@ -405,16 +409,17 @@ def process_plp_course_sync_webhook(event_data):
 def process_master_student_person_sync_webhook(event_data):
     """
     Celery task to handle the syncing of People column changes from Master Student List
-    to linked items on other boards.
+    to linked items on other boards, and now also creates a subitem log on the PLP board.
     """
     master_item_id = event_data.get('pulseId')
     master_board_id = event_data.get('boardId')
     trigger_column_id = event_data.get('columnId')
     current_column_value_raw = event_data.get('value')
+    # --- NEW: Get previous value to determine who was added ---
+    previous_column_value_raw = event_data.get('previousValue')
 
     print(f"DEBUG: MONDAY_TASKS: process_master_student_person_sync_webhook - Entering for item {master_item_id} on board {master_board_id}.")
     print(f"DEBUG: MONDAY_TASKS: process_master_student_person_sync_webhook - Trigger column ID: {trigger_column_id}")
-    print(f"DEBUG: MONDAY_TASKS: process_master_student_person_sync_webhook - Current column value (raw): {current_column_value_raw}")
 
     # 1. Validate if the webhook is from the Master Student List board and a relevant People column
     try:
@@ -431,6 +436,36 @@ def process_master_student_person_sync_webhook(event_data):
 
     operation_successful = True
 
+    # --- NEW: Helper function to find newly added people ---
+    def get_added_person_ids(current_val_raw, prev_val_raw):
+        """Compares current and previous people column values to find added person IDs."""
+        def parse_value_for_ids(raw_val):
+            """Safely parses webhook value and returns a set of person IDs."""
+            person_ids = set()
+            parsed_data = {}
+            if isinstance(raw_val, str):
+                try:
+                    parsed_data = json.loads(raw_val)
+                except json.JSONDecodeError:
+                    pass # Ignore malformed JSON
+            elif isinstance(raw_val, dict):
+                parsed_data = raw_val
+
+            if parsed_data and 'personsAndTeams' in parsed_data:
+                for person in parsed_data['personsAndTeams']:
+                    if isinstance(person, dict) and 'id' in person:
+                        person_ids.add(person['id'])
+            return person_ids
+
+        current_ids = parse_value_for_ids(current_val_raw)
+        previous_ids = parse_value_for_ids(prev_val_raw)
+        return current_ids - previous_ids
+
+    added_person_ids = get_added_person_ids(current_column_value_raw, previous_column_value_raw)
+    if not added_person_ids:
+        print("INFO: MONDAY_TASKS: process_master_student_person_sync_webhook - No new people were added in this change. Subitem log will be skipped.")
+
+
     # 2. Iterate through all target boards configured for this people column
     mappings_for_this_column = COLUMN_MAPPINGS.get(trigger_column_id)
     if not mappings_for_this_column:
@@ -444,13 +479,11 @@ def process_master_student_person_sync_webhook(event_data):
         target_column_type = target_config["target_column_type"]
 
         print(f"DEBUG: MONDAY_TASKS: process_master_student_person_sync_webhook - Processing target board {target_board_id} for people column '{MASTER_STUDENT_PEOPLE_COLUMNS.get(trigger_column_id, 'Unknown')}'.")
-        print(f"DEBUG: MONDAY_TASKS: process_master_student_person_sync_webhook -   Master Connect Column: {master_connect_column_id}")
-        print(f"DEBUG: MONDAY_TASKS: process_master_student_person_sync_webhook -   Target People Column: {target_people_column_id} (Type: {target_column_type})")
 
         # 3. Get the linked item IDs on the target board via the Master Student List's connect column
         linked_item_ids_on_target_board = monday.get_linked_items_from_board_relation(
             item_id=master_item_id,
-            board_id=master_board_id, # Use the actual master_board_id
+            board_id=master_board_id,
             connect_column_id=master_connect_column_id
         )
 
@@ -458,19 +491,48 @@ def process_master_student_person_sync_webhook(event_data):
             print(f"INFO: MONDAY_TASKS: process_master_student_person_sync_webhook - No items found linked to Master Student item {master_item_id} on board {target_board_id} via column {master_connect_column_id}. Skipping sync for this board.")
             continue
 
-        # 4. For each linked item, update its corresponding People column
+        # 4. For each linked item, update its corresponding People column and create subitem if it's the PLP board
         for linked_target_item_id in linked_item_ids_on_target_board:
-            print(f"INFO: MONDAY_TASKS: process_master_student_person_sync_webhook - Attempting to update people column '{target_people_column_id}' on item {linked_target_item_id} (board {target_board_id}) with new value: {current_column_value_raw} and type: {target_column_type}.")
-            success = monday.update_people_column(
+            # --- EXISTING LOGIC: Update the people column on the target board ---
+            print(f"INFO: MONDAY_TASKS: process_master_student_person_sync_webhook - Syncing people column '{target_people_column_id}' on item {linked_target_item_id} (board {target_board_id}).")
+            sync_success = monday.update_people_column(
                 item_id=linked_target_item_id,
                 board_id=target_board_id,
                 people_column_id=target_people_column_id,
                 new_people_value=current_column_value_raw,
                 target_column_type=target_column_type
             )
-            if not success:
+            if not sync_success:
                 operation_successful = False
-                print(f"ERROR: MONDAY_TASKS: process_master_student_person_sync_webhook - Failed to update people column for linked item {linked_target_item_id} on board {target_board_id}.")
+                print(f"ERROR: MONDAY_TASKS: process_master_student_person_sync_webhook - Failed to sync people column for linked item {linked_target_item_id} on board {target_board_id}.")
+
+            # --- NEW LOGIC: Create a subitem log if this is the PLP board ---
+            try:
+                if PLP_BOARD_ID_FOR_LOGGING and int(target_board_id) == int(PLP_BOARD_ID_FOR_LOGGING):
+                    print(f"INFO: MONDAY_TASKS: Target board {target_board_id} matches PLP logging board. Proceeding with subitem creation check.")
+                    if not added_person_ids:
+                        continue # Skip if no one was added
+
+                    column_name = MASTER_STUDENT_PEOPLE_COLUMNS.get(trigger_column_id, "Unknown Column")
+                    current_date = datetime.now().strftime('%Y-%m-%d')
+
+                    for person_id in added_person_ids:
+                        person_name = monday.get_user_name(person_id) or "Unknown Person"
+                        subitem_name = f"{column_name} - {person_name} added on {current_date}"
+
+                        print(f"INFO: MONDAY_TASKS: Creating subitem on PLP board for item {linked_target_item_id} with name: '{subitem_name}'")
+                        subitem_creation_success = monday.create_subitem(
+                            parent_item_id=linked_target_item_id,
+                            subitem_name=subitem_name
+                        )
+                        if not subitem_creation_success:
+                            print(f"ERROR: MONDAY_TASKS: Failed to create PLP log subitem for person {person_name} on item {linked_target_item_id}.")
+                            operation_successful = False # Log failure but don't stop other operations
+                else:
+                    print(f"DEBUG: MONDAY_TASKS: Target board {target_board_id} is not the PLP logging board. Skipping subitem creation.")
+            except (ValueError, TypeError) as e:
+                print(f"ERROR: MONDAY_TASKS: Could not process PLP subitem creation due to a configuration error. Check board IDs. Error: {e}")
+
 
     return operation_successful
 
