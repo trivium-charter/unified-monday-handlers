@@ -122,16 +122,9 @@ def create_section_if_not_exists(course_id, section_name):
     """Finds a section by name or creates it if it doesn't exist."""
     canvas = initialize_canvas_api()
     if not canvas: return None
-    
-    # --- MODIFIED LOGIC to handle Canvas API delays ---
-    # Construct a course object locally without fetching it first.
-    # The subsequent API calls will use the ID from this object.
-    course = Course(canvas._requester, {'id': course_id})
-    
     try:
-        # Now, try to get the sections for this course
-        sections = course.get_sections()
-        for section in sections:
+        course = canvas.get_course(course_id)
+        for section in course.get_sections():
             if section.name.lower() == section_name.lower():
                 return section
         
@@ -139,7 +132,7 @@ def create_section_if_not_exists(course_id, section_name):
         print(f"SUCCESS: CANVAS_UTILS - Created section '{new_section.name}' (ID: {new_section.id}).")
         return new_section
     except ResourceDoesNotExist:
-        print(f"ERROR: CANVAS_UTILS - Course with ID '{course_id}' could not be found, even after creation. Aborting section creation.")
+        print(f"ERROR: CANVAS_UTILS - Course with ID '{course_id}' could not be found. Aborting section creation.")
         return None
     except CanvasException as e:
         print(f"ERROR: CANVAS_UTILS - API error finding/creating section '{section_name}': {e}")
