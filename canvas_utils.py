@@ -33,8 +33,6 @@ def create_canvas_user(student_details):
             'authentication_provider_id': '112'
         }
 
-        # --- MODIFIED SECTION ---
-        # Directly call the API to handle list-based responses from user creation
         response = account._requester.request(
             "POST",
             f"accounts/{account.id}/users",
@@ -49,7 +47,6 @@ def create_canvas_user(student_details):
             user_attributes = response_data
 
         new_user = canvas.get_user(user_attributes['id'])
-        # --- END MODIFIED SECTION ---
         
         print(f"SUCCESS: CANVAS_UTILS - Created new user '{new_user.name}' with ID: {new_user.id} and SIS ID: {student_details['ssid']}")
         return new_user
@@ -139,23 +136,23 @@ def create_section_if_not_exists(course_id, section_name):
         print(f"ERROR: CANVAS_UTILS - API error finding/creating section '{section_name}': {e}")
         return None
 
-def enroll_student_in_section(course_id, student_email, section_id):
-    """Enrolls a student into a specific section of a Canvas course using their email."""
+def enroll_student_in_section(course_id, user, section_id):
+    """Enrolls a student into a specific section of a Canvas course using their user object."""
     canvas = initialize_canvas_api()
     if not canvas: return None
     try:
         course = canvas.get_course(course_id)
-        print(f"INFO: CANVAS_UTILS - Enrolling user '{student_email}' into course {course_id}, section {section_id}.")
+        print(f"INFO: CANVAS_UTILS - Enrolling user '{user.name}' into course {course_id}, section {section_id}.")
         enrollment = course.enroll_user(
-            user={'login_id': student_email},
-            enrollment_type='Student',
+            user, # Pass the user object directly
+            'Student',
             enrollment={'course_section_id': section_id}
         )
-        print(f"SUCCESS: CANVAS_UTILS - Enrolled user '{student_email}' in section {section_id}. Enrollment ID: {enrollment.id}")
+        print(f"SUCCESS: CANVAS_UTILS - Enrolled user '{user.name}' in section {section_id}. Enrollment ID: {enrollment.id}")
         return enrollment
     except CanvasException as e:
         if "already" in str(e).lower():
-            print(f"INFO: CANVAS_UTILS - User '{student_email}' is already enrolled in course {course_id}. No action needed.")
+            print(f"INFO: CANVAS_UTILS - User '{user.name}' is already enrolled in course {course_id}. No action needed.")
             return "Already Enrolled"
         raise e
 
@@ -184,7 +181,8 @@ def enroll_or_create_and_enroll(course_id, section_id, student_details):
             return None
 
     try:
-        return enroll_student_in_section(course_id, student_details['email'], section_id)
+        # --- MODIFIED: Pass the user object, not the email string ---
+        return enroll_student_in_section(course_id, user, section_id)
     except CanvasException as e:
         print(f"ERROR: CANVAS_UTILS - A final Canvas API error occurred during enrollment for '{student_details['email']}': {e}")
         return None
