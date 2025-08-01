@@ -144,8 +144,6 @@ def enroll_student_in_section(course_id, user, section_id):
         course = canvas.get_course(course_id)
         print(f"INFO: CANVAS_UTILS - Enrolling user '{user.name}' into course {course_id}, section {section_id}.")
         
-        # --- MODIFIED SECTION ---
-        # Directly call the API to handle list-based responses for enrollments
         response = course._requester.request(
             "POST",
             f"courses/{course.id}/enrollments",
@@ -161,7 +159,6 @@ def enroll_student_in_section(course_id, user, section_id):
             enrollment_attributes = response_data[0]
         else:
             enrollment_attributes = response_data
-        # --- END MODIFIED SECTION ---
 
         print(f"SUCCESS: CANVAS_UTILS - Enrolled user '{user.name}' in section {section_id}. Enrollment ID: {enrollment_attributes.get('id')}")
         return enrollment_attributes
@@ -196,6 +193,7 @@ def enroll_or_create_and_enroll(course_id, section_id, student_details):
             return None
 
     try:
+        # --- MODIFIED: Pass the user object, not the email string ---
         return enroll_student_in_section(course_id, user, section_id)
     except CanvasException as e:
         print(f"ERROR: CANVAS_UTILS - A final Canvas API error occurred during enrollment for '{student_details['email']}': {e}")
