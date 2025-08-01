@@ -97,7 +97,6 @@ def create_canvas_course(course_name, term_id):
         # --- This block only runs if Canvas returns a "409 Conflict" error ---
         print(f"INFO: A course with SIS ID '{sis_id}' already exists. Verifying it meets requirements...")
         
-        # Now we search for the conflicting course to verify its details
         response = account._requester.request("GET", f"accounts/{account.id}/courses", params={'sis_course_id': sis_id})
         
         if not (courses_data := response.json()):
