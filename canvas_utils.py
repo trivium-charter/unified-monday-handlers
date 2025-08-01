@@ -48,7 +48,8 @@ def create_canvas_user(student_details):
 
         new_user = canvas.get_user(user_attributes['id'])
         
-        print(f"SUCCESS: CANVAS_UTILS - Created new user '{new_user.name}' with ID: {new_user.id} and SIS ID: {student_details['ssid']}")
+        # MODIFIED: Clarified log message
+        print(f"SUCCESS: CANVAS_UTILS - Created new user for '{student_details['name']}' with new ID: {new_user.id} and SIS ID: {student_details['ssid']}")
         return new_user
     except CanvasException as e:
         print(f"ERROR: CANVAS_UTILS - API error creating user '{student_details['email']}': {e}")
@@ -130,7 +131,8 @@ def create_section_if_not_exists(course_id, section_name):
             
         new_section = course.get_section(section_attributes['id'])
 
-        print(f"SUCCESS: CANVAS_UTILS - Created section '{new_section.name}' (ID: {new_section.id}).")
+        # MODIFIED: Clarified log message
+        print(f"SUCCESS: CANVAS_UTILS - Created section '{section_name}' with new ID: {new_section.id}.")
         return new_section
     except CanvasException as e:
         print(f"ERROR: CANVAS_UTILS - API error finding/creating section '{section_name}': {e}")
@@ -145,26 +147,17 @@ def enroll_student_in_section(course_id, user, section_id):
         print(f"INFO: CANVAS_UTILS - Enrolling user '{user.name}' into course {course_id}, section {section_id}.")
         
         # --- MODIFIED SECTION ---
-        # Directly call the API to handle list-based responses for enrollments
-        response = course._requester.request(
-            "POST",
-            f"courses/{course.id}/enrollments",
-            enrollment={
-                'user_id': user.id,
-                'type': 'StudentEnrollment',
-                'course_section_id': section_id
-            }
+        # Replaced direct API call with the more reliable canvasapi library method.
+        enrollment = course.enroll_user(
+            user,
+            "StudentEnrollment",
+            enrollment={"course_section_id": section_id},
         )
         
-        response_data = response.json()
-        if isinstance(response_data, list) and response_data:
-            enrollment_attributes = response_data[0]
-        else:
-            enrollment_attributes = response_data
+        print(f"SUCCESS: CANVAS_UTILS - Enrolled user '{user.name}' (User ID: {user.id}) in section {section_id}. Enrollment ID: {enrollment.id}")
+        return enrollment
         # --- END MODIFIED SECTION ---
 
-        print(f"SUCCESS: CANVAS_UTILS - Enrolled user '{user.name}' in section {section_id}. Enrollment ID: {enrollment_attributes.get('id')}")
-        return enrollment_attributes
     except CanvasException as e:
         if "already" in str(e).lower():
             print(f"INFO: CANVAS_UTILS - User '{user.name}' is already enrolled in course {course_id}. No action needed.")
