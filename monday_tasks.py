@@ -6,7 +6,22 @@ from celery_app import celery_app
 import monday_utils as monday
 import canvas_utils as canvas
 
-# --- Global Configuration (with restored defaults) ---
+# --- Global Configuration (Restored Defaults from Original Files) ---
+MONDAY_MAIN_BOARD_ID = os.environ.get("MONDAY_MAIN_BOARD_ID", "8993025745")
+LINKED_BOARD_ID = os.environ.get("LINKED_BOARD_ID", "8931036662")
+MONDAY_CONNECT_BOARD_COLUMN_ID = os.environ.get("MONDAY_CONNECT_BOARD_COLUMN_ID", "board_relation_mkqnbtaf")
+MONDAY_ENTRY_TYPE_COLUMN_ID = os.environ.get("MONDAY_ENTRY_TYPE_COLUMN_ID", "entry_type__1")
+
+MASTER_STUDENT_LIST_BOARD_ID = os.environ.get("MASTER_STUDENT_LIST_BOARD_ID", "6563671510")
+PLP_BOARD_ID_FOR_LOGGING = os.environ.get("PLP_BOARD_ID_FOR_LOGGING", "8993025745")
+SPED_STUDENTS_BOARD_ID = os.environ.get("SPED_STUDENTS_BOARD_ID", "6760943570")
+IEP_AP_BOARD_ID = os.environ.get("IEP_AP_BOARD_ID", "6760108968")
+
+MASTER_STUDENT_PEOPLE_COLUMNS_STR = os.environ.get("MASTER_STUDENT_PEOPLE_COLUMNS", '{"multiple_person_mks1ccav": "Parent/Guardian 1", "people": "Case Manager"}')
+SPED_STUDENTS_PEOPLE_COLUMN_STR = os.environ.get("SPED_STUDENTS_PEOPLE_COLUMN", '{"multiple_person_mks841jb": "Case Manager"}')
+COLUMN_MAPPINGS_STR = os.environ.get("MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS", '{}')
+SPED_TO_IEPAP_CONNECT_COLUMN = os.environ.get("SPED_TO_IEPAP_CONNECT_COLUMN", "board_relation1__1")
+
 PLP_BOARD_ID = os.environ.get("PLP_BOARD_ID", "8993025745")
 ALL_CLASSES_BOARD_ID = os.environ.get("ALL_CLASSES_BOARD_ID", "8931036662")
 CANVAS_CLASSES_BOARD_ID = os.environ.get("CANVAS_CLASSES_BOARD_ID", "7308051382")
@@ -24,23 +39,14 @@ PLP_OP2_SECTION_COLUMN = os.environ.get("PLP_OP2_SECTION_COLUMN", "lookup_mkta9m
 PLP_M_SERIES_LABELS_COLUMN = os.environ.get("PLP_M_SERIES_LABELS_COLUMN", "labels_mktXXXX") 
 CANVAS_TERM_ID = os.environ.get("CANVAS_TERM_ID")
 
-MONDAY_LOGGING_CONFIGS_STR = os.environ.get("MONDAY_LOGGING_CONFIGS", "[]")
-try:
-    MONDAY_LOGGING_CONFIGS = json.loads(MONDAY_LOGGING_CONFIGS_STR)
-except json.JSONDecodeError:
-    MONDAY_LOGGING_CONFIGS = []
-
-MASTER_STUDENT_LIST_BOARD_ID = os.environ.get("MASTER_STUDENT_LIST_BOARD_ID", "")
-MASTER_STUDENT_PEOPLE_COLUMNS_STR = os.environ.get("MASTER_STUDENT_PEOPLE_COLUMNS", "{}")
 try:
     MASTER_STUDENT_PEOPLE_COLUMNS = json.loads(MASTER_STUDENT_PEOPLE_COLUMNS_STR)
-except json.JSONDecodeError:
-    MASTER_STUDENT_PEOPLE_COLUMNS = {}
-
-COLUMN_MAPPINGS_STR = os.environ.get("MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS", "{}")
-try:
+    SPED_STUDENTS_PEOPLE_COLUMN = json.loads(SPED_STUDENTS_PEOPLE_COLUMN_STR)
     COLUMN_MAPPINGS = json.loads(COLUMN_MAPPINGS_STR)
-except json.JSONDecodeError:
+except json.JSONDecodeError as e:
+    print(f"ERROR: Could not parse JSON from environment variables: {e}")
+    MASTER_STUDENT_PEOPLE_COLUMNS = {}
+    SPED_STUDENTS_PEOPLE_COLUMN = {}
     COLUMN_MAPPINGS = {}
 
 def get_people_ids_from_value(value):
@@ -49,6 +55,8 @@ def get_people_ids_from_value(value):
         return set()
     return {person['id'] for person in value.get("personsAndTeams", [])}
 
+# --- TASKS ---
+
 @celery_app.task
 def process_general_webhook(event_data, config_rule):
     """Handles generic subitem logging for various column types."""
@@ -56,7 +64,6 @@ def process_general_webhook(event_data, config_rule):
     user_id = event_data.get('userId')
     current_value = event_data.get('value')
     previous_value = event_data.get('previousValue')
-
     log_type = config_rule.get("log_type")
     params = config_rule.get("params", {})
     
@@ -69,7 +76,6 @@ def process_general_webhook(event_data, config_rule):
         board_id = params.get('linked_board_id')
         prefix_add = params.get('subitem_name_prefix_add', 'Added')
         prefix_remove = params.get('subitem_name_prefix_remove', 'Removed')
-
         current_ids = monday.get_linked_ids_from_connect_column_value(current_value)
         previous_ids = monday.get_linked_ids_from_connect_column_value(previous_value)
         
@@ -78,7 +84,6 @@ def process_general_webhook(event_data, config_rule):
             if linked_item_name:
                 subitem_name = f"{prefix_add} '{linked_item_name}' on {current_date}{user_log_text}"
                 monday.create_subitem(item_id, subitem_name)
-
         for item_id_linked in (previous_ids - current_ids):
             linked_item_name = monday.get_item_name(item_id_linked, board_id)
             if linked_item_name:
@@ -88,7 +93,6 @@ def process_general_webhook(event_data, config_rule):
     elif log_type == "PeopleColumnChange":
         prefix_add = params.get('subitem_name_prefix_add', 'Assigned to')
         prefix_remove = params.get('subitem_name_prefix_remove', 'Unassigned from')
-
         current_ids = get_people_ids_from_value(current_value)
         previous_ids = get_people_ids_from_value(previous_value)
 
@@ -97,46 +101,50 @@ def process_general_webhook(event_data, config_rule):
             if person_name:
                 subitem_name = f"{prefix_add} {person_name} on {current_date}{user_log_text}"
                 monday.create_subitem(item_id, subitem_name)
-
         for person_id in (previous_ids - current_ids):
             person_name = monday.get_user_name(person_id)
             if person_name:
                 subitem_name = f"{prefix_remove} {person_name} on {current_date}{user_log_text}"
                 monday.create_subitem(item_id, subitem_name)
-                
     return True
 
 @celery_app.task
 def process_master_student_person_sync_webhook(event_data):
-    """Handles syncing people columns from the Master Student List."""
+    """Syncs people columns from the Master Student List."""
     master_item_id = event_data.get('pulseId')
     master_board_id = event_data.get('boardId')
     trigger_column_id = event_data.get('columnId')
     current_column_value_raw = event_data.get('value')
 
     if str(master_board_id) != str(MASTER_STUDENT_LIST_BOARD_ID) or trigger_column_id not in MASTER_STUDENT_PEOPLE_COLUMNS:
-        return True
-
+        return
     mappings_for_this_column = COLUMN_MAPPINGS.get(trigger_column_id)
     if not mappings_for_this_column:
-        return False
-
+        return
     for target_config in mappings_for_this_column["targets"]:
-        target_board_id = target_config["board_id"]
-        master_connect_column_id = target_config["connect_column_id"]
-        target_people_column_id = target_config["target_column_id"]
-        target_column_type = target_config["target_column_type"]
-
-        linked_item_ids = monday.get_linked_items_from_board_relation(master_item_id, master_board_id, master_connect_column_id)
+        linked_item_ids = monday.get_linked_items_from_board_relation(master_item_id, master_board_id, target_config["connect_column_id"])
         for linked_id in linked_item_ids:
-            monday.update_people_column(linked_id, target_board_id, target_people_column_id, current_column_value_raw, target_column_type)
+            monday.update_people_column(linked_id, target_config["board_id"], target_config["target_column_id"], current_column_value_raw, target_config["target_column_type"])
+    return True
+
+@celery_app.task
+def process_sped_students_person_sync_webhook(event_data):
+    """Syncs people columns from the SPED Students board."""
+    sped_item_id = event_data.get('pulseId')
+    sped_board_id = event_data.get('boardId')
+    trigger_column_id = event_data.get('columnId')
+    current_column_value_raw = event_data.get('value')
+
+    if str(sped_board_id) != str(SPED_STUDENTS_BOARD_ID) or trigger_column_id not in SPED_STUDENTS_PEOPLE_COLUMN:
+        return
+    linked_iep_ap_ids = monday.get_linked_items_from_board_relation(sped_item_id, sped_board_id, SPED_TO_IEPAP_CONNECT_COLUMN)
+    for iep_ap_id in linked_iep_ap_ids:
+        monday.update_people_column(iep_ap_id, IEP_AP_BOARD_ID, trigger_column_id, current_column_value_raw, "multiple-person")
     return True
 
 @celery_app.task
 def process_canvas_sync_webhook(event_data):
-    """
-    Handles syncing a student's enrollments in Canvas based on a webhook trigger.
-    """
+    """Handles syncing a student's enrollments in Canvas."""
     print("INFO: CANVAS_SYNC - Task started.")
     plp_item_id = event_data.get('pulseId')
     trigger_column_id = event_data.get('columnId')
@@ -176,7 +184,6 @@ def process_canvas_sync_webhook(event_data):
 
     for class_item_id in linked_class_ids:
         print(f"--- Processing Enrollment for Class ID: {class_item_id} ---")
-        
         canvas_class_link_ids = monday.get_linked_items_from_board_relation(class_item_id, ALL_CLASSES_BOARD_ID, ALL_CLASSES_CANVAS_CONNECT_COLUMN)
         if not canvas_class_link_ids:
             print(f"INFO: Class item {class_item_id} is not linked to 'Canvas Classes' board. Skipping.")
