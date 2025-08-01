@@ -229,7 +229,7 @@ def process_canvas_sync_webhook(event_data):
         for section_name in sections_to_enroll:
             section = canvas.create_section_if_not_exists(canvas_course_id, section_name)
             if section:
-                canvas.enroll_or_create_and_enroll(canvas_course_id, section.id, student_details)
+                canvas.enroll_or_create_and_enroll(course_id, section.id, student_details)
 
     for class_item_id in unlinked_class_ids:
         print(f"--- Processing Unenrollment for Class ID: {class_item_id} ---")
