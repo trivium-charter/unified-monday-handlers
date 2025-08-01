@@ -15,7 +15,8 @@ CANVAS_CLASSES_BOARD_ID = os.environ.get("CANVAS_CLASSES_BOARD_ID", "7308051382"
 PLP_ALL_CLASSES_CONNECT_COLUMNS_STR = os.environ.get("PLP_ALL_CLASSES_CONNECT_COLUMNS_STR", "board_relation_mkqnbtaf,board_relation_mkqnxyjd,board_relation_mkqn34pg,board_relation_mkr54dtg")
 PLP_CANVAS_SYNC_STATUS_COLUMN_ID = os.environ.get("PLP_CANVAS_SYNC_STATUS_COLUMN_ID", "color_mktdzdxj")
 PLP_CANVAS_SYNC_STATUS_VALUE = os.environ.get("PLP_CANVAS_SYNC_STATUS_VALUE", "Sync")
-PLP_STUDENT_EMAIL_COLUMN = os.environ.get("PLP_STUDENT_EMAIL_COLUMN", "email1__1")
+# --- CORRECTED: Using the mirror column ID for the student email ---
+PLP_STUDENT_EMAIL_COLUMN = os.environ.get("PLP_STUDENT_EMAIL_COLUMN", "lookup_mktdytr3")
 PLP_STUDENT_SSID_COLUMN = os.environ.get("PLP_STUDENT_SSID_COLUMN", "lookup_mktdc1ky")
 ALL_CLASSES_CANVAS_CONNECT_COLUMN = os.environ.get("ALL_CLASSES_CANVAS_CONNECT_COLUMN", "board_relation_mkt2hp4c")
 CANVAS_COURSE_ID_COLUMN = os.environ.get("CANVAS_COURSE_ID_COLUMN", "canvas_course_id_mkm1fwt4")
