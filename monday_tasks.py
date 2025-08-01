@@ -6,7 +6,7 @@ from celery_app import celery_app
 import monday_utils as monday
 import canvas_utils as canvas
 
-# --- Global Configuration (with all defaults and new variables) ---
+# --- Global Configuration (Restored Defaults from Original Files) ---
 MONDAY_MAIN_BOARD_ID = os.environ.get("MONDAY_MAIN_BOARD_ID", "8993025745")
 LINKED_BOARD_ID = os.environ.get("LINKED_BOARD_ID", "8931036662")
 MONDAY_CONNECT_BOARD_COLUMN_ID = os.environ.get("MONDAY_CONNECT_BOARD_COLUMN_ID", "board_relation_mkqnbtaf")
