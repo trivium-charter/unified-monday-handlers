@@ -122,9 +122,12 @@ def create_section_if_not_exists(course_id, section_name):
     """Finds a section by name or creates it if it doesn't exist."""
     canvas = initialize_canvas_api()
     if not canvas: return None
+    
+    course = Course(canvas._requester, {'id': course_id})
+    
     try:
-        course = canvas.get_course(course_id)
-        for section in course.get_sections():
+        sections = course.get_sections()
+        for section in sections:
             if section.name.lower() == section_name.lower():
                 return section
         
