@@ -63,7 +63,6 @@ def process_general_webhook(event_data, config_rule):
 
     log_type = config_rule.get("log_type")
     params = config_rule.get("params", {})
-    configured_trigger_board_id = config_rule.get("trigger_board_id")
     configured_trigger_col_id = config_rule.get("trigger_column_id")
 
     if webhook_type == "update_column_value" and trigger_column_id_from_webhook == configured_trigger_col_id:
@@ -109,8 +108,6 @@ def process_master_student_person_sync_webhook(event_data):
     master_board_id = event_data.get('boardId')
     trigger_column_id = event_data.get('columnId')
     current_column_value_raw = event_data.get('value')
-    previous_column_value_raw = event_data.get('previousValue')
-    event_user_id = event_data.get('userId')
 
     if str(master_board_id) != str(MASTER_STUDENT_LIST_BOARD_ID) or trigger_column_id not in MASTER_STUDENT_PEOPLE_COLUMNS:
         return True
@@ -128,10 +125,6 @@ def process_master_student_person_sync_webhook(event_data):
         linked_item_ids = monday.get_linked_items_from_board_relation(master_item_id, master_board_id, master_connect_column_id)
         for linked_id in linked_item_ids:
             monday.update_people_column(linked_id, target_board_id, target_people_column_id, current_column_value_raw, target_column_type)
-            
-            if str(target_board_id) == str(PLP_BOARD_ID_FOR_LOGGING):
-                # Subitem logging logic for person changes
-                pass # This logic was also in the original, can be re-added if needed.
 
     return True
 
@@ -146,12 +139,11 @@ def process_canvas_sync_webhook(event_data):
     plp_item_id = event_data.get('pulseId')
     trigger_column_id = event_data.get('columnId')
     
-    # --- 1. Get All Student Information from Master Student Board ---
     student_name = monday.get_item_name(plp_item_id, PLP_BOARD_ID)
     
     master_student_ids = monday.get_linked_items_from_board_relation(plp_item_id, PLP_BOARD_ID, PLP_TO_MASTER_STUDENT_CONNECT_COLUMN)
     if not master_student_ids:
-        print(f"ERROR: CANVAS_SYNC - PLP item {plp_item_id} is not linked to an item on the Master Student Data List. Aborting.")
+        print(f"ERROR: CANVAS_SYNC - PLP item {plp_item_id} is not linked to a Master Student. Aborting.")
         return False
     
     master_student_id = list(master_student_ids)[0]
@@ -163,25 +155,18 @@ def process_canvas_sync_webhook(event_data):
     student_ssid = student_ssid_val.get('text') if student_ssid_val else None
 
     if not all([student_email, student_name]):
-        print(f"ERROR: CANVAS_SYNC - Student email or name not found for PLP item {plp_item_id} (Master Student ID: {master_student_id}). Aborting.")
+        print(f"ERROR: CANVAS_SYNC - Student email or name not found for PLP item {plp_item_id}. Aborting.")
         return False
         
     if not student_ssid or not student_ssid.strip():
         student_ssid = f"monday_{plp_item_id}"
         print(f"WARNING: CANVAS_SYNC - SSID is blank. Using fallback SIS ID: {student_ssid}")
 
-    student_details = {
-        "name": student_name,
-        "email": student_email,
-        "ssid": student_ssid
-    }
+    student_details = {"name": student_name, "email": student_email, "ssid": student_ssid}
     print(f"INFO: CANVAS_SYNC - Syncing for student: {student_details}")
 
-    # --- 2. Determine which classes to sync ---
     plp_connect_cols = [col.strip() for col in PLP_ALL_CLASSES_CONNECT_COLUMNS_STR.split(',')]
-    
-    linked_class_ids = set()
-    unlinked_class_ids = set()
+    linked_class_ids, unlinked_class_ids = set(), set()
 
     if trigger_column_id in plp_connect_cols:
         current_val = event_data.get('value')
@@ -190,18 +175,14 @@ def process_canvas_sync_webhook(event_data):
         unlinked_class_ids = monday.get_linked_ids_from_connect_column_value(previous_val) - linked_class_ids
     elif trigger_column_id == PLP_CANVAS_SYNC_STATUS_COLUMN_ID:
         for col_id in plp_connect_cols:
-            linked_ids = monday.get_linked_items_from_board_relation(plp_item_id, PLP_BOARD_ID, col_id)
-            linked_class_ids.update(linked_ids)
+            linked_class_ids.update(monday.get_linked_items_from_board_relation(plp_item_id, PLP_BOARD_ID, col_id))
     
     print(f"INFO: CANVAS_SYNC - Classes to sync/enroll: {linked_class_ids}")
     print(f"INFO: CANVAS_SYNC - Classes to unenroll: {unlinked_class_ids}")
 
-    # --- 3. Process Classes to Sync/Enroll ---
     for class_item_id in linked_class_ids:
-        print(f"--- Processing Class ID: {class_item_id} ---")
         canvas_class_link_ids = monday.get_linked_items_from_board_relation(class_item_id, ALL_CLASSES_BOARD_ID, ALL_CLASSES_CANVAS_CONNECT_COLUMN)
         if not canvas_class_link_ids:
-            print(f"INFO: Class {class_item_id} is not a Canvas class. Skipping.")
             continue
         
         canvas_class_item_id = list(canvas_class_link_ids)[0]
@@ -209,21 +190,18 @@ def process_canvas_sync_webhook(event_data):
         canvas_course_id = canvas_course_id_val.get('text') if canvas_course_id_val else None
 
         if not canvas_course_id:
-            class_item_name = monday.get_item_name(class_item_id, ALL_CLASSES_BOARD_ID) or "Untitled Canvas Course"
-            if not CANVAS_TERM_ID:
-                print("ERROR: CANVAS_SYNC - CANVAS_TERM_ID not set. Cannot create course.")
-                continue
+            class_item_name = monday.get_item_name(class_item_id, ALL_CLASSES_BOARD_ID) or "Untitled"
+            if not CANVAS_TERM_ID: continue
             new_course = canvas.create_canvas_course(class_item_name, CANVAS_TERM_ID)
             if new_course:
                 canvas_course_id = new_course.id
                 monday.change_column_value_generic(CANVAS_CLASSES_BOARD_ID, canvas_class_item_id, CANVAS_COURSE_ID_COLUMN, str(canvas_course_id))
             else:
-                print(f"ERROR: Failed to create Canvas course for class {class_item_id}. Skipping.")
                 continue
         
         sections_to_enroll = set()
         ag_grad_val = monday.get_column_value(class_item_id, ALL_CLASSES_BOARD_ID, ALL_CLASSES_AG_GRAD_COLUMN)
-        ag_grad_text = ag_grad_val.get('text') if ag_grad_val else ""
+        ag_grad_text = ag_grad_val.get('text', '')
         if "AG" in ag_grad_text: sections_to_enroll.add("A-G")
         if "Grad" in ag_grad_text: sections_to_enroll.add("Grad")
 
@@ -232,32 +210,24 @@ def process_canvas_sync_webhook(event_data):
         
         labels_val = monday.get_column_value(plp_item_id, PLP_BOARD_ID, PLP_M_SERIES_LABELS_COLUMN)
         if labels_val and labels_val.get('text'):
-            labels_text = labels_val.get('text')
             for m_label in ["M2", "M3", "M4", "M5"]:
-                if m_label in labels_text:
+                if m_label in labels_val.get('text'):
                     sections_to_enroll.add(m_label)
-
-        print(f"INFO: Required sections for course {canvas_course_id}: {sections_to_enroll}")
 
         for section_name in sections_to_enroll:
             section = canvas.create_section_if_not_exists(canvas_course_id, section_name)
             if section:
                 canvas.enroll_or_create_and_enroll(canvas_course_id, section.id, student_details)
-            else:
-                print(f"ERROR: Could not find or create section '{section_name}'. Skipping enrollment.")
 
-    # --- 4. Process Classes to Unenroll ---
     for class_item_id in unlinked_class_ids:
         canvas_class_link_ids = monday.get_linked_items_from_board_relation(class_item_id, ALL_CLASSES_BOARD_ID, ALL_CLASSES_CANVAS_CONNECT_COLUMN)
-        if not canvas_class_link_ids:
-            continue
+        if not canvas_class_link_ids: continue
         
         canvas_class_item_id = list(canvas_class_link_ids)[0]
         canvas_course_id_val = monday.get_column_value(canvas_class_item_id, CANVAS_CLASSES_BOARD_ID, CANVAS_COURSE_ID_COLUMN)
         canvas_course_id = canvas_course_id_val.get('text') if canvas_course_id_val else None
 
         if canvas_course_id:
-            print(f"INFO: CANVAS_SYNC - Deactivating enrollment for {student_email} in course {canvas_course_id}.")
             canvas.unenroll_student_from_course(canvas_course_id, student_email)
 
     print("INFO: CANVAS_SYNC - Task finished.")
