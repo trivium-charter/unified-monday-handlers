@@ -6,7 +6,7 @@ from celery_app import celery_app
 import monday_utils as monday
 import canvas_utils as canvas
 
-# --- Global Configuration (Restored Defaults from Original Files) ---
+# --- Global Configuration (with all defaults and new variables) ---
 MONDAY_MAIN_BOARD_ID = os.environ.get("MONDAY_MAIN_BOARD_ID", "8993025745")
 LINKED_BOARD_ID = os.environ.get("LINKED_BOARD_ID", "8931036662")
 MONDAY_CONNECT_BOARD_COLUMN_ID = os.environ.get("MONDAY_CONNECT_BOARD_COLUMN_ID", "board_relation_mkqnbtaf")
@@ -34,6 +34,7 @@ MASTER_STUDENT_SSID_COLUMN = os.environ.get("MASTER_STUDENT_SSID_COLUMN", "text_
 MASTER_STUDENT_EMAIL_COLUMN = os.environ.get("MASTER_STUDENT_EMAIL_COLUMN", "_students1__school_email_address")
 ALL_CLASSES_CANVAS_CONNECT_COLUMN = os.environ.get("ALL_CLASSES_CANVAS_CONNECT_COLUMN", "board_relation_mkt2hp4c")
 CANVAS_COURSE_ID_COLUMN = os.environ.get("CANVAS_COURSE_ID_COLUMN", "canvas_course_id_mkm1fwt4")
+CANVAS_COURSE_TITLE_COLUMN = os.environ.get("CANVAS_COURSE_TITLE_COLUMN", "text65__1")
 ALL_CLASSES_AG_GRAD_COLUMN = os.environ.get("ALL_CLASSES_AG_GRAD_COLUMN", "dropdown_mkq0r2sj")
 PLP_OP2_SECTION_COLUMN = os.environ.get("PLP_OP2_SECTION_COLUMN", "lookup_mkta9mgv")
 PLP_M_SERIES_LABELS_COLUMN = os.environ.get("PLP_M_SERIES_LABELS_COLUMN", "labels_mktXXXX") 
@@ -186,7 +187,14 @@ def process_canvas_sync_webhook(event_data):
 
         if not canvas_course_id or not canvas_course_id.strip():
             print(f"INFO: Canvas Course ID is blank. Attempting to create course.")
-            class_item_name = monday.get_item_name(class_item_id, ALL_CLASSES_BOARD_ID) or "Untitled"
+            
+            title_val = monday.get_column_value(canvas_class_item_id, CANVAS_CLASSES_BOARD_ID, CANVAS_COURSE_TITLE_COLUMN)
+            class_item_name = title_val.get('text') if title_val and title_val.get('text') else None
+            
+            if not class_item_name or not class_item_name.strip():
+                print(f"ERROR: Canvas Course Title column ('{CANVAS_COURSE_TITLE_COLUMN}') is blank on item {canvas_class_item_id}. Skipping course creation.")
+                continue
+
             if not CANVAS_TERM_ID: print("ERROR: CANVAS_TERM_ID not set."); continue
             
             if new_course := canvas.create_canvas_course(class_item_name, CANVAS_TERM_ID):
