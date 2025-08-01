@@ -56,8 +56,9 @@ def monday_unified_webhooks():
             return jsonify({"status": "error", "message": "Server configuration incomplete."}), 500
 
         # --- DISPATCHING LOGIC ---
-        
-        # 1. Canvas Sync Check (Top Priority)
+        task_queued = False
+
+        # 1. Canvas Sync Check
         plp_connect_cols = [col.strip() for col in PLP_ALL_CLASSES_CONNECT_COLUMNS_STR.split(',')]
         try:
             is_plp_board = PLP_BOARD_ID and int(webhook_board_id) == int(PLP_BOARD_ID)
@@ -72,7 +73,7 @@ def monday_unified_webhooks():
             if is_plp_board and (is_connect_trigger or is_status_trigger):
                 print("INFO: Dispatching to Canvas Sync task.")
                 process_canvas_sync_webhook.delay(event)
-                return jsonify({"status": "success", "message": "Canvas Sync task queued."}), 202
+                task_queued = True
         except (ValueError, TypeError) as e:
             print(f"ERROR: Invalid board/column ID in Canvas config. Error: {e}")
 
@@ -82,9 +83,9 @@ def monday_unified_webhooks():
                 trigger_column_id in MASTER_STUDENT_PEOPLE_COLUMNS):
                 print("INFO: Dispatching to Master Student Person Sync task.")
                 process_master_student_person_sync_webhook.delay(event)
-                return jsonify({"status": "success", "message": "Master Student Person Sync task queued."}), 202
+                task_queued = True
         except (ValueError, TypeError):
-            pass # Ignore and fall through
+            pass
 
         # 3. General Logger Check (Includes Subitem Creation)
         for config_rule in LOG_CONFIGS:
@@ -92,10 +93,13 @@ def monday_unified_webhooks():
                 if config_rule.get("trigger_column_id") is None or str(config_rule.get("trigger_column_id")) == str(trigger_column_id):
                     print(f"INFO: Dispatching to General Logger ({config_rule.get('log_type')}).")
                     process_general_webhook.delay(event, config_rule)
-                    return jsonify({"status": "success", "message": "General Logger task queued."}), 202
+                    task_queued = True
 
-        print(f"INFO: No matching dispatch rule found for webhook.")
-        return jsonify({"status": "ignored", "message": "No matching dispatch rule found."}), 200
+        if task_queued:
+            return jsonify({"status": "success", "message": "Task(s) queued."}), 202
+        else:
+            print(f"INFO: No matching dispatch rule found for webhook.")
+            return jsonify({"status": "ignored", "message": "No matching dispatch rule found."}), 200
 
     return jsonify({"status": "error", "message": "Invalid request method."}), 405
 
