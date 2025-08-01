@@ -53,7 +53,6 @@ PLP_BOARD_ID_FOR_LOGGING = os.environ.get("PLP_BOARD_ID_FOR_LOGGING", "899302574
 @celery_app.task
 def process_general_webhook(event_data, config_rule):
     """Handles generic subitem logging and other simple automations."""
-    webhook_board_id = event_data.get('boardId')
     item_id_from_webhook = event_data.get('pulseId')
     trigger_column_id_from_webhook = event_data.get('columnId')
     event_user_id = event_data.get('userId')
@@ -139,6 +138,7 @@ def process_canvas_sync_webhook(event_data):
     plp_item_id = event_data.get('pulseId')
     trigger_column_id = event_data.get('columnId')
     
+    # --- 1. Get All Student Information from Master Student Board ---
     student_name = monday.get_item_name(plp_item_id, PLP_BOARD_ID)
     
     master_student_ids = monday.get_linked_items_from_board_relation(plp_item_id, PLP_BOARD_ID, PLP_TO_MASTER_STUDENT_CONNECT_COLUMN)
@@ -165,6 +165,7 @@ def process_canvas_sync_webhook(event_data):
     student_details = {"name": student_name, "email": student_email, "ssid": student_ssid}
     print(f"INFO: CANVAS_SYNC - Syncing for student: {student_details}")
 
+    # --- 2. Determine which classes to sync ---
     plp_connect_cols = [col.strip() for col in PLP_ALL_CLASSES_CONNECT_COLUMNS_STR.split(',')]
     linked_class_ids, unlinked_class_ids = set(), set()
 
@@ -180,7 +181,9 @@ def process_canvas_sync_webhook(event_data):
     print(f"INFO: CANVAS_SYNC - Classes to sync/enroll: {linked_class_ids}")
     print(f"INFO: CANVAS_SYNC - Classes to unenroll: {unlinked_class_ids}")
 
+    # --- 3. Process Classes to Sync/Enroll ---
     for class_item_id in linked_class_ids:
+        print(f"--- Processing Class ID: {class_item_id} ---")
         canvas_class_link_ids = monday.get_linked_items_from_board_relation(class_item_id, ALL_CLASSES_BOARD_ID, ALL_CLASSES_CANVAS_CONNECT_COLUMN)
         if not canvas_class_link_ids:
             continue
@@ -219,6 +222,7 @@ def process_canvas_sync_webhook(event_data):
             if section:
                 canvas.enroll_or_create_and_enroll(canvas_course_id, section.id, student_details)
 
+    # --- 4. Process Classes to Unenroll ---
     for class_item_id in unlinked_class_ids:
         canvas_class_link_ids = monday.get_linked_items_from_board_relation(class_item_id, ALL_CLASSES_BOARD_ID, ALL_CLASSES_CANVAS_CONNECT_COLUMN)
         if not canvas_class_link_ids: continue
