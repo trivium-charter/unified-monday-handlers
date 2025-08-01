@@ -106,7 +106,7 @@ def process_master_student_person_sync_webhook(event_data):
             monday.update_people_column(linked_id, target_config["board_id"], target_config["target_column_id"], current_value, target_config["target_column_type"])
 
     # --- Action 2: Create the Subitem Log on the PLP Board ---
-    subitem_prefix = mappings.get("name", "Person") # e.g., "TOR", "ACE"
+    subitem_prefix = mappings.get("name", "Person")
     
     plp_target_config = next((t for t in mappings["targets"] if str(t.get("board_id")) == str(PLP_BOARD_ID)), None)
     if not plp_target_config:
