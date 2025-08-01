@@ -144,14 +144,24 @@ def enroll_student_in_section(course_id, user, section_id):
         course = canvas.get_course(course_id)
         print(f"INFO: CANVAS_UTILS - Enrolling user '{user.name}' into course {course_id}, section {section_id}.")
         
-        enrollment = course.enroll_user(
-            user, # Pass the entire user object
-            'Student',
-            enrollment={'course_section_id': section_id}
+        response = course._requester.request(
+            "POST",
+            f"courses/{course.id}/enrollments",
+            enrollment={
+                'user_id': user.id,
+                'type': 'StudentEnrollment',
+                'course_section_id': section_id
+            }
         )
         
-        print(f"SUCCESS: CANVAS_UTILS - Enrolled user '{user.name}' in section {section_id}. Enrollment ID: {enrollment.id}")
-        return enrollment
+        response_data = response.json()
+        if isinstance(response_data, list) and response_data:
+            enrollment_attributes = response_data[0]
+        else:
+            enrollment_attributes = response_data
+
+        print(f"SUCCESS: CANVAS_UTILS - Enrolled user '{user.name}' in section {section_id}. Enrollment ID: {enrollment_attributes.get('id')}")
+        return enrollment_attributes
     except CanvasException as e:
         if "already" in str(e).lower():
             print(f"INFO: CANVAS_UTILS - User '{user.name}' is already enrolled in course {course_id}. No action needed.")
