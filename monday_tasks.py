@@ -12,12 +12,18 @@ import canvas_utils as canvas
 PLP_BOARD_ID = os.environ.get("PLP_BOARD_ID", "8993025745")
 ALL_CLASSES_BOARD_ID = os.environ.get("ALL_CLASSES_BOARD_ID", "8931036662")
 CANVAS_CLASSES_BOARD_ID = os.environ.get("CANVAS_CLASSES_BOARD_ID", "7308051382")
+MASTER_STUDENT_BOARD_ID = os.environ.get("MASTER_STUDENT_BOARD_ID", "6563671510")
+
+# --- Trigger Columns on PLP Board ---
 PLP_ALL_CLASSES_CONNECT_COLUMNS_STR = os.environ.get("PLP_ALL_CLASSES_CONNECT_COLUMNS_STR", "board_relation_mkqnbtaf,board_relation_mkqnxyjd,board_relation_mkqn34pg,board_relation_mkr54dtg")
 PLP_CANVAS_SYNC_STATUS_COLUMN_ID = os.environ.get("PLP_CANVAS_SYNC_STATUS_COLUMN_ID", "color_mktdzdxj")
 PLP_CANVAS_SYNC_STATUS_VALUE = os.environ.get("PLP_CANVAS_SYNC_STATUS_VALUE", "Sync")
-# --- CORRECTED: Using the mirror column ID for the student email ---
-PLP_STUDENT_EMAIL_COLUMN = os.environ.get("PLP_STUDENT_EMAIL_COLUMN", "lookup_mktdytr3")
-PLP_STUDENT_SSID_COLUMN = os.environ.get("PLP_STUDENT_SSID_COLUMN", "lookup_mktdc1ky")
+
+# --- Data Columns ---
+PLP_TO_MASTER_STUDENT_CONNECT_COLUMN = os.environ.get("PLP_TO_MASTER_STUDENT_CONNECT_COLUMN", "board_relation_mks1n32a")
+MASTER_STUDENT_SSID_COLUMN = os.environ.get("MASTER_STUDENT_SSID_COLUMN", "text__1")
+MASTER_STUDENT_EMAIL_COLUMN = os.environ.get("MASTER_STUDENT_EMAIL_COLUMN", "_students1__school_email_address")
+
 ALL_CLASSES_CANVAS_CONNECT_COLUMN = os.environ.get("ALL_CLASSES_CANVAS_CONNECT_COLUMN", "board_relation_mkt2hp4c")
 CANVAS_COURSE_ID_COLUMN = os.environ.get("CANVAS_COURSE_ID_COLUMN", "canvas_course_id_mkm1fwt4")
 ALL_CLASSES_AG_GRAD_COLUMN = os.environ.get("ALL_CLASSES_AG_GRAD_COLUMN", "dropdown_mkq0r2sj")
@@ -43,17 +49,26 @@ def process_canvas_sync_webhook(event_data):
     plp_item_id = event_data.get('pulseId')
     trigger_column_id = event_data.get('columnId')
     
-    # --- 1. Get All Student Information ---
-    student_email_val = monday.get_column_value(plp_item_id, PLP_BOARD_ID, PLP_STUDENT_EMAIL_COLUMN)
+    # --- 1. Get All Student Information from Master Student Board ---
+    student_name = monday.get_item_name(plp_item_id, PLP_BOARD_ID)
+    
+    # Find the linked master student item
+    master_student_ids = monday.get_linked_items_from_board_relation(plp_item_id, PLP_BOARD_ID, PLP_TO_MASTER_STUDENT_CONNECT_COLUMN)
+    if not master_student_ids:
+        print(f"ERROR: CANVAS_SYNC - PLP item {plp_item_id} is not linked to an item on the Master Student Data List. Aborting.")
+        return False
+    
+    master_student_id = list(master_student_ids)[0]
+    
+    # Get email and SSID from the master student item
+    student_email_val = monday.get_column_value(master_student_id, MASTER_STUDENT_BOARD_ID, MASTER_STUDENT_EMAIL_COLUMN)
     student_email = student_email_val.get('text') if student_email_val else None
     
-    student_ssid_val = monday.get_column_value(plp_item_id, PLP_BOARD_ID, PLP_STUDENT_SSID_COLUMN)
+    student_ssid_val = monday.get_column_value(master_student_id, MASTER_STUDENT_BOARD_ID, MASTER_STUDENT_SSID_COLUMN)
     student_ssid = student_ssid_val.get('text') if student_ssid_val else None
-    
-    student_name = monday.get_item_name(plp_item_id, PLP_BOARD_ID)
 
     if not all([student_email, student_name]):
-        print(f"ERROR: CANVAS_SYNC - Student email or name not found on PLP item {plp_item_id}. Aborting.")
+        print(f"ERROR: CANVAS_SYNC - Student email or name not found for PLP item {plp_item_id} (Master Student ID: {master_student_id}). Aborting.")
         return False
         
     if not student_ssid or not student_ssid.strip():
