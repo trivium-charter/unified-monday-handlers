@@ -26,18 +26,30 @@ def create_canvas_user(student_details):
         account = canvas.get_account(1)
         print(f"INFO: CANVAS_UTILS - Creating new Canvas user for email: {student_details['email']}")
         
-        # --- MODIFIED: Added 'unique_id' to the pseudonym dictionary ---
         pseudonym_data = {
-            'unique_id': student_details['email'], # This is the required field
+            'unique_id': student_details['email'],
             'sis_user_id': student_details['ssid'], 
             'login_id': student_details['email'], 
             'authentication_provider_id': '112'
         }
 
-        new_user = account.create_user(
+        # --- MODIFIED SECTION ---
+        # Directly call the API to handle list-based responses
+        response = account._requester.request(
+            "POST",
+            f"accounts/{account.id}/users",
             user={'name': student_details['name']},
             pseudonym=pseudonym_data
         )
+        
+        response_data = response.json()
+        if isinstance(response_data, list) and response_data:
+            user_attributes = response_data[0]
+        else:
+            user_attributes = response_data
+
+        new_user = canvas.get_user(user_attributes['id'])
+        # --- END MODIFIED SECTION ---
         
         print(f"SUCCESS: CANVAS_UTILS - Created new user '{new_user.name}' with ID: {new_user.id} and SIS ID: {student_details['ssid']}")
         return new_user
