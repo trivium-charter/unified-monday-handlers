@@ -3,10 +3,11 @@ import json
 from flask import Flask, request, jsonify
 
 from celery_app import celery_app
+# --- MODIFIED: Ensure all tasks are imported ---
 from monday_tasks import (
     process_general_webhook,
     process_master_student_person_sync_webhook,
-    # process_sped_students_person_sync_webhook, # This was not in your latest file, re-add if needed
+    # process_sped_students_person_sync_webhook, # This can be re-added if needed
     # process_plp_course_sync_webhook, # This was replaced by the new canvas sync
     process_canvas_sync_webhook
 )
