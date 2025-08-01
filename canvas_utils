@@ -26,22 +26,10 @@ def create_canvas_user(student_details):
         account = canvas.get_account(1)
         print(f"INFO: CANVAS_UTILS - Creating new Canvas user for email: {student_details['email']}")
         
-        user_data = {
-            'name': student_details['name'],
-            'short_name': student_details['name'].split()[0], # Use first name as short name
-            'sortable_name': f"{student_details['name'].split()[-1]}, {' '.join(student_details['name'].split()[:-1])}", # Last, First
-            'login_id': student_details['email'],
-            'sis_user_id': student_details['ssid']
-        }
-        
-        auth_provider_data = {
-            'authentication_provider_id': '112', # Google SSO
-            'sis_user_id': student_details['ssid']
-        }
-
+        # The create_user call with a pseudonym handles creating the user and their login/auth record in one go.
         new_user = account.create_user(
-            pseudonym=user_data,
-            authentication_provider=auth_provider_data
+            user={'name': student_details['name']},
+            pseudonym={'sis_user_id': student_details['ssid'], 'login_id': student_details['email'], 'authentication_provider_id': '112'}
         )
         
         print(f"SUCCESS: CANVAS_UTILS - Created new user '{new_user.name}' with ID: {new_user.id} and SIS ID: {student_details['ssid']}")
@@ -49,6 +37,21 @@ def create_canvas_user(student_details):
     except CanvasException as e:
         print(f"ERROR: CANVAS_UTILS - API error creating user '{student_details['email']}': {e}")
         return None
+
+def update_user_ssid(user, new_ssid):
+    """Updates the SIS User ID for an existing Canvas user."""
+    try:
+        # The SIS ID is part of the user's login record (pseudonym)
+        logins = user.get_logins()
+        if logins:
+            login_to_update = logins[0]
+            print(f"INFO: CANVAS_UTILS - Updating SSID for user '{user.name}' from '{login_to_update.sis_user_id}' to '{new_ssid}'.")
+            login_to_update.edit(login={'sis_user_id': new_ssid})
+            return True
+        return False
+    except CanvasException as e:
+        print(f"ERROR: CANVAS_UTILS - API error updating SSID for user '{user.name}': {e}")
+        return False
 
 def create_canvas_course(course_name, term_id):
     """Creates a new course in Canvas."""
@@ -112,24 +115,34 @@ def enroll_student_in_section(course_id, student_email, section_id):
         raise e
 
 def enroll_or_create_and_enroll(course_id, section_id, student_details):
-    """Manager function to enroll a student, creating the user if they don't exist."""
+    """Manager function to enroll a student, creating or updating the user as needed."""
+    canvas = initialize_canvas_api()
+    if not canvas: return None
+
     try:
-        # First, try to enroll directly
-        return enroll_student_in_section(course_id, student_details['email'], section_id)
+        # Step 1: Check if user exists by email
+        user = canvas.get_user(student_details['email'], 'login_id')
+        
+        # Step 2: If user exists, check and update their SSID if necessary
+        if user.sis_user_id != student_details['ssid']:
+            print(f"INFO: CANVAS_UTILS - SSID mismatch for {student_details['email']}. Canvas: '{user.sis_user_id}', Monday: '{student_details['ssid']}'.")
+            update_user_ssid(user, student_details['ssid'])
+        
     except NotFound:
-        # If the user is not found, create them
+        # Step 3: If user does not exist, create them
         print(f"INFO: CANVAS_UTILS - User '{student_details['email']}' not found. Attempting to create user.")
-        new_user = create_canvas_user(student_details)
-        if new_user:
-            # Retry enrollment after successful user creation
-            print("INFO: CANVAS_UTILS - User created. Retrying enrollment.")
-            return enroll_student_in_section(course_id, student_details['email'], section_id)
-        else:
+        user = create_canvas_user(student_details)
+        if not user:
             print(f"ERROR: CANVAS_UTILS - Failed to create user. Enrollment aborted for section {section_id}.")
             return None
+
+    # Step 4: Enroll the user (either existing, updated, or newly created)
+    try:
+        return enroll_student_in_section(course_id, student_details['email'], section_id)
     except CanvasException as e:
         print(f"ERROR: CANVAS_UTILS - A final Canvas API error occurred during enrollment for '{student_details['email']}': {e}")
         return None
+
 
 def unenroll_student_from_course(course_id, student_email):
     """Concludes (deactivates) a student's enrollment in a Canvas course."""
