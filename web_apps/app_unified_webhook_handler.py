@@ -3,6 +3,7 @@ import json
 from flask import Flask, request, jsonify
 
 from celery_app import celery_app
+# Correctly import all four tasks
 from monday_tasks import (
     process_general_webhook,
     process_master_student_person_sync_webhook,
@@ -45,16 +46,18 @@ def monday_unified_webhooks():
         return jsonify({'challenge': request.get_json()['challenge']})
 
     event = request.get_json().get('event', {})
-    webhook_board_id = event.get('boardId')
-    trigger_column_id = event.get('columnId')
+    webhook_board_id = str(event.get('boardId'))
+    trigger_column_id = str(event.get('columnId'))
     
     task_queued = False
 
+    # --- DISPATCHING LOGIC ---
+
     # 1. Canvas Sync Check
     plp_connect_cols = [col.strip() for col in PLP_ALL_CLASSES_CONNECT_COLUMNS_STR.split(',')]
-    if str(webhook_board_id) == str(PLP_BOARD_ID):
+    if webhook_board_id == str(PLP_BOARD_ID):
         is_connect_trigger = trigger_column_id in plp_connect_cols
-        is_status_trigger = (trigger_column_id == PLP_CANVAS_SYNC_STATUS_COLUMN_ID and 
+        is_status_trigger = (trigger_column_id == str(PLP_CANVAS_SYNC_STATUS_COLUMN_ID) and 
                              event.get('value', {}).get('label', {}).get('text', '') == PLP_CANVAS_SYNC_STATUS_VALUE)
         
         if is_connect_trigger or is_status_trigger:
@@ -63,20 +66,20 @@ def monday_unified_webhooks():
             task_queued = True
 
     # 2. Master Student Person Sync Check
-    if str(webhook_board_id) == str(MASTER_STUDENT_LIST_BOARD_ID) and trigger_column_id in MASTER_STUDENT_PEOPLE_COLUMNS:
+    if webhook_board_id == str(MASTER_STUDENT_LIST_BOARD_ID) and trigger_column_id in MASTER_STUDENT_PEOPLE_COLUMNS:
         print("INFO: Dispatching to Master Student Person Sync task.")
         process_master_student_person_sync_webhook.delay(event)
         task_queued = True
 
     # 3. SPED Students Person Sync Check
-    if str(webhook_board_id) == str(SPED_STUDENTS_BOARD_ID) and trigger_column_id in SPED_STUDENTS_PEOPLE_COLUMN:
+    if webhook_board_id == str(SPED_STUDENTS_BOARD_ID) and trigger_column_id in SPED_STUDENTS_PEOPLE_COLUMN:
         print("INFO: Dispatching to SPED Students Person Sync task.")
         process_sped_students_person_sync_webhook.delay(event)
         task_queued = True
 
     # 4. General Logger Check (for subitems)
     for config_rule in LOG_CONFIGS:
-        if str(config_rule.get("trigger_board_id")) == str(webhook_board_id) and str(config_rule.get("trigger_column_id")) == str(trigger_column_id):
+        if str(config_rule.get("trigger_board_id")) == webhook_board_id and str(config_rule.get("trigger_column_id")) == trigger_column_id:
             print(f"INFO: Dispatching to General Logger ({config_rule.get('log_type')}).")
             process_general_webhook.delay(event, config_rule)
             task_queued = True
