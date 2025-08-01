@@ -64,7 +64,27 @@ def create_canvas_course(course_name, term_id):
             'enrollment_term_id': term_id,
             'sis_course_id': f"{course_name.replace(' ', '_').lower()}_{term_id}"
         }
-        new_course = account.create_course(course=course_data)
+        
+        # --- MODIFIED SECTION ---
+        # The create_course method in the library returns a Course object directly
+        # but the error indicates the underlying response might be a list.
+        # We will call the API directly to handle this case.
+        response = account._requester.request(
+            "POST",
+            f"accounts/{account.id}/courses",
+            course=course_data
+        )
+        
+        # Check if the response is a list and take the first element
+        response_data = response.json()
+        if isinstance(response_data, list) and response_data:
+            course_attributes = response_data[0]
+        else:
+            course_attributes = response_data
+
+        new_course = canvas.get_course(course_attributes['id'])
+        # --- END MODIFIED SECTION ---
+
         print(f"SUCCESS: CANVAS_UTILS - Created Canvas course '{new_course.name}' with ID: {new_course.id}")
         return new_course
     except CanvasException as e:
