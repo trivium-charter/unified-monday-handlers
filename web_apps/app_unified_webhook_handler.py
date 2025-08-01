@@ -4,10 +4,10 @@ from flask import Flask, request, jsonify
 
 from celery_app import celery_app
 from monday_tasks import (
-    process_general_webhook,
-    process_master_student_person_sync_webhook,
-    process_sped_students_person_sync_webhook,
-    process_canvas_sync_webhook # <-- Use the new task name
+    # process_general_webhook,
+    # process_master_student_person_sync_webhook,
+    # process_sped_students_person_sync_webhook,
+    process_canvas_sync_webhook 
 )
 
 # --- GLOBAL FLASK APP INSTANCE ---
@@ -15,8 +15,6 @@ app = Flask(__name__)
 
 # --- Global Configuration (Environment Variables) ---
 MONDAY_API_KEY = os.environ.get("MONDAY_API_KEY")
-
-# --- Configs for Canvas Sync ---
 PLP_BOARD_ID = os.environ.get("PLP_BOARD_ID", "8993025745")
 PLP_ALL_CLASSES_CONNECT_COLUMNS_STR = os.environ.get("PLP_ALL_CLASSES_CONNECT_COLUMNS_STR", "board_relation_mkqnbtaf,board_relation_mkqnxyjd,board_relation_mkqn34pg,board_relation_mkr54dtg")
 PLP_CANVAS_SYNC_STATUS_COLUMN_ID = os.environ.get("PLP_CANVAS_SYNC_STATUS_COLUMN_ID", "color_mktdzdxj")
@@ -35,7 +33,6 @@ def monday_unified_webhooks():
 
         event = data.get('event', {})
         webhook_board_id = event.get('boardId')
-        webhook_type = event.get('type')
         trigger_column_id = event.get('columnId')
         
         if not MONDAY_API_KEY:
