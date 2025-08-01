@@ -2,7 +2,7 @@ import os
 import requests
 from canvasapi import Canvas
 from canvasapi.course import Course
-from canvasapi.exceptions import CanvasException
+from canvasapi.exceptions import CanvasException, Conflict
 from canvasapi.enrollment import Enrollment
 
 # --- Canvas API Configuration ---
@@ -69,54 +69,56 @@ def update_user_ssid(user, new_ssid):
         return False
 
 def create_canvas_course(course_name, term_id):
-    """Searches for a course by SIS ID and Term ID, creating it only if it doesn't exist."""
+    """
+    Creates a new course in Canvas. If a course with the same SIS ID already exists,
+    it verifies that course matches the name and term before using it.
+    """
     canvas = initialize_canvas_api()
     if not canvas: return None
+    
+    account = canvas.get_account(1)
+    sis_id = f"{course_name.replace(' ', '_').lower()}_{term_id}"
+    
+    course_data = {
+        'name': course_name,
+        'course_code': course_name,
+        'enrollment_term_id': f"sis_term_id:{term_id}",
+        'sis_course_id': sis_id
+    }
+
     try:
-        account = canvas.get_account(1)
-        sis_id = f"{course_name.replace(' ', '_').lower()}_{term_id}"
-        
-        print(f"INFO: Searching for existing course with SIS ID '{sis_id}' in term '{term_id}'...")
-        
-        response = account._requester.request(
-            "GET",
-            f"accounts/{account.id}/courses",
-            params={'sis_course_id': sis_id}
-        )
-        existing_courses_data = response.json()
-
-        if existing_courses_data:
-            for course_data in existing_courses_data:
-                if str(course_data.get("enrollment_term_id")) == str(term_id):
-                    existing_course = Course(account._requester, course_data)
-                    print(f"INFO: Found existing course '{existing_course.name}' (ID: {existing_course.id}) in the correct term.")
-                    if existing_course.name != course_name:
-                        print(f"CRITICAL: Found course with matching SIS & Term, but name is different ('{existing_course.name}'). Aborting.")
-                        return None
-                    return existing_course
-            
-            print(f"CRITICAL: Course with SIS ID '{sis_id}' exists, but NOT in the requested term '{term_id}'. Aborting.")
-            return None
-
-        print(f"INFO: No existing course found. Creating a new course named '{course_name}'.")
-        
-        # --- MODIFIED LINE ---
-        # Tells Canvas to use the SIS ID for the term
-        course_data = {
-            'name': course_name,
-            'course_code': course_name,
-            'enrollment_term_id': f"sis_term_id:{term_id}",
-            'sis_course_id': sis_id
-        }
-
+        # --- NEW STRATEGY: Attempt to create the course directly ---
+        print(f"INFO: Attempting to create new course '{course_name}' with SIS ID '{sis_id}'.")
         new_course = account.create_course(course=course_data)
-        # --- END MODIFIED LINE ---
-        
-        print(f"SUCCESS: Successfully created and verified course '{new_course.name}' with ID: {new_course.id}")
+        print(f"SUCCESS: Successfully created new course '{new_course.name}' with ID: {new_course.id}")
         return new_course
+
+    except Conflict:
+        # --- This block only runs if Canvas returns a "409 Conflict" error ---
+        print(f"INFO: A course with SIS ID '{sis_id}' already exists. Verifying it meets requirements...")
         
+        # Now we search for the conflicting course to verify its details
+        response = account._requester.request("GET", f"accounts/{account.id}/courses", params={'sis_course_id': sis_id})
+        
+        if not (courses_data := response.json()):
+             print(f"CRITICAL: Canvas reported a conflict, but no course could be found with SIS ID '{sis_id}'.")
+             return None
+
+        for course_data in courses_data:
+            if str(course_data.get("enrollment_term_id")) == str(term_id):
+                existing_course = Course(account._requester, course_data)
+                if existing_course.name == course_name:
+                    print(f"INFO: Verified existing course '{existing_course.name}' (ID: {existing_course.id}) is correct.")
+                    return existing_course
+                else:
+                    print(f"CRITICAL: Name mismatch. Found course '{existing_course.name}' but expected '{course_name}'. Aborting.")
+                    return None
+        
+        print(f"CRITICAL: A course with SIS ID '{sis_id}' exists, but it is not in the correct term '{term_id}'. Aborting.")
+        return None
+
     except CanvasException as e:
-        print(f"ERROR: API error during course search/creation for '{course_name}': {e}")
+        print(f"ERROR: An unexpected API error occurred during course creation for '{course_name}': {e}")
         return None
 
 def create_section_if_not_exists(course_id, section_name):
