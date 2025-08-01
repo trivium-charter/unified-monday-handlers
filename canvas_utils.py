@@ -78,7 +78,6 @@ def create_canvas_course(course_name, term_id):
         
         print(f"INFO: Searching for existing course with SIS ID '{sis_id}' in term '{term_id}'...")
         
-        # Bypassing a canvasapi library bug by making a direct request
         response = account._requester.request(
             "GET",
             f"accounts/{account.id}/courses",
@@ -100,7 +99,18 @@ def create_canvas_course(course_name, term_id):
             return None
 
         print(f"INFO: No existing course found. Creating a new course named '{course_name}'.")
-        new_course = account.create_course(course={'name': course_name, 'course_code': course_name, 'enrollment_term_id': term_id, 'sis_course_id': sis_id})
+        
+        # --- MODIFIED LINE ---
+        # Tells Canvas to use the SIS ID for the term
+        course_data = {
+            'name': course_name,
+            'course_code': course_name,
+            'enrollment_term_id': f"sis_term_id:{term_id}",
+            'sis_course_id': sis_id
+        }
+
+        new_course = account.create_course(course=course_data)
+        # --- END MODIFIED LINE ---
         
         print(f"SUCCESS: Successfully created and verified course '{new_course.name}' with ID: {new_course.id}")
         return new_course
@@ -115,8 +125,7 @@ def create_section_if_not_exists(course_id, section_name):
     if not canvas: return None
     try:
         course = canvas.get_course(course_id)
-        sections = course.get_sections()
-        for section in sections:
+        for section in course.get_sections():
             if section.name.lower() == section_name.lower():
                 return section
         
@@ -132,8 +141,7 @@ def enroll_student_in_section(course_id, user_id, section_id):
     canvas = initialize_canvas_api()
     if not canvas: return None
     try:
-        course = canvas.get_course(course_id)
-        user = canvas.get_user(user_id)
+        course, user = canvas.get_course(course_id), canvas.get_user(user_id)
         print(f"INFO: Enrolling user '{user.name}' into course {course_id}, section {section_id}.")
         
         provisional_enrollment = course.enroll_user(user, "StudentEnrollment", enrollment={'course_section_id': section_id})
