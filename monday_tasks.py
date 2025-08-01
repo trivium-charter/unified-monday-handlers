@@ -205,7 +205,7 @@ def process_canvas_sync_webhook(event_data):
         
         sections = set()
         ag_grad_val = monday.get_column_value(class_item_id, ALL_CLASSES_BOARD_ID, ALL_CLASSES_AG_GRAD_COLUMN)
-        ag_grad_text = ag_grad_val.get('text', '') if ag_grad_val else '' # <-- MODIFIED LINE
+        ag_grad_text = ag_grad_val.get('text', '') if ag_grad_val else ''
         if "AG" in ag_grad_text: sections.add("A-G")
         if "Grad" in ag_grad_text: sections.add("Grad")
         if (monday.get_column_value(plp_item_id, PLP_BOARD_ID, PLP_OP2_SECTION_COLUMN) or {}).get('text') == "Op2 Section": sections.add("Op2")
