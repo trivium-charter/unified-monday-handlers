@@ -43,56 +43,68 @@ try:
 except json.JSONDecodeError:
     COLUMN_MAPPINGS = {}
 
+def get_people_ids_from_value(value):
+    """Helper to extract user IDs from a People column value."""
+    if not isinstance(value, dict) or "personsAndTeams" not in value:
+        return set()
+    return {person['id'] for person in value.get("personsAndTeams", [])}
 
 @celery_app.task
 def process_general_webhook(event_data, config_rule):
-    """Handles generic subitem logging and other simple automations."""
-    item_id_from_webhook = event_data.get('pulseId')
-    trigger_column_id_from_webhook = event_data.get('columnId')
-    event_user_id = event_data.get('userId')
-    current_column_value = event_data.get('value')
-    previous_column_value = event_data.get('previousValue')
-    webhook_type = event_data.get('type')
+    """Handles generic subitem logging for various column types."""
+    item_id = event_data.get('pulseId')
+    user_id = event_data.get('userId')
+    current_value = event_data.get('value')
+    previous_value = event_data.get('previousValue')
 
     log_type = config_rule.get("log_type")
     params = config_rule.get("params", {})
-    configured_trigger_col_id = config_rule.get("trigger_column_id")
+    
+    pacific_tz = pytz.timezone('America/Los_Angeles')
+    current_date = datetime.now(pacific_tz).strftime('%Y-%m-%d')
+    changer_name = monday.get_user_name(user_id) or ("automation" if user_id == -4 else "")
+    user_log_text = f" by {changer_name}" if changer_name else ""
 
-    if webhook_type == "update_column_value" and trigger_column_id_from_webhook == configured_trigger_col_id:
-        if log_type == "ConnectBoardChange":
-            main_item_id = item_id_from_webhook
-            connected_board_id = params.get('linked_board_id')
-            subitem_name_prefix = params.get('subitem_name_prefix')
-            subitem_entry_type = params.get('subitem_entry_type')
-            entry_type_column_id_from_params = params.get('entry_type_column_id')
+    if log_type == "ConnectBoardChange":
+        board_id = params.get('linked_board_id')
+        prefix_add = params.get('subitem_name_prefix_add', 'Added')
+        prefix_remove = params.get('subitem_name_prefix_remove', 'Removed')
 
-            current_linked_ids = monday.get_linked_ids_from_connect_column_value(current_column_value)
-            previous_linked_ids = monday.get_linked_ids_from_connect_column_value(previous_column_value)
-            added_links = current_linked_ids - previous_linked_ids
-            removed_links = previous_linked_ids - current_linked_ids
+        current_ids = monday.get_linked_ids_from_connect_column_value(current_value)
+        previous_ids = monday.get_linked_ids_from_connect_column_value(previous_value)
+        
+        for item_id_linked in (current_ids - previous_ids):
+            linked_item_name = monday.get_item_name(item_id_linked, board_id)
+            if linked_item_name:
+                subitem_name = f"{prefix_add} '{linked_item_name}' on {current_date}{user_log_text}"
+                monday.create_subitem(item_id, subitem_name)
 
-            pacific_tz = pytz.timezone('America/Los_Angeles')
-            current_date = datetime.now(pacific_tz).strftime('%Y-%m-%d')
-            changer_user_name = monday.get_user_name(event_user_id)
-            user_log_text = f" by {changer_user_name}" if changer_user_name else (" by automation" if event_user_id == -4 else "")
-            
-            additional_subitem_columns = {}
-            if entry_type_column_id_from_params:
-                additional_subitem_columns[entry_type_column_id_from_params] = {"labels": [str(subitem_entry_type)]}
+        for item_id_linked in (previous_ids - current_ids):
+            linked_item_name = monday.get_item_name(item_id_linked, board_id)
+            if linked_item_name:
+                subitem_name = f"{prefix_remove} '{linked_item_name}' on {current_date}{user_log_text}"
+                monday.create_subitem(item_id, subitem_name)
+    
+    elif log_type == "PeopleColumnChange":
+        prefix_add = params.get('subitem_name_prefix_add', 'Assigned to')
+        prefix_remove = params.get('subitem_name_prefix_remove', 'Unassigned from')
 
-            for item_id_linked in added_links:
-                linked_item_name = monday.get_item_name(item_id_linked, connected_board_id)
-                if linked_item_name:
-                    subitem_name = f"Added {subitem_name_prefix} '{linked_item_name}' on {current_date}{user_log_text}"
-                    monday.create_subitem(main_item_id, subitem_name, additional_subitem_columns)
+        current_ids = get_people_ids_from_value(current_value)
+        previous_ids = get_people_ids_from_value(previous_value)
 
-            for item_id_linked in removed_links:
-                linked_item_name = monday.get_item_name(item_id_linked, connected_board_id)
-                if linked_item_name:
-                    subitem_name = f"Removed {subitem_name_prefix} '{linked_item_name}' on {current_date}{user_log_text}"
-                    monday.create_subitem(main_item_id, subitem_name, additional_subitem_columns)
+        for person_id in (current_ids - previous_ids):
+            person_name = monday.get_user_name(person_id)
+            if person_name:
+                subitem_name = f"{prefix_add} {person_name} on {current_date}{user_log_text}"
+                monday.create_subitem(item_id, subitem_name)
+
+        for person_id in (previous_ids - current_ids):
+            person_name = monday.get_user_name(person_id)
+            if person_name:
+                subitem_name = f"{prefix_remove} {person_name} on {current_date}{user_log_text}"
+                monday.create_subitem(item_id, subitem_name)
+                
     return True
-
 
 @celery_app.task
 def process_master_student_person_sync_webhook(event_data):
@@ -118,9 +130,7 @@ def process_master_student_person_sync_webhook(event_data):
         linked_item_ids = monday.get_linked_items_from_board_relation(master_item_id, master_board_id, master_connect_column_id)
         for linked_id in linked_item_ids:
             monday.update_people_column(linked_id, target_board_id, target_people_column_id, current_column_value_raw, target_column_type)
-
     return True
-
 
 @celery_app.task
 def process_canvas_sync_webhook(event_data):
@@ -131,7 +141,6 @@ def process_canvas_sync_webhook(event_data):
     plp_item_id = event_data.get('pulseId')
     trigger_column_id = event_data.get('columnId')
     
-    # 1. Get Student Information
     student_name = monday.get_item_name(plp_item_id, PLP_BOARD_ID)
     master_student_ids = monday.get_linked_items_from_board_relation(plp_item_id, PLP_BOARD_ID, PLP_TO_MASTER_STUDENT_CONNECT_COLUMN)
     if not master_student_ids:
@@ -152,7 +161,6 @@ def process_canvas_sync_webhook(event_data):
     student_details = {"name": student_name, "email": student_email, "ssid": student_ssid}
     print(f"INFO: Syncing for student: {student_details}")
 
-    # 2. Determine Classes to Sync
     plp_connect_cols = [col.strip() for col in PLP_ALL_CLASSES_CONNECT_COLUMNS_STR.split(',')]
     linked_class_ids, unlinked_class_ids = set(), set()
 
@@ -166,13 +174,12 @@ def process_canvas_sync_webhook(event_data):
     print(f"INFO: Classes to enroll: {linked_class_ids}")
     print(f"INFO: Classes to unenroll: {unlinked_class_ids}")
 
-    # 3. Process Enrollments
     for class_item_id in linked_class_ids:
         print(f"--- Processing Enrollment for Class ID: {class_item_id} ---")
         
         canvas_class_link_ids = monday.get_linked_items_from_board_relation(class_item_id, ALL_CLASSES_BOARD_ID, ALL_CLASSES_CANVAS_CONNECT_COLUMN)
         if not canvas_class_link_ids:
-            print(f"INFO: Class item {class_item_id} is not linked to the 'Canvas Classes' board. Skipping.")
+            print(f"INFO: Class item {class_item_id} is not linked to 'Canvas Classes' board. Skipping.")
             continue
         
         canvas_class_item_id = list(canvas_class_link_ids)[0]
@@ -217,7 +224,6 @@ def process_canvas_sync_webhook(event_data):
             if section:
                 canvas.enroll_or_create_and_enroll(canvas_course_id, section.id, student_details)
 
-    # 4. Process Unenrollments
     for class_item_id in unlinked_class_ids:
         print(f"--- Processing Unenrollment for Class ID: {class_item_id} ---")
         canvas_class_link_ids = monday.get_linked_items_from_board_relation(class_item_id, ALL_CLASSES_BOARD_ID, ALL_CLASSES_CANVAS_CONNECT_COLUMN)
