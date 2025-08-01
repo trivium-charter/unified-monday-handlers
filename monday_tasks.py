@@ -39,15 +39,18 @@ PLP_OP2_SECTION_COLUMN = os.environ.get("PLP_OP2_SECTION_COLUMN", "lookup_mkta9m
 PLP_M_SERIES_LABELS_COLUMN = os.environ.get("PLP_M_SERIES_LABELS_COLUMN", "labels_mktXXXX") 
 CANVAS_TERM_ID = os.environ.get("CANVAS_TERM_ID")
 
+MONDAY_LOGGING_CONFIGS_STR = os.environ.get("MONDAY_LOGGING_CONFIGS", "[]")
 try:
+    COLUMN_MAPPINGS = json.loads(COLUMN_MAPPINGS_STR)
     MASTER_STUDENT_PEOPLE_COLUMNS = json.loads(MASTER_STUDENT_PEOPLE_COLUMNS_STR)
     SPED_STUDENTS_PEOPLE_COLUMN = json.loads(SPED_STUDENTS_PEOPLE_COLUMN_STR)
-    COLUMN_MAPPINGS = json.loads(COLUMN_MAPPINGS_STR)
+    LOG_CONFIGS = json.loads(MONDAY_LOGGING_CONFIGS_STR)
 except json.JSONDecodeError as e:
     print(f"ERROR: Could not parse JSON from environment variables: {e}")
+    COLUMN_MAPPINGS = {}
     MASTER_STUDENT_PEOPLE_COLUMNS = {}
     SPED_STUDENTS_PEOPLE_COLUMN = {}
-    COLUMN_MAPPINGS = {}
+    LOG_CONFIGS = []
 
 def get_people_ids_from_value(value):
     """Helper to extract user IDs from a People column value."""
@@ -59,7 +62,7 @@ def get_people_ids_from_value(value):
 
 @celery_app.task
 def process_general_webhook(event_data, config_rule):
-    """Handles generic subitem logging for various column types."""
+    """Handles generic subitem logging for non-people columns (e.g., Connect Boards)."""
     item_id = event_data.get('pulseId')
     user_id = event_data.get('userId')
     current_value = event_data.get('value')
@@ -89,42 +92,69 @@ def process_general_webhook(event_data, config_rule):
             if linked_item_name:
                 subitem_name = f"{prefix_remove} '{linked_item_name}' on {current_date}{user_log_text}"
                 monday.create_subitem(item_id, subitem_name)
-    
-    elif log_type == "PeopleColumnChange":
-        prefix_add = params.get('subitem_name_prefix_add', 'Assigned to')
-        prefix_remove = params.get('subitem_name_prefix_remove', 'Unassigned from')
-        current_ids = get_people_ids_from_value(current_value)
-        previous_ids = get_people_ids_from_value(previous_value)
-
-        for person_id in (current_ids - previous_ids):
-            person_name = monday.get_user_name(person_id)
-            if person_name:
-                subitem_name = f"{prefix_add} {person_name} on {current_date}{user_log_text}"
-                monday.create_subitem(item_id, subitem_name)
-        for person_id in (previous_ids - current_ids):
-            person_name = monday.get_user_name(person_id)
-            if person_name:
-                subitem_name = f"{prefix_remove} {person_name} on {current_date}{user_log_text}"
-                monday.create_subitem(item_id, subitem_name)
     return True
 
 @celery_app.task
 def process_master_student_person_sync_webhook(event_data):
-    """Syncs people columns from the Master Student List."""
+    """
+    Handles syncing people columns from the Master Student List AND
+    creates a subitem log on the linked PLP board.
+    """
     master_item_id = event_data.get('pulseId')
     master_board_id = event_data.get('boardId')
     trigger_column_id = event_data.get('columnId')
     current_column_value_raw = event_data.get('value')
+    previous_column_value_raw = event_data.get('previousValue')
+    user_id = event_data.get('userId')
 
     if str(master_board_id) != str(MASTER_STUDENT_LIST_BOARD_ID) or trigger_column_id not in MASTER_STUDENT_PEOPLE_COLUMNS:
-        return
+        return True
+
     mappings_for_this_column = COLUMN_MAPPINGS.get(trigger_column_id)
     if not mappings_for_this_column:
-        return
+        return False
+
+    # --- Action 1: Perform the People Column Sync ---
     for target_config in mappings_for_this_column["targets"]:
         linked_item_ids = monday.get_linked_items_from_board_relation(master_item_id, master_board_id, target_config["connect_column_id"])
         for linked_id in linked_item_ids:
             monday.update_people_column(linked_id, target_config["board_id"], target_config["target_column_id"], current_column_value_raw, target_config["target_column_type"])
+
+    # --- Action 2: Create the Subitem Log on the PLP Board ---
+    subitem_prefix = mappings_for_this_column.get("name", "Person")
+    
+    plp_target_config = next((t for t in mappings_for_this_column["targets"] if str(t.get("board_id")) == str(PLP_BOARD_ID)), None)
+    if not plp_target_config:
+        print(f"INFO: No PLP board target found for column {trigger_column_id}. Skipping subitem.")
+        return True
+        
+    plp_connect_column = plp_target_config.get("connect_column_id")
+    plp_item_ids = monday.get_linked_items_from_board_relation(master_item_id, master_board_id, plp_connect_column)
+    
+    if not plp_item_ids:
+        return True
+
+    current_ids = get_people_ids_from_value(current_column_value_raw)
+    previous_ids = get_people_ids_from_value(previous_column_value_raw)
+    added_ids = current_ids - previous_ids
+    removed_ids = previous_ids - current_ids
+    
+    pacific_tz = pytz.timezone('America/Los_Angeles')
+    current_date = datetime.now(pacific_tz).strftime('%Y-%m-%d')
+    changer_name = monday.get_user_name(user_id) or "automation"
+
+    for plp_item_id in plp_item_ids:
+        for person_id in added_ids:
+            person_name = monday.get_user_name(person_id)
+            if person_name:
+                subitem_name = f"{subitem_prefix} {person_name} added on {current_date} by {changer_name}"
+                monday.create_subitem(plp_item_id, subitem_name)
+        for person_id in removed_ids:
+            person_name = monday.get_user_name(person_id)
+            if person_name:
+                subitem_name = f"{subitem_prefix} {person_name} removed on {current_date} by {changer_name}"
+                monday.create_subitem(plp_item_id, subitem_name)
+    
     return True
 
 @celery_app.task
