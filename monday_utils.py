@@ -271,10 +271,7 @@ def change_column_value_generic(board_id, item_id, column_id, value):
     Updates a generic text or number column on a Monday.com item.
     This is for simple string or number values.
     """
-    # CRITICAL FIX: The 'value' argument in GraphQL mutation expects a JSON string literal.
-    # 1. Convert the Python 'value' to a JSON string (e.g., "BECK DOUGLAS" -> "\"BECK DOUGLAS\"").
-    # 2. Then, dump it again to make it a JSON string literal within the F-string (e.g., "\"BECK DOUGLAS\"" -> "\"\\\"BECK DOUGLAS\\\"\"").
-    graphql_value_string_literal = json.dumps(json.dumps(str(value))) # Ensure value is string, then double-dump
+    graphql_value_string_literal = json.dumps(json.dumps(str(value)))
 
     mutation = f"""
     mutation {{
@@ -282,14 +279,14 @@ def change_column_value_generic(board_id, item_id, column_id, value):
         board_id: {board_id},
         item_id: {item_id},
         column_id: "{column_id}",
-        value: {graphql_value_string_literal} # <-- Use the double-dumped literal here
+        value: {graphql_value_string_literal}
       ) {{
         id
       }}
     }}
     """
     print(f"DEBUG: monday_utils: Attempting to update column '{column_id}' for item {item_id} on board {board_id} with value: '{value}'")
-    print(f"DEBUG: monday_utils: Constructed GraphQL value: {graphql_value_string_literal}") # Add this for debugging
+    print(f"DEBUG: monday_utils: Constructed GraphQL value: {graphql_value_string_literal}")
     print(f"DEBUG: monday_utils: Full Mutation Query:\n{mutation}")
 
     result = execute_monday_graphql(mutation)
@@ -306,23 +303,15 @@ def change_column_value_generic(board_id, item_id, column_id, value):
 def create_subitem(parent_item_id, subitem_name, column_values=None):
     """
     Creates a new subitem under a specified parent item.
-    :param parent_item_id: The ID of the parent item.
-    :param subitem_name: The name of the new subitem.
-    :param column_values: A dictionary of column values for the new subitem.
-                          Keys are column_ids, values are Python native objects.
-                          Example: {"text_col": "some text", "status_col": {"label": "Done"}}
-    :return: The ID of the created subitem, or None if creation failed.
     """
     values_for_monday_api = {}
     if column_values:
         for col_id, value in column_values.items():
-            if isinstance(value, dict): # For Status/Dropdown {"labels": ["Value"]} or People {"personsAndTeams": [...]})
+            if isinstance(value, dict):
                 values_for_monday_api[col_id] = value
-            else: # For simple string (Text, Numbers, etc.)
+            else:
                 values_for_monday_api[col_id] = str(value)
 
-    # Now, json.dumps this dictionary once. This creates the final JSON string
-    # that Monday.com's API expects for the 'column_values' argument.
     column_values_json_string_for_graphql = json.dumps(values_for_monday_api)
     
     print(f"DEBUG: monday_utils: Subitem column_values sent to GraphQL (inner JSON): {column_values_json_string_for_graphql}")
@@ -358,9 +347,6 @@ def create_subitem(parent_item_id, subitem_name, column_values=None):
 def create_update(item_id, update_text):
     """
     Creates an update on a Monday.com item.
-    :param item_id: The ID of the item to add the update to.
-    :param update_text: The content of the update.
-    :return: True if successful, False otherwise.
     """
     mutation = f"""
     mutation {{
@@ -387,8 +373,6 @@ def create_update(item_id, update_text):
 def update_people_column(item_id, board_id, people_column_id, new_people_value, target_column_type):
     """
     Updates a People column on a Monday.com item.
-    new_people_value: The raw value from the webhook (can be dict or JSON string).
-    target_column_type: The type of the target column ('person' for single-select, 'multiple-person' for multi-select).
     """
     graphql_value_string_literal = None
 
@@ -456,17 +440,3 @@ def update_people_column(item_id, board_id, people_column_id, new_people_value, 
         if result and 'errors' in result:
             print(f"Monday API Errors: {result['errors']}")
         return False
-
-def get_linked_items_from_board_relation(item_id, board_id, connect_column_id):
-    """
-    Fetches the linked item IDs from a specific Connect Boards column for a given item.
-    It combines get_column_value and get_linked_ids_from_connect_column_value.
-    Returns a set of linked item IDs.
-    """
-    print(f"DEBUG: monday_utils: Calling get_column_value for item {item_id} on board {board_id}, column {connect_column_id}")
-    column_data = get_column_value(item_id, board_id, connect_column_id)
-    if column_data and column_data.get('value') is not None:
-        print(f"DEBUG: monday_utils: Calling get_linked_ids_from_connect_column_value with data: {column_data['value']}")
-        return get_linked_ids_from_connect_column_value(column_data['value'])
-    print(f"DEBUG: monday_utils: No linked items found or column data missing for item {item_id}, column {connect_column_id}.")
-    return set()
