@@ -2,7 +2,7 @@ import os
 import requests
 from canvasapi import Canvas
 from canvasapi.course import Course
-from canvasapi.exceptions import CanvasException, Conflict
+from canvasapi.exceptions import CanvasException, Conflict, NotFound
 from canvasapi.enrollment import Enrollment
 
 # --- Canvas API Configuration ---
@@ -87,14 +87,12 @@ def create_canvas_course(course_name, term_id):
     }
 
     try:
-        # --- NEW STRATEGY: Attempt to create the course directly ---
         print(f"INFO: Attempting to create new course '{course_name}' with SIS ID '{sis_id}'.")
         new_course = account.create_course(course=course_data)
         print(f"SUCCESS: Successfully created new course '{new_course.name}' with ID: {new_course.id}")
         return new_course
 
     except Conflict:
-        # --- This block only runs if Canvas returns a "409 Conflict" error ---
         print(f"INFO: A course with SIS ID '{sis_id}' already exists. Verifying it meets requirements...")
         
         response = account._requester.request("GET", f"accounts/{account.id}/courses", params={'sis_course_id': sis_id})
@@ -171,15 +169,15 @@ def enroll_or_create_and_enroll(course_id, section_id, student_details):
     canvas = initialize_canvas_api()
     if not canvas: return None
 
+    user = None
     try:
         user = canvas.get_user(student_details['email'], 'login_id')
+    except NotFound:
+        print(f"INFO: User '{student_details['email']}' not found. Attempting to create user.")
+        user = create_canvas_user(student_details)
     except CanvasException as e:
-        if "not found" in str(e):
-            print(f"INFO: User '{student_details['email']}' not found. Attempting to create user.")
-            user = create_canvas_user(student_details)
-        else:
-            print(f"ERROR: API error while getting user '{student_details['email']}': {e}")
-            return None
+        print(f"ERROR: API error while getting user '{student_details['email']}': {e}")
+        return None
 
     if not user:
         print(f"ERROR: User object could not be retrieved or created. Aborting enrollment.")
