@@ -65,17 +65,12 @@ def create_canvas_course(course_name, term_id):
             'sis_course_id': f"{course_name.replace(' ', '_').lower()}_{term_id}"
         }
         
-        # --- MODIFIED SECTION ---
-        # The create_course method in the library returns a Course object directly
-        # but the error indicates the underlying response might be a list.
-        # We will call the API directly to handle this case.
         response = account._requester.request(
             "POST",
             f"accounts/{account.id}/courses",
             course=course_data
         )
         
-        # Check if the response is a list and take the first element
         response_data = response.json()
         if isinstance(response_data, list) and response_data:
             course_attributes = response_data[0]
@@ -83,7 +78,6 @@ def create_canvas_course(course_name, term_id):
             course_attributes = response_data
 
         new_course = canvas.get_course(course_attributes['id'])
-        # --- END MODIFIED SECTION ---
 
         print(f"SUCCESS: CANVAS_UTILS - Created Canvas course '{new_course.name}' with ID: {new_course.id}")
         return new_course
@@ -104,7 +98,25 @@ def create_section_if_not_exists(course_id, section_name):
                 return section
         
         print(f"INFO: CANVAS_UTILS - Section '{section_name}' not found. Creating new section in course {course_id}.")
-        new_section = course.create_course_section(course_section={'name': section_name})
+        
+        # --- MODIFIED SECTION ---
+        # Directly call the API to handle list-based responses
+        response = course._requester.request(
+            "POST",
+            f"courses/{course.id}/sections",
+            course_section={'name': section_name}
+        )
+        
+        response_data = response.json()
+        if isinstance(response_data, list) and response_data:
+            section_attributes = response_data[0]
+        else:
+            section_attributes = response_data
+            
+        # Re-fetch the section object to ensure it's properly formed
+        new_section = course.get_section(section_attributes['id'])
+        # --- END MODIFIED SECTION ---
+
         print(f"SUCCESS: CANVAS_UTILS - Created section '{new_section.name}' (ID: {new_section.id}).")
         return new_section
     except CanvasException as e:
