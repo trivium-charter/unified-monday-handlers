@@ -144,6 +144,8 @@ def enroll_student_in_section(course_id, user, section_id):
         course = canvas.get_course(course_id)
         print(f"INFO: CANVAS_UTILS - Enrolling user '{user.name}' into course {course_id}, section {section_id}.")
         
+        # --- MODIFIED SECTION ---
+        # Directly call the API to handle list-based responses for enrollments
         response = course._requester.request(
             "POST",
             f"courses/{course.id}/enrollments",
@@ -159,6 +161,7 @@ def enroll_student_in_section(course_id, user, section_id):
             enrollment_attributes = response_data[0]
         else:
             enrollment_attributes = response_data
+        # --- END MODIFIED SECTION ---
 
         print(f"SUCCESS: CANVAS_UTILS - Enrolled user '{user.name}' in section {section_id}. Enrollment ID: {enrollment_attributes.get('id')}")
         return enrollment_attributes
