@@ -87,12 +87,14 @@ def create_canvas_course(course_name, term_id):
     }
 
     try:
+        # --- NEW STRATEGY: Attempt to create the course directly ---
         print(f"INFO: Attempting to create new course '{course_name}' with SIS ID '{sis_id}'.")
         new_course = account.create_course(course=course_data)
         print(f"SUCCESS: Successfully created new course '{new_course.name}' with ID: {new_course.id}")
         return new_course
 
     except Conflict:
+        # --- This block only runs if Canvas returns a "409 Conflict" error ---
         print(f"INFO: A course with SIS ID '{sis_id}' already exists. Verifying it meets requirements...")
         
         response = account._requester.request("GET", f"accounts/{account.id}/courses", params={'sis_course_id': sis_id})
