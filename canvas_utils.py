@@ -1,5 +1,7 @@
 import os
+import requests
 from canvasapi import Canvas
+from canvasapi.course import Course
 from canvasapi.exceptions import CanvasException
 from canvasapi.enrollment import Enrollment
 
@@ -74,23 +76,30 @@ def create_canvas_course(course_name, term_id):
         account = canvas.get_account(1)
         sis_id = f"{course_name.replace(' ', '_').lower()}_{term_id}"
         
-        # Step 1: Search for an existing course with the same SIS ID.
+        # --- MODIFIED SECTION to bypass canvasapi bug ---
         print(f"INFO: Searching for existing course with SIS ID '{sis_id}' in term '{term_id}'...")
-        existing_courses = list(account.get_courses(sis_course_id=sis_id))
         
-        if existing_courses:
-            for course in existing_courses:
-                if str(course.enrollment_term_id) == str(term_id):
-                    print(f"INFO: Found existing course '{course.name}' (ID: {course.id}) in the correct term.")
-                    if course.name != course_name:
-                        print(f"CRITICAL: Found course with matching SIS & Term, but name is different ('{course.name}'). Aborting.")
+        response = account._requester.request(
+            "GET",
+            f"accounts/{account.id}/courses",
+            params={'sis_course_id': sis_id}
+        )
+        existing_courses_data = response.json()
+        # --- END MODIFIED SECTION ---
+
+        if existing_courses_data:
+            for course_data in existing_courses_data:
+                if str(course_data.get("enrollment_term_id")) == str(term_id):
+                    existing_course = Course(account._requester, course_data)
+                    print(f"INFO: Found existing course '{existing_course.name}' (ID: {existing_course.id}) in the correct term.")
+                    if existing_course.name != course_name:
+                        print(f"CRITICAL: Found course with matching SIS & Term, but name is different ('{existing_course.name}'). Aborting.")
                         return None
-                    return course
+                    return existing_course
             
-            print(f"CRITICAL: Course with SIS ID '{sis_id}' exists, but NOT in the requested term '{term_id}'. Aborting to prevent using an old course.")
+            print(f"CRITICAL: Course with SIS ID '{sis_id}' exists, but NOT in the requested term '{term_id}'. Aborting.")
             return None
 
-        # Step 2: If no course was found, create a new one.
         print(f"INFO: No existing course found. Creating a new course named '{course_name}'.")
         new_course = account.create_course(course={'name': course_name, 'course_code': course_name, 'enrollment_term_id': term_id, 'sis_course_id': sis_id})
         
@@ -98,7 +107,7 @@ def create_canvas_course(course_name, term_id):
         return new_course
         
     except CanvasException as e:
-        print(f"ERROR: CANVAS_UTILS - API error during course search/creation for '{course_name}': {e}")
+        print(f"ERROR: API error during course search/creation for '{course_name}': {e}")
         return None
 
 def create_section_if_not_exists(course_id, section_name):
@@ -119,18 +128,18 @@ def create_section_if_not_exists(course_id, section_name):
         print(f"ERROR: CANVAS_UTILS - API error finding/creating section '{section_name}': {e}")
         return None
 
-def enroll_student_in_section(course_id, user, section_id):
+def enroll_student_in_section(course_id, user_id, section_id):
     """Enrolls a student and verifies the enrollment was successfully created."""
     canvas = initialize_canvas_api()
     if not canvas: return None
     try:
         course = canvas.get_course(course_id)
+        user = canvas.get_user(user_id)
         print(f"INFO: Enrolling user '{user.name}' into course {course_id}, section {section_id}.")
         
         provisional_enrollment = course.enroll_user(user, "StudentEnrollment", enrollment={'course_section_id': section_id})
         print(f"INFO: Enrollment reported success with provisional ID: {provisional_enrollment.id}. Verifying...")
 
-        # --- VERIFICATION STEP ---
         try:
             verified_enrollment = canvas.get_enrollment(provisional_enrollment.id)
             print(f"SUCCESS: Verified enrollment for user '{user.name}'. Enrollment ID: {verified_enrollment.id}")
@@ -143,10 +152,9 @@ def enroll_student_in_section(course_id, user, section_id):
                 raise e
     except CanvasException as e:
         if "already" in str(e).lower():
-            # If already enrolled, let's return that enrollment object after finding it.
-            enrollments = course.get_enrollments(user_id=user.id)
+            enrollments = course.get_enrollments(user_id=user_id)
             if enrollments:
-                print(f"INFO: User '{user.name}' is already enrolled.")
+                print(f"INFO: User '{user_id}' is already enrolled.")
                 return enrollments[0]
             return "Already Enrolled"
         raise e
@@ -178,7 +186,6 @@ def enroll_or_create_and_enroll(course_id, section_id, student_details):
     except CanvasException as e:
         print(f"ERROR: A final Canvas API error occurred during enrollment: {e}")
         return None
-
 
 def unenroll_student_from_course(course_id, student_email):
     """Concludes (deactivates) a student's enrollment in a Canvas course."""
