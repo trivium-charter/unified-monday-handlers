@@ -26,9 +26,17 @@ def create_canvas_user(student_details):
         account = canvas.get_account(1)
         print(f"INFO: CANVAS_UTILS - Creating new Canvas user for email: {student_details['email']}")
         
+        # --- MODIFIED: Added 'unique_id' to the pseudonym dictionary ---
+        pseudonym_data = {
+            'unique_id': student_details['email'], # This is the required field
+            'sis_user_id': student_details['ssid'], 
+            'login_id': student_details['email'], 
+            'authentication_provider_id': '112'
+        }
+
         new_user = account.create_user(
             user={'name': student_details['name']},
-            pseudonym={'sis_user_id': student_details['ssid'], 'login_id': student_details['email'], 'authentication_provider_id': '112'}
+            pseudonym=pseudonym_data
         )
         
         print(f"SUCCESS: CANVAS_UTILS - Created new user '{new_user.name}' with ID: {new_user.id} and SIS ID: {student_details['ssid']}")
@@ -99,8 +107,6 @@ def create_section_if_not_exists(course_id, section_name):
         
         print(f"INFO: CANVAS_UTILS - Section '{section_name}' not found. Creating new section in course {course_id}.")
         
-        # --- MODIFIED SECTION ---
-        # Directly call the API to handle list-based responses
         response = course._requester.request(
             "POST",
             f"courses/{course.id}/sections",
@@ -113,9 +119,7 @@ def create_section_if_not_exists(course_id, section_name):
         else:
             section_attributes = response_data
             
-        # Re-fetch the section object to ensure it's properly formed
         new_section = course.get_section(section_attributes['id'])
-        # --- END MODIFIED SECTION ---
 
         print(f"SUCCESS: CANVAS_UTILS - Created section '{new_section.name}' (ID: {new_section.id}).")
         return new_section
@@ -141,7 +145,6 @@ def enroll_student_in_section(course_id, student_email, section_id):
         if "already" in str(e).lower():
             print(f"INFO: CANVAS_UTILS - User '{student_email}' is already enrolled in course {course_id}. No action needed.")
             return "Already Enrolled"
-        # Re-raise other exceptions to be caught by the manager function
         raise e
 
 def enroll_or_create_and_enroll(course_id, section_id, student_details):
@@ -151,16 +154,13 @@ def enroll_or_create_and_enroll(course_id, section_id, student_details):
 
     user = None
     try:
-        # Step 1: Check if user exists by email
         user = canvas.get_user(student_details['email'], 'login_id')
         
-        # Step 2: If user exists, check and update their SSID if necessary
         if user.sis_user_id != student_details['ssid']:
             print(f"INFO: CANVAS_UTILS - SSID mismatch for {student_details['email']}. Canvas: '{user.sis_user_id}', Monday: '{student_details['ssid']}'.")
             update_user_ssid(user, student_details['ssid'])
         
     except CanvasException as e:
-        # Step 3: If the error is "not found", create the user
         if "not found" in str(e).lower():
             print(f"INFO: CANVAS_UTILS - User '{student_details['email']}' not found. Attempting to create user.")
             user = create_canvas_user(student_details)
@@ -168,11 +168,9 @@ def enroll_or_create_and_enroll(course_id, section_id, student_details):
                 print(f"ERROR: CANVAS_UTILS - Failed to create user. Enrollment aborted for section {section_id}.")
                 return None
         else:
-            # If it's a different API error, log it and abort
             print(f"ERROR: CANVAS_UTILS - API error while getting user '{student_details['email']}': {e}")
             return None
 
-    # Step 4: Enroll the user (either existing, updated, or newly created)
     try:
         return enroll_student_in_section(course_id, student_details['email'], section_id)
     except CanvasException as e:
