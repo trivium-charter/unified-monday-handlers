@@ -78,7 +78,6 @@ def create_canvas_course(course_name, term_id):
         
         print(f"INFO: Searching for existing course with SIS ID '{sis_id}' in term '{term_id}'...")
         
-        # Bypassing a canvasapi library bug by making a direct request
         response = account._requester.request(
             "GET",
             f"accounts/{account.id}/courses",
