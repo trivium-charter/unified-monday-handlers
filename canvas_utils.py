@@ -34,7 +34,7 @@ def create_canvas_user(student_details):
         }
 
         # --- MODIFIED SECTION ---
-        # Directly call the API to handle list-based responses
+        # Directly call the API to handle list-based responses from user creation
         response = account._requester.request(
             "POST",
             f"accounts/{account.id}/users",
