@@ -12,23 +12,16 @@ import canvas_utils as canvas
 PLP_BOARD_ID = os.environ.get("PLP_BOARD_ID", "8993025745")
 ALL_CLASSES_BOARD_ID = os.environ.get("ALL_CLASSES_BOARD_ID", "8931036662")
 CANVAS_CLASSES_BOARD_ID = os.environ.get("CANVAS_CLASSES_BOARD_ID", "7308051382")
-
-# --- Trigger Columns on PLP Board ---
 PLP_ALL_CLASSES_CONNECT_COLUMNS_STR = os.environ.get("PLP_ALL_CLASSES_CONNECT_COLUMNS_STR", "board_relation_mkqnbtaf,board_relation_mkqnxyjd,board_relation_mkqn34pg,board_relation_mkr54dtg")
 PLP_CANVAS_SYNC_STATUS_COLUMN_ID = os.environ.get("PLP_CANVAS_SYNC_STATUS_COLUMN_ID", "color_mktdzdxj")
 PLP_CANVAS_SYNC_STATUS_VALUE = os.environ.get("PLP_CANVAS_SYNC_STATUS_VALUE", "Sync")
-
-# --- Data Columns ---
 PLP_STUDENT_EMAIL_COLUMN = os.environ.get("PLP_STUDENT_EMAIL_COLUMN", "email1__1")
-# --- NEW: Column for Student SSID on PLP Board ---
 PLP_STUDENT_SSID_COLUMN = os.environ.get("PLP_STUDENT_SSID_COLUMN", "lookup_mktdc1ky")
 ALL_CLASSES_CANVAS_CONNECT_COLUMN = os.environ.get("ALL_CLASSES_CANVAS_CONNECT_COLUMN", "board_relation_mkt2hp4c")
 CANVAS_COURSE_ID_COLUMN = os.environ.get("CANVAS_COURSE_ID_COLUMN", "canvas_course_id_mkm1fwt4")
 ALL_CLASSES_AG_GRAD_COLUMN = os.environ.get("ALL_CLASSES_AG_GRAD_COLUMN", "dropdown_mkq0r2sj")
 PLP_OP2_SECTION_COLUMN = os.environ.get("PLP_OP2_SECTION_COLUMN", "lookup_mkta9mgv")
 PLP_M_SERIES_LABELS_COLUMN = os.environ.get("PLP_M_SERIES_LABELS_COLUMN", "labels_mktXXXX") 
-
-# --- Canvas API Specifics ---
 CANVAS_TERM_ID = os.environ.get("CANVAS_TERM_ID")
 
 # (The rest of your existing environment variable loading for other tasks can remain)
@@ -62,7 +55,6 @@ def process_canvas_sync_webhook(event_data):
         print(f"ERROR: CANVAS_SYNC - Student email or name not found on PLP item {plp_item_id}. Aborting.")
         return False
         
-    # Fallback logic for SSID
     if not student_ssid or not student_ssid.strip():
         student_ssid = f"monday_{plp_item_id}"
         print(f"WARNING: CANVAS_SYNC - SSID is blank. Using fallback SIS ID: {student_ssid}")
@@ -139,7 +131,6 @@ def process_canvas_sync_webhook(event_data):
         for section_name in sections_to_enroll:
             section = canvas.create_section_if_not_exists(canvas_course_id, section_name)
             if section:
-                # Use the new manager function to handle user creation
                 canvas.enroll_or_create_and_enroll(canvas_course_id, section.id, student_details)
             else:
                 print(f"ERROR: Could not find or create section '{section_name}'. Skipping enrollment.")
