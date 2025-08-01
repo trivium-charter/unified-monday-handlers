@@ -184,27 +184,54 @@ def process_canvas_sync_webhook(event_data):
     # --- 3. Process Classes to Sync/Enroll ---
     for class_item_id in linked_class_ids:
         print(f"--- Processing Class ID: {class_item_id} ---")
+        
+        # Step A: Find the corresponding item on the "Canvas Classes" board.
+        # This item holds the actual Canvas Course ID.
         canvas_class_link_ids = monday.get_linked_items_from_board_relation(class_item_id, ALL_CLASSES_BOARD_ID, ALL_CLASSES_CANVAS_CONNECT_COLUMN)
+        
         if not canvas_class_link_ids:
+            print(f"INFO: CANVAS_SYNC - Class item {class_item_id} is not linked to the 'Canvas Classes' board. Skipping.")
             continue
         
         canvas_class_item_id = list(canvas_class_link_ids)[0]
+        
+        # Step B: Get the Canvas Course ID from the text column on that board.
+        print(f"INFO: CANVAS_SYNC - Checking for existing Canvas Course ID on item {canvas_class_item_id}...")
         canvas_course_id_val = monday.get_column_value(canvas_class_item_id, CANVAS_CLASSES_BOARD_ID, CANVAS_COURSE_ID_COLUMN)
         canvas_course_id = canvas_course_id_val.get('text') if canvas_course_id_val else None
 
-        if not canvas_course_id:
+        # Step C: Check if the Canvas Course ID is blank.
+        if not canvas_course_id or not canvas_course_id.strip():
+            # If the ID is blank, we need to create a new course in Canvas.
+            print(f"INFO: CANVAS_SYNC - Canvas Course ID is blank. Attempting to create a new course.")
             class_item_name = monday.get_item_name(class_item_id, ALL_CLASSES_BOARD_ID) or "Untitled"
-            if not CANVAS_TERM_ID: continue
+            
+            if not CANVAS_TERM_ID:
+                print(f"ERROR: CANVAS_SYNC - CANVAS_TERM_ID is not set. Cannot create course. Skipping.")
+                continue
+                
+            # Create the course in Canvas. This function includes the check for name mismatches.
             new_course = canvas.create_canvas_course(class_item_name, CANVAS_TERM_ID)
+            
             if new_course:
+                # If creation is successful, use the new ID and update Monday.com
                 canvas_course_id = new_course.id
+                print(f"INFO: CANVAS_SYNC - New course created with ID: {canvas_course_id}. Updating Monday.com.")
                 monday.change_column_value_generic(CANVAS_CLASSES_BOARD_ID, canvas_class_item_id, CANVAS_COURSE_ID_COLUMN, str(canvas_course_id))
             else:
+                # If course creation failed or was aborted (e.g., name mismatch), skip this class.
+                print(f"ERROR: CANVAS_SYNC - Course creation for '{class_item_name}' failed or was aborted. Skipping enrollment.")
                 continue
+        else:
+            # If the ID is NOT blank, use the existing ID.
+            print(f"INFO: CANVAS_SYNC - Found existing Canvas Course ID: {canvas_course_id}. Proceeding with enrollment.")
         
+        # At this point, `canvas_course_id` is valid, either found or newly created.
+        
+        # Step D: Determine which sections to enroll the student in.
         sections_to_enroll = set()
         ag_grad_val = monday.get_column_value(class_item_id, ALL_CLASSES_BOARD_ID, ALL_CLASSES_AG_GRAD_COLUMN)
-        ag_grad_text = ag_grad_val.get('text', '')
+        ag_grad_text = ag_grad_val.get('text', '') if ag_grad_val else ''
         if "AG" in ag_grad_text: sections_to_enroll.add("A-G")
         if "Grad" in ag_grad_text: sections_to_enroll.add("Grad")
 
@@ -216,7 +243,8 @@ def process_canvas_sync_webhook(event_data):
             for m_label in ["M2", "M3", "M4", "M5"]:
                 if m_label in labels_val.get('text'):
                     sections_to_enroll.add(m_label)
-
+        
+        # Step E: Enroll the student in each required section.
         for section_name in sections_to_enroll:
             section = canvas.create_section_if_not_exists(canvas_course_id, section_name)
             if section:
