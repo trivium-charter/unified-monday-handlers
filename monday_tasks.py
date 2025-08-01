@@ -24,7 +24,106 @@ PLP_OP2_SECTION_COLUMN = os.environ.get("PLP_OP2_SECTION_COLUMN")
 PLP_M_SERIES_LABELS_COLUMN = os.environ.get("PLP_M_SERIES_LABELS_COLUMN") 
 CANVAS_TERM_ID = os.environ.get("CANVAS_TERM_ID")
 
-# --- Celery Task ---
+MONDAY_LOGGING_CONFIGS_STR = os.environ.get("MONDAY_LOGGING_CONFIGS", "[]")
+try:
+    MONDAY_LOGGING_CONFIGS = json.loads(MONDAY_LOGGING_CONFIGS_STR)
+except json.JSONDecodeError:
+    MONDAY_LOGGING_CONFIGS = []
+
+MASTER_STUDENT_LIST_BOARD_ID = os.environ.get("MASTER_STUDENT_LIST_BOARD_ID", "")
+MASTER_STUDENT_PEOPLE_COLUMNS_STR = os.environ.get("MASTER_STUDENT_PEOPLE_COLUMNS", "{}")
+try:
+    MASTER_STUDENT_PEOPLE_COLUMNS = json.loads(MASTER_STUDENT_PEOPLE_COLUMNS_STR)
+except json.JSONDecodeError:
+    MASTER_STUDENT_PEOPLE_COLUMNS = {}
+
+COLUMN_MAPPINGS_STR = os.environ.get("MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS", "{}")
+try:
+    COLUMN_MAPPINGS = json.loads(COLUMN_MAPPINGS_STR)
+except json.JSONDecodeError:
+    COLUMN_MAPPINGS = {}
+
+
+# --- Celery Tasks ---
+
+@celery_app.task
+def process_general_webhook(event_data, config_rule):
+    """Handles generic subitem logging and other simple automations."""
+    item_id_from_webhook = event_data.get('pulseId')
+    trigger_column_id_from_webhook = event_data.get('columnId')
+    event_user_id = event_data.get('userId')
+    current_column_value = event_data.get('value')
+    previous_column_value = event_data.get('previousValue')
+    webhook_type = event_data.get('type')
+
+    log_type = config_rule.get("log_type")
+    params = config_rule.get("params", {})
+    configured_trigger_col_id = config_rule.get("trigger_column_id")
+
+    if webhook_type == "update_column_value" and trigger_column_id_from_webhook == configured_trigger_col_id:
+        if log_type == "ConnectBoardChange":
+            main_item_id = item_id_from_webhook
+            connected_board_id = params.get('linked_board_id')
+            subitem_name_prefix = params.get('subitem_name_prefix')
+            subitem_entry_type = params.get('subitem_entry_type')
+            entry_type_column_id_from_params = params.get('entry_type_column_id')
+
+            current_linked_ids = monday.get_linked_ids_from_connect_column_value(current_column_value)
+            previous_linked_ids = monday.get_linked_ids_from_connect_column_value(previous_column_value)
+            added_links = current_linked_ids - previous_linked_ids
+            removed_links = previous_linked_ids - current_linked_ids
+
+            pacific_tz = pytz.timezone('America/Los_Angeles')
+            current_date = datetime.now(pacific_tz).strftime('%Y-%m-%d')
+            changer_user_name = monday.get_user_name(event_user_id)
+            user_log_text = f" by {changer_user_name}" if changer_user_name else (" by automation" if event_user_id == -4 else "")
+            
+            additional_subitem_columns = {}
+            if entry_type_column_id_from_params:
+                additional_subitem_columns[entry_type_column_id_from_params] = {"labels": [str(subitem_entry_type)]}
+
+            for item_id_linked in added_links:
+                linked_item_name = monday.get_item_name(item_id_linked, connected_board_id)
+                if linked_item_name:
+                    subitem_name = f"Added {subitem_name_prefix} '{linked_item_name}' on {current_date}{user_log_text}"
+                    monday.create_subitem(main_item_id, subitem_name, additional_subitem_columns)
+
+            for item_id_linked in removed_links:
+                linked_item_name = monday.get_item_name(item_id_linked, connected_board_id)
+                if linked_item_name:
+                    subitem_name = f"Removed {subitem_name_prefix} '{linked_item_name}' on {current_date}{user_log_text}"
+                    monday.create_subitem(main_item_id, subitem_name, additional_subitem_columns)
+    return True
+
+
+@celery_app.task
+def process_master_student_person_sync_webhook(event_data):
+    """Handles syncing people columns from the Master Student List."""
+    master_item_id = event_data.get('pulseId')
+    master_board_id = event_data.get('boardId')
+    trigger_column_id = event_data.get('columnId')
+    current_column_value_raw = event_data.get('value')
+
+    if str(master_board_id) != str(MASTER_STUDENT_LIST_BOARD_ID) or trigger_column_id not in MASTER_STUDENT_PEOPLE_COLUMNS:
+        return True
+
+    mappings_for_this_column = COLUMN_MAPPINGS.get(trigger_column_id)
+    if not mappings_for_this_column:
+        return False
+
+    for target_config in mappings_for_this_column["targets"]:
+        target_board_id = target_config["board_id"]
+        master_connect_column_id = target_config["connect_column_id"]
+        target_people_column_id = target_config["target_column_id"]
+        target_column_type = target_config["target_column_type"]
+
+        linked_item_ids = monday.get_linked_items_from_board_relation(master_item_id, master_board_id, master_connect_column_id)
+        for linked_id in linked_item_ids:
+            monday.update_people_column(linked_id, target_board_id, target_people_column_id, current_column_value_raw, target_column_type)
+
+    return True
+
+
 @celery_app.task
 def process_canvas_sync_webhook(event_data):
     """
