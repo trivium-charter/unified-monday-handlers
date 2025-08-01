@@ -3,12 +3,11 @@ import json
 from flask import Flask, request, jsonify
 
 from celery_app import celery_app
-# --- MODIFIED: Ensure all tasks are imported ---
 from monday_tasks import (
     process_general_webhook,
     process_master_student_person_sync_webhook,
-    process_sped_students_person_sync_webhook,
-    process_plp_course_sync_webhook,
+    # process_sped_students_person_sync_webhook, # This was not in your latest file, re-add if needed
+    # process_plp_course_sync_webhook, # This was replaced by the new canvas sync
     process_canvas_sync_webhook
 )
 
@@ -37,6 +36,7 @@ try:
     MASTER_STUDENT_PEOPLE_COLUMNS = json.loads(MASTER_STUDENT_PEOPLE_COLUMNS_STR)
 except json.JSONDecodeError:
     MASTER_STUDENT_PEOPLE_COLUMNS = {}
+
 
 # --- Main Unified Webhook Endpoint ---
 @app.route('/monday-webhooks', methods=['POST'])
@@ -88,13 +88,10 @@ def monday_unified_webhooks():
         # 3. General Logger Check (Includes Subitem Creation)
         for config_rule in LOG_CONFIGS:
             if str(config_rule.get("trigger_board_id")) == str(webhook_board_id):
-                # Check if the trigger column matches (or if any column triggers)
                 if config_rule.get("trigger_column_id") is None or str(config_rule.get("trigger_column_id")) == str(trigger_column_id):
                     print(f"INFO: Dispatching to General Logger ({config_rule.get('log_type')}).")
                     process_general_webhook.delay(event, config_rule)
                     return jsonify({"status": "success", "message": "General Logger task queued."}), 202
-
-        # (You can add dispatchers for other specific tasks like SpEd sync here if needed)
 
         print(f"INFO: No matching dispatch rule found for webhook.")
         return jsonify({"status": "ignored", "message": "No matching dispatch rule found."}), 200
