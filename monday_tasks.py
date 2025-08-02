@@ -177,6 +177,8 @@ def process_canvas_delta_sync_from_course_change(event_data, log_configs):
 
 # --- ORIGINAL UNCHANGED TASKS ---
 
+# In monday_tasks.py
+
 @celery_app.task
 def process_plp_course_sync_webhook(event_data):
     subitem_id = event_data.get('pulseId')
@@ -184,7 +186,10 @@ def process_plp_course_sync_webhook(event_data):
     parent_item_id = event_data.get('parentItemId')
     current_value = event_data.get('value')
     previous_value = event_data.get('previousValue')
+    user_id = event_data.get('userId') # Get the user who made the initial change
 
+    # ... (the logic to determine added/removed courses and find the plp_item_id remains the same)
+    
     current_all_courses_ids = monday.get_linked_ids_from_connect_column_value(current_value)
     previous_all_courses_ids = monday.get_linked_ids_from_connect_column_value(previous_value)
     added_all_courses_ids = current_all_courses_ids - previous_all_courses_ids
@@ -195,19 +200,24 @@ def process_plp_course_sync_webhook(event_data):
 
     subitem_dropdown_data = monday.get_column_value(subitem_id, subitem_board_id, HS_ROSTER_SUBITEM_DROPDOWN_COLUMN_ID)
     subitem_dropdown_label = subitem_dropdown_data.get('text') if subitem_dropdown_data else None
-    if not subitem_dropdown_label:
-        return True
+    if not subitem_dropdown_label: return True
 
     target_plp_connect_column_id = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get(subitem_dropdown_label)
-    if not target_plp_connect_column_id:
-        return True
+    if not target_plp_connect_column_id: return True
 
     plp_link_data = monday.get_column_value(parent_item_id, HS_ROSTER_BOARD_ID, HS_ROSTER_MAIN_ITEM_to_PLP_CONNECT_COLUMN_ID)
     plp_linked_ids = monday.get_linked_ids_from_connect_column_value(plp_link_data.get('value')) if plp_link_data else set()
-    if not plp_linked_ids:
-        return True
+    if not plp_linked_ids: return True
     
     plp_item_id = list(plp_linked_ids)[0]
+    
+    # --- START OF MODIFIED LOGIC ---
+    
+    # First, get the state of the column on the PLP board BEFORE we change it
+    original_plp_column_data = monday.get_column_value(plp_item_id, PLP_BOARD_ID, target_plp_connect_column_id)
+    original_plp_value = original_plp_column_data.get('value') if original_plp_column_data else {}
+
+    # Update the PLP board by adding/removing courses
     operation_successful = True
     for course_id in added_all_courses_ids:
         if not monday.update_connect_board_column(plp_item_id, PLP_BOARD_ID, target_plp_connect_column_id, course_id, "add"):
@@ -215,7 +225,31 @@ def process_plp_course_sync_webhook(event_data):
     for course_id in removed_all_courses_ids:
         if not monday.update_connect_board_column(plp_item_id, PLP_BOARD_ID, target_plp_connect_column_id, course_id, "remove"):
             operation_successful = False
-    return operation_successful
+            
+    if not operation_successful:
+        print("ERROR: Failed to update PLP board. Aborting downstream tasks.")
+        return False
+
+    # Now, get the state of the column on the PLP board AFTER we changed it
+    updated_plp_column_data = monday.get_column_value(plp_item_id, PLP_BOARD_ID, target_plp_connect_column_id)
+    updated_plp_value = updated_plp_column_data.get('value') if updated_plp_column_data else {}
+    
+    # Manually create a fake webhook event payload
+    downstream_event = {
+        'boardId': int(PLP_BOARD_ID),
+        'pulseId': plp_item_id,
+        'columnId': target_plp_connect_column_id,
+        'userId': user_id,
+        'value': updated_plp_value,
+        'previousValue': original_plp_value,
+        'type': 'update_column_value'
+    }
+    
+    # Manually trigger the next task in the chain
+    print(f"INFO: Chaining from PLP Sync to Delta Sync for item {plp_item_id}.")
+    process_canvas_delta_sync_from_course_change.delay(downstream_event, LOG_CONFIGS)
+
+    return True
 
 @celery_app.task
 def process_general_webhook(event_data, config_rule):
