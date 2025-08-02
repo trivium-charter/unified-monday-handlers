@@ -4,10 +4,10 @@ from flask import Flask, request, jsonify
 from celery_app import celery_app
 from monday_tasks import (
     process_general_webhook,
+    process_plp_course_sync_webhook,
     process_master_student_person_sync_webhook,
     process_sped_students_person_sync_webhook,
     process_canvas_sync_webhook,
-    process_hs_roster_linking_webhook,
     cleanup_hs_roster_links
 )
 
@@ -46,8 +46,8 @@ def monday_unified_webhooks():
         task_queued = True
 
     if parent_item_board_id == str(HS_COURSE_ROSTER_BOARD_ID) and trigger_column_id == "board_relation_mkr0bwsf":
-        print("INFO: Dispatching to HS Roster Linking task.")
-        process_hs_roster_linking_webhook.delay(event)
+        print("INFO: Dispatching to HS Roster Linking task (Original Logic).")
+        process_plp_course_sync_webhook.delay(event) # This is the original task name
         task_queued = True
 
     if webhook_board_id == str(MASTER_STUDENT_LIST_BOARD_ID) and trigger_column_id in MASTER_STUDENT_PEOPLE_COLUMNS:
