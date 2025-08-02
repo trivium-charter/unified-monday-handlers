@@ -1,7 +1,6 @@
 import os
 import json
 from flask import Flask, request, jsonify
-
 from celery_app import celery_app
 from monday_tasks import (
     process_general_webhook,
@@ -16,24 +15,23 @@ app = Flask(__name__)
 # --- Load Environment Variables for Dispatching ---
 HS_ROSTER_BOARD_ID = os.environ.get("HS_ROSTER_BOARD_ID", "")
 HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID = os.environ.get("HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID", "")
+MASTER_STUDENT_BOARD_ID = os.environ.get("MASTER_STUDENT_BOARD_ID", "")
+PLP_BOARD_ID = os.environ.get("PLP_BOARD_ID", "")
+SPED_STUDENTS_BOARD_ID = os.environ.get("SPED_STUDENTS_BOARD_ID", "")
 
-MASTER_STUDENT_LIST_BOARD_ID = os.environ.get("MASTER_STUDENT_LIST_BOARD_ID", "")
-MASTER_STUDENT_PEOPLE_COLUMNS_STR = os.environ.get("MASTER_STUDENT_PEOPLE_COLUMNS", "{}")
+# Load complex variables with error handling
 try:
-    MASTER_STUDENT_PEOPLE_COLUMNS = json.loads(MASTER_STUDENT_PEOPLE_COLUMNS_STR)
+    MASTER_STUDENT_PEOPLE_COLUMNS = json.loads(os.environ.get("MASTER_STUDENT_PEOPLE_COLUMNS", "{}"))
 except json.JSONDecodeError:
     MASTER_STUDENT_PEOPLE_COLUMNS = {}
 
-SPED_STUDENTS_BOARD_ID = os.environ.get("SPED_STUDENTS_BOARD_ID", "")
-SPED_STUDENTS_PEOPLE_COLUMN_MAPPING_STR = os.environ.get("SPED_STUDENTS_PEOPLE_COLUMN_MAPPING", "{}")
 try:
-    SPED_STUDENTS_PEOPLE_COLUMN_MAPPING = json.loads(SPED_STUDENTS_PEOPLE_COLUMN_MAPPING_STR)
+    SPED_STUDENTS_PEOPLE_COLUMN_MAPPING = json.loads(os.environ.get("SPED_STUDENTS_PEOPLE_COLUMN_MAPPING", "{}"))
 except json.JSONDecodeError:
     SPED_STUDENTS_PEOPLE_COLUMN_MAPPING = {}
 
-LOG_CONFIGS_STR = os.environ.get("MONDAY_LOGGING_CONFIGS", "[]")
 try:
-    LOG_CONFIGS = json.loads(LOG_CONFIGS_STR)
+    LOG_CONFIGS = json.loads(os.environ.get("MONDAY_LOGGING_CONFIGS", "[]"))
 except json.JSONDecodeError:
     LOG_CONFIGS = []
 
@@ -52,8 +50,7 @@ def monday_unified_webhooks():
 
         # --- DISPATCHING LOGIC ---
 
-        # 1. Canvas Sync Check (watches for 5 trigger columns on the PLP board)
-        PLP_BOARD_ID = os.environ.get("PLP_BOARD_ID")
+        # 1. Canvas Sync Check (watches for trigger columns on the PLP board)
         PLP_TRIGGER_COLUMNS_STR = os.environ.get("PLP_ALL_CLASSES_CONNECT_COLUMNS_STR", "")
         PLP_TRIGGER_COLUMN_IDS = [col_id.strip() for col_id in PLP_TRIGGER_COLUMNS_STR.split(',') if col_id.strip()]
 
@@ -65,17 +62,17 @@ def monday_unified_webhooks():
             process_canvas_sync_webhook.delay(event)
             return jsonify({"status": "success", "message": "Canvas Sync task queued."}), 202
 
-        # 2. PLP Course Sync Check
+        # 2. PLP Course Sync Check (HS Roster to PLP)
         if (webhook_type == "update_column_value" and parent_item_board_id and
             HS_ROSTER_BOARD_ID and parent_item_board_id == HS_ROSTER_BOARD_ID and
-            HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID and trigger_column_id == HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID):
+            trigger_column_id == HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID):
             print("INFO: Dispatching to PLP Course Sync task.")
             process_plp_course_sync_webhook.delay(event)
             return jsonify({"status": "success", "message": "PLP Course Sync task queued."}), 202
 
         # 3. Master Student Person Sync Check
-        if (webhook_type == "update_column_value" and MASTER_STUDENT_LIST_BOARD_ID and
-            webhook_board_id == MASTER_STUDENT_LIST_BOARD_ID and
+        if (webhook_type == "update_column_value" and MASTER_STUDENT_BOARD_ID and
+            webhook_board_id == MASTER_STUDENT_BOARD_ID and
             trigger_column_id in MASTER_STUDENT_PEOPLE_COLUMNS):
             print("INFO: Dispatching to Master Student Person Sync task.")
             process_master_student_person_sync_webhook.delay(event)
