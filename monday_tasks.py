@@ -5,7 +5,7 @@ from celery_app import celery_app
 import monday_utils as monday
 import canvas_utils as canvas
 
-# --- Load All Environment Variables for Tasks, Using Your Exact Names ---
+# --- Load All Environment Variables ---
 PLP_BOARD_ID = os.environ.get("PLP_BOARD_ID")
 PLP_CANVAS_SYNC_COLUMN_ID = os.environ.get("PLP_CANVAS_SYNC_COLUMN_ID")
 PLP_CANVAS_SYNC_STATUS_VALUE = os.environ.get("PLP_CANVAS_SYNC_STATUS_VALUE", "Done")
@@ -13,24 +13,20 @@ PLP_ALL_CLASSES_CONNECT_COLUMNS_STR = os.environ.get("PLP_ALL_CLASSES_CONNECT_CO
 PLP_TO_MASTER_STUDENT_CONNECT_COLUMN = os.environ.get("PLP_TO_MASTER_STUDENT_CONNECT_COLUMN")
 PLP_OP2_SECTION_COLUMN = os.environ.get("PLP_OP2_SECTION_COLUMN")
 PLP_M_SERIES_LABELS_COLUMN = os.environ.get("PLP_M_SERIES_LABELS_COLUMN")
-
 MASTER_STUDENT_BOARD_ID = os.environ.get("MASTER_STUDENT_BOARD_ID")
 MASTER_STUDENT_SSID_COLUMN = os.environ.get("MASTER_STUDENT_SSID_COLUMN")
 MASTER_STUDENT_EMAIL_COLUMN = os.environ.get("MASTER_STUDENT_EMAIL_COLUMN")
-
 ALL_COURSES_BOARD_ID = os.environ.get("ALL_COURSES_BOARD_ID")
 ALL_CLASSES_CANVAS_CONNECT_COLUMN = os.environ.get("ALL_CLASSES_CANVAS_CONNECT_COLUMN")
 ALL_CLASSES_AG_GRAD_COLUMN = os.environ.get("ALL_CLASSES_AG_GRAD_COLUMN")
-
 HS_ROSTER_BOARD_ID = os.environ.get("HS_ROSTER_BOARD_ID")
 HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID = os.environ.get("HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID")
 HS_ROSTER_SUBITEM_DROPDOWN_COLUMN_ID = os.environ.get("HS_ROSTER_SUBITEM_DROPDOWN_COLUMN_ID")
 HS_ROSTER_MAIN_ITEM_to_PLP_CONNECT_COLUMN_ID = os.environ.get("HS_ROSTER_MAIN_ITEM_to_PLP_CONNECT_COLUMN_ID")
-
 IEP_AP_BOARD_ID = os.environ.get("IEP_AP_BOARD_ID")
+SPED_STUDENTS_BOARD_ID = os.environ.get("SPED_STUDENTS_BOARD_ID")
 SPED_TO_IEPAP_CONNECT_COLUMN_ID = os.environ.get("SPED_TO_IEPAP_CONNECT_COLUMN_ID")
 CANVAS_TERM_ID = os.environ.get("CANVAS_TERM_ID")
-
 try:
     PLP_CATEGORY_TO_CONNECT_COLUMN_MAP = json.loads(os.environ.get("PLP_CATEGORY_TO_CONNECT_COLUMN_MAP", "{}"))
     MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS = json.loads(os.environ.get("MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS", "{}"))
@@ -40,92 +36,116 @@ except json.JSONDecodeError:
     MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS = {}
     SPED_STUDENTS_PEOPLE_COLUMN_MAPPING = {}
 
-# --- Helper Function ---
-def format_name_last_first(name_str):
-    if not name_str or not isinstance(name_str, str): return name_str
-    parts = name_str.strip().split()
-    return f"{parts[-1]}, {' '.join(parts[:-1])}" if len(parts) >= 2 else name_str
-
-# --- Celery Tasks ---
-
-@celery_app.task
-def process_canvas_sync_webhook(event_data):
-    plp_item_id = event_data.get('pulseId')
-
-    status_column_data = monday.get_column_value(plp_item_id, PLP_BOARD_ID, PLP_CANVAS_SYNC_COLUMN_ID)
-    status_label = status_column_data.get('text', '')
-    
-    if status_label != PLP_CANVAS_SYNC_STATUS_VALUE:
-        print(f"INFO: Canvas sync not triggered. Status is '{status_label}', not '{PLP_CANVAS_SYNC_STATUS_VALUE}'.")
-        return True
-
-    print(f"INFO: Canvas sync initiated for PLP item {plp_item_id} because status is '{PLP_CANVAS_SYNC_STATUS_VALUE}'.")
-
+# --- HELPER: Get Student Details ---
+def get_student_details_from_plp(plp_item_id):
     master_student_ids = monday.get_linked_items_from_board_relation(plp_item_id, PLP_BOARD_ID, PLP_TO_MASTER_STUDENT_CONNECT_COLUMN)
     if not master_student_ids:
-        print(f"CRITICAL: No Master Student linked to PLP item {plp_item_id}. Cannot get student details.")
-        return False
+        print(f"CRITICAL: No Master Student linked to PLP item {plp_item_id}.")
+        return None
     master_student_item_id = list(master_student_ids)[0]
     
     student_name = monday.get_item_name(master_student_item_id, MASTER_STUDENT_BOARD_ID)
-    ssid_val = monday.get_column_value(master_student_item_id, MASTER_STUDENT_BOARD_ID, MASTER_STUDENT_SSID_COLUMN)
-    email_val = monday.get_column_value(master_student_item_id, MASTER_STUDENT_BOARD_ID, MASTER_STUDENT_EMAIL_COLUMN)
-    
-    ssid = ssid_val.get('text', '') if ssid_val else ''
-    email = email_val.get('text', '') if email_val else ''
+    ssid = monday.get_column_value(master_student_item_id, MASTER_STUDENT_BOARD_ID, MASTER_STUDENT_SSID_COLUMN).get('text', '')
+    email = monday.get_column_value(master_student_item_id, MASTER_STUDENT_BOARD_ID, MASTER_STUDENT_EMAIL_COLUMN).get('text', '')
 
     if not all([student_name, ssid, email]):
-        print(f"CRITICAL: Missing details for Master Student {master_student_item_id} (Name, SSID, or Email).")
-        return False
-    
-    student_details = {'name': student_name, 'ssid': ssid, 'email': email}
-    
-    course_column_ids = [c.strip() for c in PLP_ALL_CLASSES_CONNECT_COLUMNS_STR.split(',') if c.strip() and c.strip() != PLP_CANVAS_SYNC_COLUMN_ID]
-    all_class_ids = set()
-    for col_id in course_column_ids:
-        class_link_data = monday.get_column_value(plp_item_id, PLP_BOARD_ID, col_id)
-        if class_link_data and class_link_data.get('value'):
-            all_class_ids.update(monday.get_linked_ids_from_connect_column_value(class_link_data['value']))
-            
-    if not all_class_ids:
-        print(f"INFO: Status is '{PLP_CANVAS_SYNC_STATUS_VALUE}' but no courses are linked for PLP item {plp_item_id}.")
-        return True
+        print(f"CRITICAL: Missing details for Master Student {master_student_item_id}.")
+        return None
+        
+    return {'name': student_name, 'ssid': ssid, 'email': email}
+
+# --- HELPER: Enroll a single class ---
+def enroll_class(plp_item_id, class_item_id, student_details):
+    class_name = monday.get_item_name(class_item_id, ALL_COURSES_BOARD_ID)
+    canvas_course_id_val = monday.get_column_value(class_item_id, ALL_COURSES_BOARD_ID, ALL_CLASSES_CANVAS_CONNECT_COLUMN)
+    canvas_course_id = canvas_course_id_val.get('text', '') if canvas_course_id_val else ''
+
+    if not canvas_course_id:
+        new_course = canvas.create_canvas_course(class_name, CANVAS_TERM_ID)
+        if new_course:
+            canvas_course_id = new_course.id
+            monday.change_column_value_generic(ALL_COURSES_BOARD_ID, class_item_id, ALL_CLASSES_CANVAS_CONNECT_COLUMN, str(canvas_course_id))
+        else:
+            print(f"ERROR: Failed to create Canvas course for '{class_name}'.")
+            return
 
     op2_val = monday.get_column_value(plp_item_id, PLP_BOARD_ID, PLP_OP2_SECTION_COLUMN)
     m_series_val = monday.get_column_value(plp_item_id, PLP_BOARD_ID, PLP_M_SERIES_LABELS_COLUMN)
     op2_text = op2_val.get('text', '') if op2_val else ''
     m_series_text = m_series_val.get('text', '') if m_series_val else ''
 
+    sections = set()
+    ag_grad_val = monday.get_column_value(class_item_id, ALL_COURSES_BOARD_ID, ALL_CLASSES_AG_GRAD_COLUMN)
+    ag_grad_text = ag_grad_val.get('text', '') if ag_grad_val else ''
+    if "A-G" in ag_grad_text: sections.add("A-G")
+    if "Grad" in op2_text: sections.add("Grad")
+    if "M-Series" in m_series_text: sections.add("M-Series")
+
+    if not sections:
+        print(f"WARNING: No sections determined for class '{class_name}'.")
+        return
+
+    for section_name in sections:
+        section = canvas.create_section_if_not_exists(canvas_course_id, section_name)
+        if section:
+            canvas.enroll_or_create_and_enroll(canvas_course_id, section.id, student_details)
+
+# --- NEW CANVAS TASKS ---
+
+@celery_app.task
+def process_canvas_full_sync_from_status(event_data):
+    plp_item_id = event_data.get('pulseId')
+    status_value = event_data.get('value', {})
+    status_label = status_value.get('label', {}).get('text', '')
+
+    if status_label != PLP_CANVAS_SYNC_STATUS_VALUE:
+        return True
+
+    print(f"INFO: Canvas FULL sync initiated for PLP item {plp_item_id}.")
+    student_details = get_student_details_from_plp(plp_item_id)
+    if not student_details:
+        return False
+
+    course_column_ids = [c.strip() for c in PLP_ALL_CLASSES_CONNECT_COLUMNS_STR.split(',') if c.strip() and c.strip() != PLP_CANVAS_SYNC_COLUMN_ID]
+    all_class_ids = set()
+    for col_id in course_column_ids:
+        class_link_data = monday.get_column_value(plp_item_id, PLP_BOARD_ID, col_id)
+        if class_link_data and class_link_data.get('value'):
+            all_class_ids.update(monday.get_linked_ids_from_connect_column_value(class_link_data['value']))
+    
     for class_item_id in all_class_ids:
-        class_name = monday.get_item_name(class_item_id, ALL_COURSES_BOARD_ID)
+        enroll_class(plp_item_id, class_item_id, student_details)
+        
+    return True
+
+@celery_app.task
+def process_canvas_delta_sync_from_course_change(event_data):
+    plp_item_id = event_data.get('pulseId')
+    print(f"INFO: Canvas DELTA sync initiated for PLP item {plp_item_id}.")
+    
+    student_details = get_student_details_from_plp(plp_item_id)
+    if not student_details:
+        return False
+
+    current_ids = monday.get_linked_ids_from_connect_column_value(event_data.get('value'))
+    previous_ids = monday.get_linked_ids_from_connect_column_value(event_data.get('previousValue'))
+    added_ids = current_ids - previous_ids
+    removed_ids = previous_ids - current_ids
+
+    for class_item_id in added_ids:
+        print(f"DELTA SYNC: Enrolling added class {class_item_id}")
+        enroll_class(plp_item_id, class_item_id, student_details)
+
+    for class_item_id in removed_ids:
+        print(f"DELTA SYNC: Unenrolling removed class {class_item_id}")
         canvas_course_id_val = monday.get_column_value(class_item_id, ALL_COURSES_BOARD_ID, ALL_CLASSES_CANVAS_CONNECT_COLUMN)
         canvas_course_id = canvas_course_id_val.get('text', '') if canvas_course_id_val else ''
-
-        if not canvas_course_id:
-            new_course = canvas.create_canvas_course(class_name, CANVAS_TERM_ID)
-            if new_course:
-                canvas_course_id = new_course.id
-                monday.change_column_value_generic(ALL_COURSES_BOARD_ID, class_item_id, ALL_CLASSES_CANVAS_CONNECT_COLUMN, str(canvas_course_id))
-            else:
-                print(f"ERROR: Failed to create Canvas course for '{class_name}'.")
-                continue
-        
-        sections = set()
-        ag_grad_val = monday.get_column_value(class_item_id, ALL_COURSES_BOARD_ID, ALL_CLASSES_AG_GRAD_COLUMN)
-        ag_grad_text = ag_grad_val.get('text', '') if ag_grad_val else ''
-        if "A-G" in ag_grad_text: sections.add("A-G")
-        if "Grad" in op2_text: sections.add("Grad")
-        if "M-Series" in m_series_text: sections.add("M-Series")
-
-        if not sections:
-            print(f"WARNING: No sections determined for class '{class_name}'.")
-            continue
-
-        for section_name in sections:
-            section = canvas.create_section_if_not_exists(canvas_course_id, section_name)
-            if section:
-                canvas.enroll_or_create_and_enroll(canvas_course_id, section.id, student_details)
+        if canvas_course_id:
+            canvas.unenroll_student_from_course(canvas_course_id, student_details)
+            
     return True
+
+# --- ORIGINAL UNCHANGED TASKS ---
 
 @celery_app.task
 def process_plp_course_sync_webhook(event_data):
@@ -185,7 +205,6 @@ def process_general_webhook(event_data, config_rule):
     if configured_trigger_board_id and str(webhook_board_id) != str(configured_trigger_board_id):
         return False
 
-    success = False
     if log_type == "ConnectBoardChange" and webhook_type == "update_column_value" and trigger_column_id_from_webhook == configured_trigger_col_id:
         main_item_id = item_id_from_webhook
         connected_board_id = params.get('linked_board_id')
@@ -225,9 +244,8 @@ def process_general_webhook(event_data, config_rule):
                     overall_op_successful = False
             else:
                 overall_op_successful = False
-        success = overall_op_successful
-    
-    return success
+        return overall_op_successful
+    return True
 
 @celery_app.task
 def process_master_student_person_sync_webhook(event_data):
@@ -271,7 +289,7 @@ def process_sped_students_person_sync_webhook(event_data):
     trigger_column_id = event_data.get('columnId')
     current_column_value_raw = event_data.get('value')
     operation_successful = True
-
+    
     column_sync_config = SPED_STUDENTS_PEOPLE_COLUMN_MAPPING.get(trigger_column_id)
     if not column_sync_config:
         return False
@@ -281,7 +299,7 @@ def process_sped_students_person_sync_webhook(event_data):
 
     linked_iep_ap_item_ids = monday.get_linked_items_from_board_relation(
         item_id=source_item_id,
-        board_id=source_board_id,
+        board_id=SPED_STUDENTS_BOARD_ID,
         connect_column_id=SPED_TO_IEPAP_CONNECT_COLUMN_ID
     )
 
