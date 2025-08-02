@@ -17,7 +17,7 @@ def initialize_canvas_api():
     return Canvas(CANVAS_API_URL, CANVAS_API_KEY)
 
 def create_canvas_user(student_details):
-    """Creates a new user in Canvas, including an explicit communication channel."""
+    """Creates a new user in Canvas, including an explicit communication channel and login_id."""
     canvas = initialize_canvas_api()
     if not canvas: return None
     try:
@@ -28,7 +28,7 @@ def create_canvas_user(student_details):
             'pseudonym': {
                 'unique_id': student_details['email'],
                 'sis_user_id': student_details['ssid'],
-                'login_id': student_details['email'],  # Explicitly set the login_id
+                'login_id': student_details['email'],
                 'authentication_provider_id': '112'
             },
             'communication_channel': {
