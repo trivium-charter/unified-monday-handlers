@@ -16,7 +16,8 @@ MASTER_STUDENT_BOARD_ID = os.environ.get("MASTER_STUDENT_BOARD_ID")
 MASTER_STUDENT_SSID_COLUMN = os.environ.get("MASTER_STUDENT_SSID_COLUMN")
 MASTER_STUDENT_EMAIL_COLUMN = os.environ.get("MASTER_STUDENT_EMAIL_COLUMN")
 ALL_COURSES_BOARD_ID = os.environ.get("ALL_COURSES_BOARD_ID")
-ALL_CLASSES_CANVAS_ID_COLUMN = os.environ.get("ALL_CLASSES_CANVAS_ID_COLUMN")
+ALL_CLASSES_CANVAS_CONNECT_COLUMN = os.environ.get("ALL_CLASSES_CANVAS_CONNECT_COLUMN")
+ALL_CLASSES_CANVAS_ID_COLUMN = os.environ.get("ALL_CLASSES_CANVAS_ID_COLUMN") 
 ALL_CLASSES_AG_GRAD_COLUMN = os.environ.get("ALL_CLASSES_AG_GRAD_COLUMN")
 HS_ROSTER_BOARD_ID = os.environ.get("HS_ROSTER_BOARD_ID")
 HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID = os.environ.get("HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID")
@@ -25,15 +26,19 @@ HS_ROSTER_MAIN_ITEM_to_PLP_CONNECT_COLUMN_ID = os.environ.get("HS_ROSTER_MAIN_IT
 IEP_AP_BOARD_ID = os.environ.get("IEP_AP_BOARD_ID")
 SPED_STUDENTS_BOARD_ID = os.environ.get("SPED_STUDENTS_BOARD_ID")
 SPED_TO_IEPAP_CONNECT_COLUMN_ID = os.environ.get("SPED_TO_IEPAP_CONNECT_COLUMN_ID")
+CANVAS_BOARD_ID = os.environ.get("CANVAS_BOARD_ID")
+CANVAS_COURSE_ID_COLUMN = os.environ.get("CANVAS_COURSE_ID_COLUMN")
 CANVAS_TERM_ID = os.environ.get("CANVAS_TERM_ID")
 try:
     PLP_CATEGORY_TO_CONNECT_COLUMN_MAP = json.loads(os.environ.get("PLP_CATEGORY_TO_CONNECT_COLUMN_MAP", "{}"))
     MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS = json.loads(os.environ.get("MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS", "{}"))
     SPED_STUDENTS_PEOPLE_COLUMN_MAPPING = json.loads(os.environ.get("SPED_STUDENTS_PEOPLE_COLUMN_MAPPING", "{}"))
+    LOG_CONFIGS = json.loads(os.environ.get("MONDAY_LOGGING_CONFIGS", "[]"))
 except json.JSONDecodeError:
     PLP_CATEGORY_TO_CONNECT_COLUMN_MAP = {}
     MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS = {}
     SPED_STUDENTS_PEOPLE_COLUMN_MAPPING = {}
+    LOG_CONFIGS = []
 
 # --- HELPER: Get Student Details ---
 def get_student_details_from_plp(plp_item_id):
@@ -53,56 +58,73 @@ def get_student_details_from_plp(plp_item_id):
         
     return {'name': student_name, 'ssid': ssid, 'email': email}
 
-# --- HELPER: Enroll a single class ---
-def enroll_class(plp_item_id, class_item_id, student_details):
+# --- HELPER: Manage a single class enrollment/unenrollment ---
+def manage_class_enrollment(action, plp_item_id, class_item_id, student_details):
     class_name = monday.get_item_name(class_item_id, ALL_COURSES_BOARD_ID)
-    canvas_course_id_val = monday.get_column_value(class_item_id, ALL_COURSES_BOARD_ID, ALL_CLASSES_CANVAS_ID_COLUMN)
-    canvas_course_id = canvas_course_id_val.get('text', '') if canvas_course_id_val else ''
+    if not class_name: return
 
-    if not canvas_course_id:
-        new_course = canvas.create_canvas_course(class_name, CANVAS_TERM_ID)
-        if new_course:
-            canvas_course_id = new_course.id
-            monday.change_column_value_generic(ALL_COURSES_BOARD_ID, class_item_id, ALL_CLASSES_CANVAS_ID_COLUMN, str(canvas_course_id))
-        else:
-            print(f"ERROR: Failed to create Canvas course for '{class_name}'.")
-            return
-
-    m_series_val = monday.get_column_value(plp_item_id, PLP_BOARD_ID, PLP_M_SERIES_LABELS_COLUMN)
-    m_series_text = m_series_val.get('text', '') if m_series_val else ''
-
-    sections = set()
-    ag_grad_val = monday.get_column_value(class_item_id, ALL_COURSES_BOARD_ID, ALL_CLASSES_AG_GRAD_COLUMN)
-    ag_grad_text = ag_grad_val.get('text', '') if ag_grad_val else ''
+    linked_canvas_item_ids = monday.get_linked_items_from_board_relation(class_item_id, ALL_COURSES_BOARD_ID, ALL_CLASSES_CANVAS_CONNECT_COLUMN)
+    canvas_item_id = list(linked_canvas_item_ids)[0] if linked_canvas_item_ids else None
     
-    if "A-G" in ag_grad_text: sections.add("A-G")
-    if "Grad" in ag_grad_text: sections.add("Grad")
-    if "M-Series" in m_series_text: sections.add("M-Series")
+    canvas_course_id = None
+    if canvas_item_id:
+        canvas_course_id_val = monday.get_column_value(canvas_item_id, CANVAS_BOARD_ID, CANVAS_COURSE_ID_COLUMN)
+        canvas_course_id = canvas_course_id_val.get('text', '') if canvas_course_id_val else ''
 
-    if not sections:
-        print(f"WARNING: No sections determined for class '{class_name}'.")
-        return
+    if action == "enroll":
+        if not canvas_course_id:
+            new_course = canvas.create_canvas_course(class_name, CANVAS_TERM_ID)
+            if not new_course:
+                print(f"ERROR: Failed to create Canvas course for '{class_name}'.")
+                return
+            canvas_course_id = new_course.id
+            new_canvas_item_name = f"{class_name} - Canvas"
+            column_values = {CANVAS_COURSE_ID_COLUMN: str(canvas_course_id)}
+            new_canvas_item_id = monday.create_item(CANVAS_BOARD_ID, new_canvas_item_name, column_values)
+            if new_canvas_item_id:
+                monday.update_connect_board_column(class_item_id, ALL_COURSES_BOARD_ID, ALL_CLASSES_CANVAS_CONNECT_COLUMN, new_canvas_item_id, action="add")
 
-    for section_name in sections:
-        section = canvas.create_section_if_not_exists(canvas_course_id, section_name)
-        if section:
-            canvas.enroll_or_create_and_enroll(canvas_course_id, section.id, student_details)
+        m_series_val = monday.get_column_value(plp_item_id, PLP_BOARD_ID, PLP_M_SERIES_LABELS_COLUMN)
+        m_series_text = (m_series_val.get('text') or '') if m_series_val else ''
+        ag_grad_val = monday.get_column_value(class_item_id, ALL_COURSES_BOARD_ID, ALL_CLASSES_AG_GRAD_COLUMN)
+        ag_grad_text = (ag_grad_val.get('text') or '') if ag_grad_val else ''
+        
+        sections = set()
+        if "A-G" in ag_grad_text: sections.add("A-G")
+        if "Grad" in ag_grad_text: sections.add("Grad")
+        if "M-Series" in m_series_text: sections.add("M-Series")
 
-# --- NEW CANVAS TASKS ---
+        if not sections:
+            monday.create_subitem(plp_item_id, f"Canvas Sync Failed: No sections found for {class_name}")
+            return
+            
+        for section_name in sections:
+            section = canvas.create_section_if_not_exists(canvas_course_id, section_name)
+            if section:
+                result = canvas.enroll_or_create_and_enroll(canvas_course_id, section.id, student_details)
+                log_text = f"Enrolled in {class_name} ({section_name}): {result}"
+                monday.create_subitem(plp_item_id, log_text)
 
+    elif action == "unenroll":
+        if canvas_course_id:
+            result = canvas.unenroll_student_from_course(canvas_course_id, student_details)
+            log_text = f"Unenrolled from {class_name}: {'Success' if result else 'Failed'}"
+            monday.create_subitem(plp_item_id, log_text)
+        else:
+            log_text = f"Unenroll skipped for {class_name}: No Canvas Course ID found."
+            monday.create_subitem(plp_item_id, log_text)
+
+# --- CANVAS TASKS ---
 @celery_app.task
 def process_canvas_full_sync_from_status(event_data):
     plp_item_id = event_data.get('pulseId')
-    status_value = event_data.get('value', {})
-    status_label = status_value.get('label', {}).get('text', '')
-
+    status_label = event_data.get('value', {}).get('label', {}).get('text', '')
     if status_label != PLP_CANVAS_SYNC_STATUS_VALUE:
         return True
 
     print(f"INFO: Canvas FULL sync initiated for PLP item {plp_item_id}.")
     student_details = get_student_details_from_plp(plp_item_id)
-    if not student_details:
-        return False
+    if not student_details: return False
 
     course_column_ids = [c.strip() for c in PLP_ALL_CLASSES_CONNECT_COLUMNS_STR.split(',') if c.strip() and c.strip() != PLP_CANVAS_SYNC_COLUMN_ID]
     all_class_ids = set()
@@ -112,35 +134,45 @@ def process_canvas_full_sync_from_status(event_data):
             all_class_ids.update(monday.get_linked_ids_from_connect_column_value(class_link_data['value']))
     
     for class_item_id in all_class_ids:
-        enroll_class(plp_item_id, class_item_id, student_details)
-        
+        manage_class_enrollment("enroll", plp_item_id, class_item_id, student_details)
     return True
 
 @celery_app.task
-def process_canvas_delta_sync_from_course_change(event_data):
+def process_canvas_delta_sync_from_course_change(event_data, log_configs):
     plp_item_id = event_data.get('pulseId')
-    print(f"INFO: Canvas DELTA sync initiated for PLP item {plp_item_id}.")
-    
+    trigger_column_id = event_data.get('columnId')
+    user_id = event_data.get('userId')
+
     student_details = get_student_details_from_plp(plp_item_id)
-    if not student_details:
-        return False
+    if not student_details: return False
 
     current_ids = monday.get_linked_ids_from_connect_column_value(event_data.get('value'))
     previous_ids = monday.get_linked_ids_from_connect_column_value(event_data.get('previousValue'))
     added_ids = current_ids - previous_ids
     removed_ids = previous_ids - current_ids
+    all_changed_ids = added_ids.union(removed_ids)
 
-    for class_item_id in added_ids:
-        print(f"DELTA SYNC: Enrolling added class {class_item_id}")
-        enroll_class(plp_item_id, class_item_id, student_details)
+    for class_item_id in all_changed_ids:
+        linked_canvas_item_ids = monday.get_linked_items_from_board_relation(class_item_id, ALL_COURSES_BOARD_ID, ALL_CLASSES_CANVAS_CONNECT_COLUMN)
 
-    for class_item_id in removed_ids:
-        print(f"DELTA SYNC: Unenrolling removed class {class_item_id}")
-        canvas_course_id_val = monday.get_column_value(class_item_id, ALL_COURSES_BOARD_ID, ALL_CLASSES_CANVAS_ID_COLUMN)
-        canvas_course_id = canvas_course_id_val.get('text', '') if canvas_course_id_val else ''
-        if canvas_course_id:
-            canvas.unenroll_student_from_course(canvas_course_id, student_details)
-            
+        if linked_canvas_item_ids:
+            print(f"INFO: Class {class_item_id} is a Canvas class. Running Canvas sync.")
+            if class_item_id in added_ids:
+                manage_class_enrollment("enroll", plp_item_id, class_item_id, student_details)
+            elif class_item_id in removed_ids:
+                manage_class_enrollment("unenroll", plp_item_id, class_item_id, student_details)
+        else:
+            print(f"INFO: Class {class_item_id} is not a Canvas class. Running general subitem logging.")
+            config_rule = next((r for r in log_configs if r.get("trigger_column_id") == trigger_column_id), None)
+            if config_rule:
+                params = config_rule.get("params", {}); changer_user_name = monday.get_user_name(user_id) or "automation"
+                subitem_name_prefix = params.get('subitem_name_prefix', ''); current_date = datetime.now().strftime('%Y-%m-%d')
+                user_log_text = f" by {changer_user_name}"; subject_prefix_text = f"{subitem_name_prefix} " if subitem_name_prefix else ""
+                class_name = monday.get_item_name(class_item_id, params.get('linked_board_id'))
+                if class_name:
+                    action_text = "Added" if class_item_id in added_ids else "Removed"
+                    subitem_name = f"{action_text} {subject_prefix_text}'{class_name}' on {current_date}{user_log_text}"
+                    monday.create_subitem(plp_item_id, subitem_name, {})
     return True
 
 # --- ORIGINAL UNCHANGED TASKS ---
