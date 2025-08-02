@@ -381,6 +381,8 @@ def create_update(item_id, update_text):
 
 # monday_utils.py
 
+# Add this function to monday_utils.py
+
 def update_long_text_column(board_id, item_id, column_id, text_value):
     """
     Updates a Long Text column on a Monday.com item.
