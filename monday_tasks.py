@@ -44,14 +44,14 @@ def process_sped_students_person_sync_webhook(event_data):
     pass
 
 @celery_app.task
-def process_hs_roster_linking_webhook(event_data):
-    """Links courses from the HS Roster to the PLP board based on subject area."""
-    print("INFO: HS_ROSTER_LINKING - Task started.")
+def process_plp_course_sync_webhook(event_data):
+    """(Original HS Roster Linking Logic) Links courses from the HS Roster to the PLP board."""
     subitem_id = event_data.get('pulseId')
-    main_item_id = event_data.get('parentItemId')
     subitem_board_id = event_data.get('boardId')
-    
-    linked_courses = monday.get_linked_ids_from_connect_column_value(event_data.get('value'))
+    parent_item_id = event_data.get('parentItemId')
+    current_value = event_data.get('value')
+
+    linked_courses = monday.get_linked_ids_from_connect_column_value(current_value)
     if not linked_courses: return
     all_courses_item_id = list(linked_courses)[0]
 
@@ -59,7 +59,7 @@ def process_hs_roster_linking_webhook(event_data):
     subject_area = subject_area_col.get('text') if subject_area_col else None
     if not subject_area: return
 
-    plp_item_ids = monday.get_linked_items_from_board_relation(main_item_id, HS_COURSE_ROSTER_BOARD_ID, "board_relation_mks270k0")
+    plp_item_ids = monday.get_linked_items_from_board_relation(parent_item_id, HS_COURSE_ROSTER_BOARD_ID, "board_relation_mks270k0")
     if not plp_item_ids: return
     plp_item_id = list(plp_item_ids)[0]
     
@@ -67,13 +67,10 @@ def process_hs_roster_linking_webhook(event_data):
         "Math": "board_relation_mkqnbtaf", "ELA": "board_relation_mkqnxyjd",
         "ACE": "board_relation_mkqn34pg", "Other": "board_relation_mkr54dtg"
     }
-    plp_source_column_id = subject_to_plp_column_map.get(subject_area)
-    if not plp_source_column_id: return
+    plp_target_column_id = subject_to_plp_column_map.get(subject_area)
+    if not plp_target_column_id: return
 
-    items_to_link = monday.get_linked_items_from_board_relation(plp_item_id, PLP_BOARD_ID, plp_source_column_id)
-    for item_id_to_link in items_to_link:
-         monday.update_connect_board_column(all_courses_item_id, ALL_CLASSES_BOARD_ID, "board_relation_mkr5s40q", item_id_to_link, "add")
-    print("INFO: HS_ROSTER_LINKING - Task finished.")
+    monday.update_connect_board_column(plp_item_id, PLP_BOARD_ID, plp_target_column_id, all_courses_item_id, "add")
     return True
 
 @celery_app.task
@@ -84,7 +81,6 @@ def cleanup_hs_roster_links():
 @celery_app.task
 def process_canvas_sync_webhook(event_data):
     """Handles syncing enrollments and logs results to subitems with user and date."""
-    print("INFO: CANVAS_SYNC - Task started.")
     plp_item_id = event_data.get('pulseId')
     trigger_column_id = event_data.get('columnId')
     user_id = event_data.get('userId')
@@ -102,8 +98,7 @@ def process_canvas_sync_webhook(event_data):
         return
         
     student_details = {"name": student_name, "email": student_email, "ssid": student_ssid}
-    print(f"INFO: Syncing for student: {student_details}")
-
+    
     changer_name = monday.get_user_name(user_id) or "Automation"
     pacific_tz = pytz.timezone('America/Los_Angeles')
     current_date = datetime.now(pacific_tz).strftime('%Y-%m-%d')
@@ -167,5 +162,4 @@ def process_canvas_sync_webhook(event_data):
             status_message = "Successfully unenrolled from Canvas" if unenroll_result else "Failed to unenroll from Canvas."
             monday.update_long_text_column(subitem_info['board_id'], subitem_info['id'], "long_text8__1", status_message)
 
-    print("INFO: CANVAS_SYNC - Task finished.")
     return True
