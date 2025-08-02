@@ -20,16 +20,21 @@ def initialize_canvas_api():
         print(f"ERROR: CANVAS_UTILS - Failed to initialize Canvas API: {e}")
         return None
 
+# canvas_utils.py
+
 def create_canvas_user(student_details):
-    """Creates a new user in Canvas with a Google SSO authentication provider."""
+    """
+    Creates a new user in Canvas.
+    This function now focuses only on creation and returns the new user or None.
+    """
     canvas = initialize_canvas_api()
     if not canvas: return None
     
     try:
         account = canvas.get_account(1)
-        print(f"INFO: CANVAS_UTILS - Creating new Canvas user for email: {student_details['email']}")
+        print(f"INFO: CANVAS_UTILS - Attempting to create new Canvas user for email: {student_details['email']}")
         
-        # --- MODIFIED: Use the standard create_user method ---
+        # --- MODIFIED: Added explicit communication_channel ---
         user_payload = {
             'user': {
                 'name': student_details['name'],
@@ -37,17 +42,26 @@ def create_canvas_user(student_details):
             },
             'pseudonym': {
                 'unique_id': student_details['email'],
-                'sis_user_id': student_details['ssid'], 
-                'authentication_provider_id': '112' # Ensure this ID is correct for your Canvas instance
+                'sis_user_id': student_details['ssid'],
+                'authentication_provider_id': '112'
+            },
+            'communication_channel': {
+                'type': 'email',
+                'address': student_details['email'],
+                'skip_confirmation': True # Automatically confirms the email address
             }
         }
+        new_user = account.create_user(
+            user=user_payload['user'],
+            pseudonym=user_payload['pseudonym'],
+            communication_channel=user_payload['communication_channel']
+        )
+        # --- END MODIFIED SECTION ---
 
-        new_user = account.create_user(pseudonym=user_payload['pseudonym'], user=user_payload['user'])
-      
-        print(f"SUCCESS: CANVAS_UTILS - Created and verified new user for '{student_details['name']}' with new ID: {new_user.id}")
+        print(f"SUCCESS: CANVAS_UTILS - Created new user '{student_details['name']}' with ID: {new_user.id}")
         return new_user
     except CanvasException as e:
-        print(f"ERROR: CANVAS_UTILS - API error creating user '{student_details['email']}': {e}")
+        print(f"ERROR: CANVAS_UTILS - API error during user creation: {e}")
         return None
 
 def update_user_ssid(user, new_ssid):
