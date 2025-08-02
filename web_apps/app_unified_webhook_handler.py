@@ -14,15 +14,15 @@ from monday_tasks import (
 app = Flask(__name__)
 
 # --- Load Environment Configurations ---
-PLP_BOARD_ID = os.environ.get("PLP_BOARD_ID", "8993025745")
+PLP_BOARD_ID = os.environ.get("PLP_BOARD_ID")
 HS_COURSE_ROSTER_BOARD_ID = os.environ.get("HS_COURSE_ROSTER_BOARD_ID", "8792275301")
 PLP_ALL_CLASSES_CONNECT_COLUMNS_STR = os.environ.get("PLP_ALL_CLASSES_CONNECT_COLUMNS_STR", "")
-PLP_CANVAS_SYNC_STATUS_COLUMN_ID = os.environ.get("PLP_CANVAS_SYNC_STATUS_COLUMN_ID", "color_mktdzdxj")
+PLP_CANVAS_SYNC_STATUS_COLUMN_ID = os.environ.get("PLP_CANVAS_SYNC_STATUS_COLUMN_ID")
 PLP_CANVAS_SYNC_STATUS_VALUE = os.environ.get("PLP_CANVAS_SYNC_STATUS_VALUE", "Sync")
 LOG_CONFIGS = json.loads(os.environ.get("MONDAY_LOGGING_CONFIGS", "[]"))
-MASTER_STUDENT_LIST_BOARD_ID = os.environ.get("MASTER_STUDENT_LIST_BOARD_ID", "6563671510")
+MASTER_STUDENT_LIST_BOARD_ID = os.environ.get("MASTER_STUDENT_LIST_BOARD_ID")
 MASTER_STUDENT_PEOPLE_COLUMNS = json.loads(os.environ.get("MASTER_STUDENT_PEOPLE_COLUMNS", "{}"))
-SPED_STUDENTS_BOARD_ID = os.environ.get("SPED_STUDENTS_BOARD_ID", "6760943570")
+SPED_STUDENTS_BOARD_ID = os.environ.get("SPED_STUDENTS_BOARD_ID")
 SPED_STUDENTS_PEOPLE_COLUMN = json.loads(os.environ.get("SPED_STUDENTS_PEOPLE_COLUMN", "{}"))
 
 @app.route('/monday-webhooks', methods=['POST'])
@@ -33,6 +33,7 @@ def monday_unified_webhooks():
     event = request.get_json().get('event', {})
     webhook_board_id = str(event.get('boardId'))
     trigger_column_id = str(event.get('columnId'))
+    parent_item_board_id = str(event.get('parentItemBoardId')) if event.get('parentItemBoardId') else None
     
     task_queued = False
 
@@ -44,7 +45,9 @@ def monday_unified_webhooks():
         process_canvas_sync_webhook.delay(event)
         task_queued = True
 
-    if webhook_board_id == str(HS_COURSE_ROSTER_BOARD_ID) and trigger_column_id == "board_relation_mkr0bwsf":
+    # --- MODIFIED: HS Roster Linking Trigger now checks the PARENT board ID ---
+    if parent_item_board_id == str(HS_COURSE_ROSTER_BOARD_ID) and trigger_column_id == "board_relation_mkr0bwsf":
+        print("INFO: Dispatching to HS Roster Linking task.")
         process_hs_roster_linking_webhook.delay(event)
         task_queued = True
 
@@ -66,6 +69,7 @@ def monday_unified_webhooks():
     if task_queued:
         return jsonify({"status": "success", "message": "Task(s) queued."}), 202
     else:
+        print(f"INFO: No matching rule for webhook on board {webhook_board_id}, column {trigger_column_id}.")
         return jsonify({"status": "ignored", "message": "No matching rule found."}), 200
 
 @app.route('/cleanup-roster-links', methods=['GET', 'POST'])
