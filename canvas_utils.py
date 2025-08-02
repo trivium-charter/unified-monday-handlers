@@ -56,27 +56,51 @@ def update_user_ssid(user, new_ssid):
         print(f"ERROR: API error updating SSID for user '{user.name}': {e}")
     return False
 
+# In canvas_utils.py
+
+from canvasapi.exceptions import CanvasException, Conflict, ResourceDoesNotExist
+
 def create_canvas_course(course_name, term_id):
-    """Creates a new course in Canvas, handling conflicts."""
+    """
+    Creates a new course in Canvas, or retrieves the existing one if it already exists.
+    """
     canvas = initialize_canvas_api()
     if not canvas: return None
     account = canvas.get_account(1)
-    sis_id = f"{course_name.replace(' ', '_').lower()}_{term_id}"
+    # Sanitize course name for SIS ID
+    sis_id_name = ''.join(e for e in course_name if e.isalnum() or e.isspace()).replace(' ', '_').lower()
+    sis_id = f"{sis_id_name}_{term_id}"
+
     course_data = {
-        'name': course_name, 'course_code': course_name,
-        'enrollment_term_id': f"sis_term_id:{term_id}", 'sis_course_id': sis_id
+        'name': course_name,
+        'course_code': course_name,
+        'enrollment_term_id': term_id, # Directly use the term_id
+        'sis_course_id': sis_id
     }
     try:
+        print(f"INFO: Attempting to create Canvas course '{course_name}' with SIS ID '{sis_id}'.")
         return account.create_course(course=course_data)
-    except Conflict:
-        response = account._requester.request("GET", f"accounts/{account.id}/courses", params={'sis_course_id': sis_id})
-        for course_data in response.json():
-            if str(course_data.get("enrollment_term_id")) == str(term_id) and course_data.get("name") == course_name:
-                return Course(account._requester, course_data)
+    except Conflict as e:
+        print(f"INFO: Course with SIS ID '{sis_id}' already exists. Searching for it.")
+        try:
+            # If a conflict occurs, search for the course by its SIS ID
+            courses = account.get_courses(sis_course_id=sis_id)
+            for course in courses:
+                # Ensure we have the correct course, though SIS ID should be unique
+                if course.sis_course_id == sis_id:
+                    print(f"SUCCESS: Found existing course '{course.name}' with ID {course.id}.")
+                    return course
+        except ResourceDoesNotExist:
+            print(f"ERROR: A conflict occurred but could not find course with SIS ID '{sis_id}'.")
+            return None
+        except CanvasException as search_e:
+            print(f"ERROR: An API error occurred while searching for existing course '{sis_id}': {search_e}")
+            return None
     except CanvasException as e:
         print(f"ERROR: Unexpected API error during course creation for '{course_name}': {e}")
-    return None
-
+        return None
+    
+    return None # Should not be reached, but as a fallback
 def create_section_if_not_exists(course_id, section_name):
     """Finds a section by name or creates it if it doesn't exist."""
     canvas = initialize_canvas_api()
