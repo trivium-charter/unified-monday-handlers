@@ -45,7 +45,6 @@ def monday_unified_webhooks():
         process_canvas_sync_webhook.delay(event)
         task_queued = True
 
-    # --- MODIFIED: HS Roster Linking Trigger now checks the PARENT board ID ---
     if parent_item_board_id == str(HS_COURSE_ROSTER_BOARD_ID) and trigger_column_id == "board_relation_mkr0bwsf":
         print("INFO: Dispatching to HS Roster Linking task.")
         process_hs_roster_linking_webhook.delay(event)
