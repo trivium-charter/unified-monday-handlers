@@ -379,7 +379,41 @@ def create_update(item_id, update_text):
             print(f"Monday API Errors: {result['errors']}")
         return False
 
-def update_people_column(item_id, board_id, people_column_id, new_people_value, target_column_type):
+# monday_utils.py
+
+def update_long_text_column(board_id, item_id, column_id, text_value):
+    """
+    Updates a Long Text column on a Monday.com item.
+    """
+    # Long Text columns require the value to be in a JSON object.
+    column_value = {"text": str(text_value)}
+    graphql_value_string_literal = json.dumps(json.dumps(column_value))
+
+    mutation = f"""
+    mutation {{
+      change_column_value (
+        board_id: {board_id},
+        item_id: {item_id},
+        column_id: "{column_id}",
+        value: {graphql_value_string_literal}
+      ) {{
+        id
+      }}
+    }}
+    """
+    print(f"DEBUG: monday_utils: Attempting to update long text column '{column_id}' for item {item_id} with value: '{text_value}'")
+    
+    result = execute_monday_graphql(mutation)
+
+    if result and 'data' in result and result['data'].get('change_column_value'):
+        print(f"Successfully updated long text column '{column_id}' for item {item_id}.")
+        return True
+    else:
+        print(f"ERROR: monday_utils: Failed to update long text column '{column_id}' for item {item_id}. Result: {result}")
+        if result and 'errors' in result:
+            print(f"Monday API Errors: {result['errors']}")
+        return False
+    def update_people_column(item_id, board_id, people_column_id, new_people_value, target_column_type):
     """
     Updates a People column on a Monday.com item.
     """
