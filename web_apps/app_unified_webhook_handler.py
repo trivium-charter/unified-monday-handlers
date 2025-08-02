@@ -40,6 +40,9 @@ except json.JSONDecodeError:
 
 # --- Main Webhook Endpoint ---
 @app.route('/monday-webhooks', methods=['POST'])
+# app_unified_webhook_handler.py
+
+@app.route('/monday-webhooks', methods=['POST'])
 def monday_unified_webhooks():
     if 'challenge' in request.get_json():
         return jsonify({'challenge': request.get_json()['challenge']})
@@ -54,15 +57,18 @@ def monday_unified_webhooks():
 
     # 1. Canvas Sync Check
     plp_connect_cols = [col.strip() for col in PLP_ALL_CLASSES_CONNECT_COLUMNS_STR.split(',')]
-    if webhook_board_id == str(PLP_BOARD_ID):
-        is_connect_trigger = trigger_column_id in plp_connect_cols
-        is_status_trigger = (trigger_column_id == str(PLP_CANVAS_SYNC_STATUS_COLUMN_ID) and 
-                             event.get('value', {}).get('label', {}).get('text', '') == PLP_CANVAS_SYNC_STATUS_VALUE)
-        
-        if is_connect_trigger or is_status_trigger:
-            print("INFO: Dispatching to Canvas Sync task.")
-            process_canvas_sync_webhook.delay(event)
-            task_queued = True
+    
+    is_canvas_connect_trigger = (str(webhook_board_id) == str(PLP_BOARD_ID) and 
+                                 trigger_column_id in plp_connect_cols)
+                                 
+    is_canvas_status_trigger = (str(webhook_board_id) == str(PLP_BOARD_ID) and 
+                                trigger_column_id == str(PLP_CANVAS_SYNC_STATUS_COLUMN_ID) and 
+                                event.get('value', {}).get('label', {}).get('text', '') == PLP_CANVAS_SYNC_STATUS_VALUE)
+    
+    if is_canvas_connect_trigger or is_canvas_status_trigger:
+        print("INFO: Dispatching to Canvas Sync task.")
+        process_canvas_sync_webhook.delay(event)
+        task_queued = True
 
     # 2. Master Student Person Sync & Subitem Logging Check
     if webhook_board_id == str(MASTER_STUDENT_LIST_BOARD_ID) and trigger_column_id in MASTER_STUDENT_PEOPLE_COLUMNS:
@@ -79,7 +85,16 @@ def monday_unified_webhooks():
     # 4. General Logger Check (for other subitems, like Connect Boards)
     for config_rule in LOG_CONFIGS:
         if str(config_rule.get("trigger_board_id")) == webhook_board_id and str(config_rule.get("trigger_column_id")) == trigger_column_id:
-            # Avoid re-triggering for the Master Student People columns, which are now handled above
+            
+            # --- MODIFIED: Prevent duplicate subitem creation ---
+            # If the Canvas task was already triggered for this exact connect boards change,
+            # skip running the general logger to avoid a duplicate subitem.
+            if is_canvas_connect_trigger:
+                print("INFO: Skipping General Logger because Canvas Sync task is already handling this event.")
+                continue
+            # --- END MODIFIED SECTION ---
+
+            # Avoid re-triggering for the Master Student People columns, which are also handled specifically
             if webhook_board_id == str(MASTER_STUDENT_LIST_BOARD_ID) and trigger_column_id in MASTER_STUDENT_PEOPLE_COLUMNS:
                 continue
             
