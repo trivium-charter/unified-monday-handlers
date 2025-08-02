@@ -117,11 +117,9 @@ def enroll_or_create_and_enroll(course_id, section_id, student_details):
         print("INFO: User not found by email. Trying SIS ID...")
         if student_details.get('ssid'):
             try:
-                # --- MODIFIED: Correctly search for user by SIS ID ---
                 print(f"INFO: Searching for user by sis_user_id: {student_details['ssid']}")
                 user = canvas.get_user(student_details['ssid'], 'sis_user_id')
                 print(f"SUCCESS: Found user by SIS ID with ID: {user.id}")
-                # --- END MODIFIED SECTION ---
             except ResourceDoesNotExist:
                 print("INFO: User not found by SIS ID.")
                 pass
@@ -134,17 +132,44 @@ def enroll_or_create_and_enroll(course_id, section_id, student_details):
     print(f"CRITICAL: User '{student_details['email']}' could not be found or created. Aborting enrollment.")
     return None
 
-def unenroll_student_from_course(course_id, student_email):
-    """Concludes a student's enrollment in a Canvas course."""
+def unenroll_student_from_course(course_id, student_details):
+    """Deactivates active enrollments or deletes pending invitations for a student."""
     canvas = initialize_canvas_api()
     if not canvas: return False
+    
+    user = None
+    student_email = student_details.get('email')
+    
     try:
         user = canvas.get_user(student_email, 'login_id')
+    except ResourceDoesNotExist:
+        if student_details.get('ssid'):
+            try:
+                user = canvas.get_user(student_details['ssid'], 'sis_user_id')
+            except ResourceDoesNotExist:
+                pass
+
+    if not user:
+        print(f"INFO: User '{student_email}' not found in Canvas by email or SIS ID. No action taken.")
+        return True
+
+    try:
         course = canvas.get_course(course_id)
-        if enrollments := course.get_enrollments(user_id=user.id):
-            enrollments[0].deactivate(task='conclude')
+        enrollments = course.get_enrollments(user_id=user.id)
+        
+        if not enrollments:
+            print(f"INFO: No enrollments found for '{student_email}' in course {course_id}.")
+            return True
+
+        for enrollment in enrollments:
+            if enrollment.workflow_state == 'invited':
+                print(f"INFO: Deleting pending invitation for '{student_email}' (Enrollment ID: {enrollment.id}).")
+                enrollment.delete()
+            elif enrollment.workflow_state == 'active':
+                print(f"INFO: Deactivating active enrollment for '{student_email}' (Enrollment ID: {enrollment.id}).")
+                enrollment.deactivate(task='conclude')
+        
         return True
     except CanvasException as e:
-        if "not found" not in str(e):
-            print(f"ERROR: API error during un-enrollment for '{student_email}': {e}")
-        return True
+        print(f"ERROR: API error during un-enrollment for '{student_email}': {e}")
+        return False
