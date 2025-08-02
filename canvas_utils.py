@@ -24,6 +24,8 @@ def initialize_canvas_api():
 
 # canvas_utils.py
 
+# canvas_utils.py
+
 def create_canvas_user(student_details):
     """Creates a new user in Canvas, including an explicit communication channel."""
     canvas = initialize_canvas_api()
@@ -54,6 +56,45 @@ def create_canvas_user(student_details):
     except CanvasException as e:
         print(f"ERROR: CANVAS_UTILS - API error during user creation: {e}")
         return None
+
+def enroll_or_create_and_enroll(course_id, section_id, student_details):
+    """Finds or creates a user with robust logic, then enrolls them."""
+    canvas = initialize_canvas_api()
+    if not canvas: return None
+    user = None
+    
+    # 1. Try to find the user by email
+    try:
+        print(f"INFO: Searching for user by email: {student_details['email']}")
+        user = canvas.get_user(student_details['email'], 'login_id')
+        print(f"SUCCESS: Found user by email with ID: {user.id}")
+    except ResourceDoesNotExist:
+        print("INFO: User not found by email. Trying SIS ID...")
+        pass
+        
+    # 2. If not found by email, try finding by SIS ID
+    if not user and student_details.get('ssid'):
+        try:
+            sis_id_str = f"sis_user_id:{student_details['ssid']}"
+            print(f"INFO: Searching for user by {sis_id_str}")
+            user = canvas.get_user(sis_id_str)
+            print(f"SUCCESS: Found user by SIS ID with ID: {user.id}")
+        except ResourceDoesNotExist:
+            print("INFO: User not found by SIS ID.")
+            pass
+            
+    # 3. If still not found, attempt to create the user
+    if not user:
+        user = create_canvas_user(student_details)
+        
+    # 4. If we have a user, enroll them
+    if user:
+        if hasattr(user, 'sis_user_id') and user.sis_user_id != student_details['ssid']:
+            update_user_ssid(user, student_details['ssid'])
+        return enroll_student_in_section(course_id, user.id, section_id)
+        
+    print(f"CRITICAL: User '{student_details['email']}' could not be found or created. Aborting enrollment.")
+    return None
 
 def enroll_or_create_and_enroll(course_id, section_id, student_details):
     """Finds or creates a user with robust logic, then enrolls them."""
