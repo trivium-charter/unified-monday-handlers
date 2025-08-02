@@ -144,7 +144,8 @@ def process_canvas_sync_webhook(event_data):
                         enrollment_result = canvas.enroll_or_create_and_enroll(str(canvas_course_id), section.id, student_details)
 
         if subitem_info:
-            status_message = "Successfully enrolled in Canvas" if enrollment_result else "Failed to enroll in Canvas."
+            # --- MODIFIED: Updated Failure Message ---
+            status_message = "Successfully enrolled in Canvas" if enrollment_result else "NOT SUCCESSFULLY enrolled in Canvas."
             monday.update_long_text_column(subitem_info['board_id'], subitem_info['id'], "long_text8__1", status_message)
 
     for class_item_id in unlinked_class_ids:
@@ -159,7 +160,8 @@ def process_canvas_sync_webhook(event_data):
                     unenroll_result = canvas.unenroll_student_from_course(str(canvas_course_id), student_details)
                     
         if subitem_info:
-            status_message = "Successfully unenrolled from Canvas" if unenroll_result else "Failed to unenroll from Canvas."
+            # --- MODIFIED: Updated Failure Message ---
+            status_message = "Successfully unenrolled from Canvas" if unenroll_result else "NOT SUCCESSFULLY unenrolled from Canvas."
             monday.update_long_text_column(subitem_info['board_id'], subitem_info['id'], "long_text8__1", status_message)
 
     return True
