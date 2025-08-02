@@ -152,6 +152,7 @@ def process_sped_students_person_sync_webhook(event_data):
 # monday_tasks.py
 
 @celery_app.task
+@celery_app.task
 def process_canvas_sync_webhook(event_data):
     """Handles syncing enrollments and logs results to subitems."""
     print("INFO: CANVAS_SYNC - Task started.")
