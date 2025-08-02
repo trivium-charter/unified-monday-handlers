@@ -213,6 +213,7 @@ def process_general_webhook(event_data, config_rule):
 
 
 @celery_app.task
+@celery_app.task
 def process_plp_course_sync_webhook(event_data):
     """
     Celery task to handle the PLP Course Sync logic in the background.
@@ -242,7 +243,8 @@ def process_plp_course_sync_webhook(event_data):
     if not target_plp_connect_column_id:
         return True
 
-    plp_link_data = monday.get_column_value(parent_item_id, HS_ROSTER_BOARD_ID, HS_ROSTER_MAIN_ITEM_to_PLP_CONNECT_COLUMN_ID)
+    # This is the corrected line with the uppercase 'TO'
+    plp_link_data = monday.get_column_value(parent_item_id, HS_ROSTER_BOARD_ID, HS_ROSTER_MAIN_ITEM_TO_PLP_CONNECT_COLUMN_ID)
     plp_linked_ids = monday.get_linked_ids_from_connect_column_value(plp_link_data.get('value')) if plp_link_data else set()
 
     if not plp_linked_ids:
@@ -259,8 +261,7 @@ def process_plp_course_sync_webhook(event_data):
             operation_successful = False
 
     return operation_successful
-
-
+    
 @celery_app.task
 def process_master_student_person_sync_webhook(event_data):
     """
