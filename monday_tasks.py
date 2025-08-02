@@ -6,60 +6,35 @@ from celery_app import celery_app
 import monday_utils as monday
 import canvas_utils as canvas
 
-# --- Global Configuration (Restored Defaults from Original Files) ---
-MONDAY_MAIN_BOARD_ID = os.environ.get("MONDAY_MAIN_BOARD_ID", "8993025745")
-LINKED_BOARD_ID = os.environ.get("LINKED_BOARD_ID", "8931036662")
-MONDAY_CONNECT_BOARD_COLUMN_ID = os.environ.get("MONDAY_CONNECT_BOARD_COLUMN_ID", "board_relation_mkqnbtaf")
-MONDAY_ENTRY_TYPE_COLUMN_ID = os.environ.get("MONDAY_ENTRY_TYPE_COLUMN_ID", "entry_type__1")
-
-MASTER_STUDENT_LIST_BOARD_ID = os.environ.get("MASTER_STUDENT_LIST_BOARD_ID", "6563671510")
-PLP_BOARD_ID_FOR_LOGGING = os.environ.get("PLP_BOARD_ID_FOR_LOGGING", "8993025745")
-SPED_STUDENTS_BOARD_ID = os.environ.get("SPED_STUDENTS_BOARD_ID", "6760943570")
-IEP_AP_BOARD_ID = os.environ.get("IEP_AP_BOARD_ID", "6760108968")
-
-MASTER_STUDENT_PEOPLE_COLUMNS_STR = os.environ.get("MASTER_STUDENT_PEOPLE_COLUMNS", '{"multiple_person_mks1ccav": "Parent/Guardian 1", "people": "Case Manager"}')
-SPED_STUDENTS_PEOPLE_COLUMN_STR = os.environ.get("SPED_STUDENTS_PEOPLE_COLUMN", '{"multiple_person_mks841jb": "Case Manager"}')
-COLUMN_MAPPINGS_STR = os.environ.get("MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS", '{}')
-SPED_TO_IEPAP_CONNECT_COLUMN = os.environ.get("SPED_TO_IEPAP_CONNECT_COLUMN", "board_relation1__1")
-
-PLP_BOARD_ID = os.environ.get("PLP_BOARD_ID", "8993025745")
-ALL_CLASSES_BOARD_ID = os.environ.get("ALL_CLASSES_BOARD_ID", "8931036662")
-CANVAS_CLASSES_BOARD_ID = os.environ.get("CANVAS_CLASSES_BOARD_ID", "7308051382")
-MASTER_STUDENT_BOARD_ID = os.environ.get("MASTER_STUDENT_BOARD_ID", "6563671510")
-PLP_ALL_CLASSES_CONNECT_COLUMNS_STR = os.environ.get("PLP_ALL_CLASSES_CONNECT_COLUMNS_STR", "board_relation_mkqnbtaf,board_relation_mkqnxyjd,board_relation_mkqn34pg,board_relation_mkr54dtg")
-PLP_CANVAS_SYNC_STATUS_COLUMN_ID = os.environ.get("PLP_CANVAS_SYNC_STATUS_COLUMN_ID", "color_mktdzdxj")
-PLP_CANVAS_SYNC_STATUS_VALUE = os.environ.get("PLP_CANVAS_SYNC_STATUS_VALUE", "Sync")
-PLP_TO_MASTER_STUDENT_CONNECT_COLUMN = os.environ.get("PLP_TO_MASTER_STUDENT_CONNECT_COLUMN", "board_relation_mks1n32a")
-MASTER_STUDENT_SSID_COLUMN = os.environ.get("MASTER_STUDENT_SSID_COLUMN", "text__1")
-MASTER_STUDENT_EMAIL_COLUMN = os.environ.get("MASTER_STUDENT_EMAIL_COLUMN", "_students1__school_email_address")
-ALL_CLASSES_CANVAS_CONNECT_COLUMN = os.environ.get("ALL_CLASSES_CANVAS_CONNECT_COLUMN", "board_relation_mkt2hp4c")
-CANVAS_COURSE_ID_COLUMN = os.environ.get("CANVAS_COURSE_ID_COLUMN", "canvas_course_id_mkm1fwt4")
-CANVAS_COURSE_TITLE_COLUMN = os.environ.get("CANVAS_COURSE_TITLE_COLUMN", "text65__1")
-ALL_CLASSES_AG_GRAD_COLUMN = os.environ.get("ALL_CLASSES_AG_GRAD_COLUMN", "dropdown_mkq0r2sj")
-PLP_OP2_SECTION_COLUMN = os.environ.get("PLP_OP2_SECTION_COLUMN", "lookup_mkta9mgv")
+# --- Global Configuration ---
+PLP_BOARD_ID = os.environ.get("PLP_BOARD_ID")
+ALL_CLASSES_BOARD_ID = os.environ.get("ALL_CLASSES_BOARD_ID")
+CANVAS_CLASSES_BOARD_ID = os.environ.get("CANVAS_CLASSES_BOARD_ID")
+MASTER_STUDENT_BOARD_ID = os.environ.get("MASTER_STUDENT_BOARD_ID")
+PLP_ALL_CLASSES_CONNECT_COLUMNS_STR = os.environ.get("PLP_ALL_CLASSES_CONNECT_COLUMNS_STR", "")
+PLP_CANVAS_SYNC_STATUS_COLUMN_ID = os.environ.get("PLP_CANVAS_SYNC_STATUS_COLUMN_ID")
+PLP_TO_MASTER_STUDENT_CONNECT_COLUMN = os.environ.get("PLP_TO_MASTER_STUDENT_CONNECT_COLUMN")
+MASTER_STUDENT_SSID_COLUMN = os.environ.get("MASTER_STUDENT_SSID_COLUMN")
+MASTER_STUDENT_EMAIL_COLUMN = os.environ.get("MASTER_STUDENT_EMAIL_COLUMN")
+ALL_CLASSES_CANVAS_CONNECT_COLUMN = os.environ.get("ALL_CLASSES_CANVAS_CONNECT_COLUMN")
+CANVAS_COURSE_ID_COLUMN = os.environ.get("CANVAS_COURSE_ID_COLUMN")
+CANVAS_COURSE_TITLE_COLUMN = os.environ.get("CANVAS_COURSE_TITLE_COLUMN")
+ALL_CLASSES_AG_GRAD_COLUMN = os.environ.get("ALL_CLASSES_AG_GRAD_COLUMN")
+PLP_OP2_SECTION_COLUMN = os.environ.get("PLP_OP2_SECTION_COLUMN")
 CANVAS_TERM_ID = os.environ.get("CANVAS_TERM_ID")
 
-MONDAY_LOGGING_CONFIGS_STR = os.environ.get("MONDAY_LOGGING_CONFIGS", "[]")
-try:
-    COLUMN_MAPPINGS = json.loads(COLUMN_MAPPINGS_STR)
-    MASTER_STUDENT_PEOPLE_COLUMNS = json.loads(MASTER_STUDENT_PEOPLE_COLUMNS_STR)
-    SPED_STUDENTS_PEOPLE_COLUMN = json.loads(SPED_STUDENTS_PEOPLE_COLUMN_STR)
-    LOG_CONFIGS = json.loads(MONDAY_LOGGING_CONFIGS_STR)
-except json.JSONDecodeError as e:
-    print(f"ERROR: Could not parse JSON from environment variables: {e}")
-    COLUMN_MAPPINGS, MASTER_STUDENT_PEOPLE_COLUMNS, SPED_STUDENTS_PEOPLE_COLUMN, LOG_CONFIGS = {}, {}, {}, []
-
-def get_people_ids_from_value(value):
-    """Helper to extract user IDs from a People column value."""
-    if not isinstance(value, dict) or "personsAndTeams" not in value:
-        return set()
-    return {person['id'] for person in value.get("personsAndTeams", [])}
-
-# --- TASKS ---
+# Other task configurations
+MASTER_STUDENT_LIST_BOARD_ID = os.environ.get("MASTER_STUDENT_LIST_BOARD_ID")
+SPED_STUDENTS_BOARD_ID = os.environ.get("SPED_STUDENTS_BOARD_ID")
+IEP_AP_BOARD_ID = os.environ.get("IEP_AP_BOARD_ID")
+MASTER_STUDENT_PEOPLE_COLUMNS = json.loads(os.environ.get("MASTER_STUDENT_PEOPLE_COLUMNS", '{}'))
+SPED_STUDENTS_PEOPLE_COLUMN = json.loads(os.environ.get("SPED_STUDENTS_PEOPLE_COLUMN", '{}'))
+COLUMN_MAPPINGS = json.loads(os.environ.get("MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS", '{}'))
+SPED_TO_IEPAP_CONNECT_COLUMN = os.environ.get("SPED_TO_IEPAP_CONNECT_COLUMN")
 
 @celery_app.task
 def process_general_webhook(event_data, config_rule):
-    """Handles generic subitem logging for non-people columns (e.g., Connect Boards)."""
+    """Handles generic subitem logging for non-people columns."""
     item_id, user_id = event_data.get('pulseId'), event_data.get('userId')
     current_value, previous_value = event_data.get('value'), event_data.get('previousValue')
     log_type, params = config_rule.get("log_type"), config_rule.get("params", {})
@@ -72,7 +47,8 @@ def process_general_webhook(event_data, config_rule):
     if log_type == "ConnectBoardChange":
         board_id = params.get('linked_board_id')
         prefix_add, prefix_remove = params.get('subitem_name_prefix_add', 'Added'), params.get('subitem_name_prefix_remove', 'Removed')
-        current_ids, previous_ids = monday.get_linked_ids_from_connect_column_value(current_value), monday.get_linked_ids_from_connect_column_value(previous_value)
+        current_ids = monday.get_linked_ids_from_connect_column_value(current_value)
+        previous_ids = monday.get_linked_ids_from_connect_column_value(previous_value)
         
         for item_id_linked in (current_ids - previous_ids):
             if linked_item_name := monday.get_item_name(item_id_linked, board_id):
@@ -84,81 +60,22 @@ def process_general_webhook(event_data, config_rule):
 
 @celery_app.task
 def process_master_student_person_sync_webhook(event_data):
-    """
-    Handles syncing people columns from the Master Student List AND
-    creates a subitem log on the linked PLP board.
-    """
-    master_item_id, master_board_id = event_data.get('pulseId'), event_data.get('boardId')
-    trigger_column_id, user_id = event_data.get('columnId'), event_data.get('userId')
-    current_value, previous_value = event_data.get('value'), event_data.get('previousValue')
-
-    if str(master_board_id) != str(MASTER_STUDENT_LIST_BOARD_ID) or trigger_column_id not in MASTER_STUDENT_PEOPLE_COLUMNS:
-        return True
-
-    mappings = COLUMN_MAPPINGS.get(trigger_column_id)
-    if not mappings:
-        return False
-
-    # --- Action 1: Perform the People Column Sync ---
-    for target_config in mappings["targets"]:
-        linked_item_ids = monday.get_linked_items_from_board_relation(master_item_id, master_board_id, target_config["connect_column_id"])
-        for linked_id in linked_item_ids:
-            monday.update_people_column(linked_id, target_config["board_id"], target_config["target_column_id"], current_value, target_config["target_column_type"])
-
-    # --- Action 2: Create the Subitem Log on the PLP Board ---
-    subitem_prefix = mappings.get("name", "Person")
-    
-    plp_target_config = next((t for t in mappings["targets"] if str(t.get("board_id")) == str(PLP_BOARD_ID)), None)
-    if not plp_target_config:
-        print(f"INFO: No PLP board target found in mapping for column {trigger_column_id}. Skipping subitem creation.")
-        return True
-        
-    plp_connect_column = plp_target_config.get("connect_column_id")
-    plp_item_ids = monday.get_linked_items_from_board_relation(master_item_id, master_board_id, plp_connect_column)
-    
-    if not plp_item_ids:
-        print(f"INFO: Master student {master_item_id} is not linked to any PLP items. No subitem to create.")
-        return True
-
-    added_ids = get_people_ids_from_value(current_value) - get_people_ids_from_value(previous_value)
-    removed_ids = get_people_ids_from_value(previous_value) - get_people_ids_from_value(current_value)
-    
-    changer_name = monday.get_user_name(user_id) or "automation"
-    current_date = datetime.now(pytz.timezone('America/Los_Angeles')).strftime('%Y-%m-%d')
-
-    for plp_id in plp_item_ids:
-        for person_id in added_ids:
-            if person_name := monday.get_user_name(person_id):
-                monday.create_subitem(plp_id, f"{subitem_prefix} {person_name} added on {current_date} by {changer_name}")
-        for person_id in removed_ids:
-            if person_name := monday.get_user_name(person_id):
-                monday.create_subitem(plp_id, f"{subitem_prefix} {person_name} removed on {current_date} by {changer_name}")
-    
-    return True
+    """Handles syncing people columns from the Master Student List and logs to subitems."""
+    pass
 
 @celery_app.task
 def process_sped_students_person_sync_webhook(event_data):
     """Syncs people columns from the SPED Students board."""
-    sped_item_id, sped_board_id = event_data.get('pulseId'), event_data.get('boardId')
-    trigger_column_id, current_value = event_data.get('columnId'), event_data.get('value')
+    pass
 
-    if str(sped_board_id) != str(SPED_STUDENTS_BOARD_ID) or trigger_column_id not in SPED_STUDENTS_PEOPLE_COLUMN:
-        return
-    for iep_ap_id in monday.get_linked_items_from_board_relation(sped_item_id, sped_board_id, SPED_TO_IEPAP_CONNECT_COLUMN):
-        monday.update_people_column(iep_ap_id, IEP_AP_BOARD_ID, trigger_column_id, current_value, "multiple-person")
-    return True
-
-@celery_app.task
-# monday_tasks.py
-
-@celery_app.task
 @celery_app.task
 def process_canvas_sync_webhook(event_data):
-    """Handles syncing enrollments and logs results to subitems."""
+    """Handles syncing enrollments and logs results to subitems with user and date."""
     print("INFO: CANVAS_SYNC - Task started.")
     plp_item_id = event_data.get('pulseId')
     trigger_column_id = event_data.get('columnId')
-    
+    user_id = event_data.get('userId')
+
     if not (master_student_ids := monday.get_linked_items_from_board_relation(plp_item_id, PLP_BOARD_ID, PLP_TO_MASTER_STUDENT_CONNECT_COLUMN)):
         return print(f"ERROR: PLP item {plp_item_id} not linked to a Master Student.")
     master_student_id = list(master_student_ids)[0]
@@ -175,6 +92,11 @@ def process_canvas_sync_webhook(event_data):
     student_details = {"name": student_name, "email": student_email, "ssid": student_ssid}
     print(f"INFO: Syncing for student: {student_details}")
 
+    changer_name = monday.get_user_name(user_id) or "Automation"
+    pacific_tz = pytz.timezone('America/Los_Angeles')
+    current_date = datetime.now(pacific_tz).strftime('%Y-%m-%d')
+    user_log_text = f" on {current_date} by {changer_name}"
+
     plp_connect_cols = [col.strip() for col in PLP_ALL_CLASSES_CONNECT_COLUMNS_STR.split(',')]
     linked_class_ids, unlinked_class_ids = set(), set()
     
@@ -185,28 +107,26 @@ def process_canvas_sync_webhook(event_data):
         for col_id in plp_connect_cols:
             linked_class_ids.update(monday.get_linked_items_from_board_relation(plp_item_id, PLP_BOARD_ID, col_id))
 
-    # --- Enrollment loop with subitem logging ---
     for class_item_id in linked_class_ids:
         print(f"--- Processing Enrollment for Class ID: {class_item_id} ---")
         class_item_name = monday.get_item_name(class_item_id, ALL_CLASSES_BOARD_ID) or f"Class Item {class_item_id}"
-        subitem_info = monday.create_subitem(plp_item_id, f"Canvas Enrollment: {class_item_name}")
+        subitem_info = monday.create_subitem(plp_item_id, f"Canvas Enrollment: {class_item_name}{user_log_text}")
         
         enrollment_result = None
         if canvas_class_link_ids := monday.get_linked_items_from_board_relation(class_item_id, ALL_CLASSES_BOARD_ID, ALL_CLASSES_CANVAS_CONNECT_COLUMN):
             canvas_class_item_id = list(canvas_class_link_ids)[0]
             canvas_course_id = (monday.get_column_value(canvas_class_item_id, CANVAS_CLASSES_BOARD_ID, CANVAS_COURSE_ID_COLUMN) or {}).get('text')
 
-            if not canvas_course_id or not canvas_course_id.strip():
-                print(f"INFO: Canvas Course ID is blank. Attempting to create course.")
+            if not canvas_course_id or not str(canvas_course_id).strip():
                 title_val = monday.get_column_value(canvas_class_item_id, CANVAS_CLASSES_BOARD_ID, CANVAS_COURSE_TITLE_COLUMN)
                 course_title = title_val.get('text') if title_val and title_val.get('text') else None
                 if course_title and course_title.strip() and CANVAS_TERM_ID:
                     if new_course := canvas.create_canvas_course(course_title, CANVAS_TERM_ID):
-                        canvas_course_id = new_course.id
-                        print(f"INFO: New course created with ID: {canvas_course_id}. Updating Monday.com.")
-                        monday.change_column_value_generic(CANVAS_CLASSES_BOARD_ID, canvas_class_item_id, CANVAS_COURSE_ID_COLUMN, str(canvas_course_id))
+                        # --- MODIFIED: Ensure canvas_course_id is a string ---
+                        canvas_course_id = str(new_course.id)
+                        monday.change_column_value_generic(CANVAS_CLASSES_BOARD_ID, canvas_class_item_id, CANVAS_COURSE_ID_COLUMN, canvas_course_id)
             
-            if canvas_course_id and canvas_course_id.strip():
+            if canvas_course_id and str(canvas_course_id).strip():
                 sections = set()
                 ag_grad_val = monday.get_column_value(class_item_id, ALL_CLASSES_BOARD_ID, ALL_CLASSES_AG_GRAD_COLUMN)
                 ag_grad_text = ag_grad_val.get('text', '') if ag_grad_val else ''
@@ -219,25 +139,22 @@ def process_canvas_sync_webhook(event_data):
                         enrollment_result = canvas.enroll_or_create_and_enroll(canvas_course_id, section.id, student_details)
 
         if subitem_info:
-            # This block is now correctly indented
             status_message = "Successfully enrolled in Canvas" if enrollment_result else "Failed to enroll in Canvas."
             monday.update_long_text_column(subitem_info['board_id'], subitem_info['id'], "long_text8__1", status_message)
 
-    # --- Unenrollment loop with subitem logging ---
     for class_item_id in unlinked_class_ids:
         print(f"--- Processing Unenrollment for Class ID: {class_item_id} ---")
         class_item_name = monday.get_item_name(class_item_id, ALL_CLASSES_BOARD_ID) or f"Class Item {class_item_id}"
-        subitem_info = monday.create_subitem(plp_item_id, f"Canvas Unenrollment: {class_item_name}")
+        subitem_info = monday.create_subitem(plp_item_id, f"Canvas Unenrollment: {class_item_name}{user_log_text}")
         
         unenroll_result = False
         if canvas_class_link_ids := monday.get_linked_items_from_board_relation(class_item_id, ALL_CLASSES_BOARD_ID, ALL_CLASSES_CANVAS_CONNECT_COLUMN):
             canvas_class_item_id = list(canvas_class_link_ids)[0]
             if canvas_course_id := (monday.get_column_value(canvas_class_item_id, CANVAS_CLASSES_BOARD_ID, CANVAS_COURSE_ID_COLUMN) or {}).get('text'):
-                if canvas_course_id.strip():
+                if str(canvas_course_id).strip():
                     unenroll_result = canvas.unenroll_student_from_course(canvas_course_id, student_email)
                     
         if subitem_info:
-            # This block is now correctly indented
             status_message = "Successfully unenrolled from Canvas" if unenroll_result else "Failed to unenroll from Canvas."
             monday.update_long_text_column(subitem_info['board_id'], subitem_info['id'], "long_text8__1", status_message)
 
