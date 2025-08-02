@@ -56,10 +56,6 @@ def update_user_ssid(user, new_ssid):
         print(f"ERROR: API error updating SSID for user '{user.name}': {e}")
     return False
 
-# In canvas_utils.py
-
-from canvasapi.exceptions import CanvasException, Conflict, ResourceDoesNotExist
-
 def create_canvas_course(course_name, term_id):
     """
     Creates a new course in Canvas, or retrieves the existing one if it already exists.
@@ -67,40 +63,34 @@ def create_canvas_course(course_name, term_id):
     canvas = initialize_canvas_api()
     if not canvas: return None
     account = canvas.get_account(1)
-    # Sanitize course name for SIS ID
     sis_id_name = ''.join(e for e in course_name if e.isalnum() or e.isspace()).replace(' ', '_').lower()
     sis_id = f"{sis_id_name}_{term_id}"
 
     course_data = {
         'name': course_name,
         'course_code': course_name,
-        'enrollment_term_id': term_id, # Directly use the term_id
+        'enrollment_term_id': term_id,
         'sis_course_id': sis_id
     }
     try:
         print(f"INFO: Attempting to create Canvas course '{course_name}' with SIS ID '{sis_id}'.")
         return account.create_course(course=course_data)
-    except Conflict as e:
+    except Conflict:
         print(f"INFO: Course with SIS ID '{sis_id}' already exists. Searching for it.")
         try:
-            # If a conflict occurs, search for the course by its SIS ID
             courses = account.get_courses(sis_course_id=sis_id)
             for course in courses:
-                # Ensure we have the correct course, though SIS ID should be unique
                 if course.sis_course_id == sis_id:
                     print(f"SUCCESS: Found existing course '{course.name}' with ID {course.id}.")
                     return course
-        except ResourceDoesNotExist:
-            print(f"ERROR: A conflict occurred but could not find course with SIS ID '{sis_id}'.")
+        except Exception as e:
+            print(f"ERROR: A conflict occurred but could not find course with SIS ID '{sis_id}'. Error: {e}")
             return None
-        except CanvasException as search_e:
-            print(f"ERROR: An API error occurred while searching for existing course '{sis_id}': {search_e}")
-            return None
-    except CanvasException as e:
+    except Exception as e:
         print(f"ERROR: Unexpected API error during course creation for '{course_name}': {e}")
         return None
-    
-    return None # Should not be reached, but as a fallback
+    return None
+
 def create_section_if_not_exists(course_id, section_name):
     """Finds a section by name or creates it if it doesn't exist."""
     canvas = initialize_canvas_api()
@@ -122,7 +112,9 @@ def enroll_student_in_section(course_id, user_id, section_id):
     try:
         course, user = canvas.get_course(course_id), canvas.get_user(user_id)
         enrollment = course.enroll_user(user, "StudentEnrollment", enrollment={'course_section_id': section_id})
-        return course.get_enrollment(enrollment.id)
+        # CORRECTED: The enroll_user method already returns the enrollment object.
+        # The original `get_enrollment` method caused an error with newer library versions.
+        return enrollment
     except CanvasException as e:
         if "already" in str(e).lower():
             return "Already Enrolled"
