@@ -28,6 +28,7 @@ def create_canvas_user(student_details):
             'pseudonym': {
                 'unique_id': student_details['email'],
                 'sis_user_id': student_details['ssid'],
+                'login_id': student_details['email'],  # Explicitly set the login_id
                 'authentication_provider_id': '112'
             },
             'communication_channel': {
