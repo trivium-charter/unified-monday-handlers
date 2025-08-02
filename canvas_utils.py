@@ -134,6 +134,8 @@ def create_section_if_not_exists(course_id, section_name):
         print(f"ERROR: CANVAS_UTILS - API error finding/creating section '{section_name}': {e}")
         return None
 
+# canvas_utils.py (corrected)
+
 def enroll_student_in_section(course_id, user_id, section_id):
     """Enrolls a student and verifies the enrollment was successfully created."""
     canvas = initialize_canvas_api()
@@ -141,12 +143,15 @@ def enroll_student_in_section(course_id, user_id, section_id):
     try:
         course, user = canvas.get_course(course_id), canvas.get_user(user_id)
         print(f"INFO: Enrolling user '{user.name}' into course {course_id}, section {section_id}.")
-        
+
         provisional_enrollment = course.enroll_user(user, "StudentEnrollment", enrollment={'course_section_id': section_id})
         print(f"INFO: Enrollment reported success with provisional ID: {provisional_enrollment.id}. Verifying...")
 
         try:
-            verified_enrollment = canvas.get_enrollment(provisional_enrollment.id)
+            # --- MODIFIED: Called get_enrollment on the 'course' object ---
+            verified_enrollment = course.get_enrollment(provisional_enrollment.id)
+            # --- END MODIFIED SECTION ---
+            
             print(f"SUCCESS: Verified enrollment for user '{user.name}'. Enrollment ID: {verified_enrollment.id}")
             return verified_enrollment
         except CanvasException as e:
