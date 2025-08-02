@@ -110,12 +110,20 @@ def enroll_or_create_and_enroll(course_id, section_id, student_details):
     if not canvas: return None
     user = None
     try:
+        print(f"INFO: Searching for user by email: {student_details['email']}")
         user = canvas.get_user(student_details['email'], 'login_id')
+        print(f"SUCCESS: Found user by email with ID: {user.id}")
     except ResourceDoesNotExist:
+        print("INFO: User not found by email. Trying SIS ID...")
         if student_details.get('ssid'):
             try:
-                user = canvas.get_user(f"sis_user_id:{student_details['ssid']}")
+                # --- MODIFIED: Correctly search for user by SIS ID ---
+                print(f"INFO: Searching for user by sis_user_id: {student_details['ssid']}")
+                user = canvas.get_user(student_details['ssid'], 'sis_user_id')
+                print(f"SUCCESS: Found user by SIS ID with ID: {user.id}")
+                # --- END MODIFIED SECTION ---
             except ResourceDoesNotExist:
+                print("INFO: User not found by SIS ID.")
                 pass
     if not user:
         user = create_canvas_user(student_details)
