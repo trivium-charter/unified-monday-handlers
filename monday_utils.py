@@ -300,9 +300,12 @@ def change_column_value_generic(board_id, item_id, column_id, value):
             print(f"Monday API Errors: {result['errors']}")
         return False
 
+# monday_utils.py
+
 def create_subitem(parent_item_id, subitem_name, column_values=None):
     """
     Creates a new subitem under a specified parent item.
+    Returns a dictionary with the new subitem's ID and board ID, or None on failure.
     """
     values_for_monday_api = {}
     if column_values:
@@ -314,8 +317,6 @@ def create_subitem(parent_item_id, subitem_name, column_values=None):
 
     column_values_json_string_for_graphql = json.dumps(values_for_monday_api)
     
-    print(f"DEBUG: monday_utils: Subitem column_values sent to GraphQL (inner JSON): {column_values_json_string_for_graphql}")
-
     mutation = f"""
     mutation {{
       create_subitem (
@@ -331,13 +332,21 @@ def create_subitem(parent_item_id, subitem_name, column_values=None):
       }}
     }}
     """
-    print(f"DEBUG: monday_utils: Attempting to create subitem '{subitem_name}' under parent {parent_item_id} with mutation:\n{mutation}")
     result = execute_monday_graphql(mutation)
 
+    # --- MODIFIED: Return both ID and board ID ---
     if result and 'data' in result and result['data'].get('create_subitem'):
-        new_subitem_id = result['data']['create_subitem'].get('id')
-        print(f"Successfully created subitem '{subitem_name}' (ID: {new_subitem_id}) under item {parent_item_id}.")
-        return new_subitem_id
+        new_subitem = result['data']['create_subitem']
+        new_subitem_id = new_subitem.get('id')
+        board_id = new_subitem.get('board', {}).get('id')
+        
+        if new_subitem_id and board_id:
+            print(f"Successfully created subitem '{subitem_name}' (ID: {new_subitem_id}) under item {parent_item_id}.")
+            return {'id': new_subitem_id, 'board_id': board_id}
+        else:
+            print(f"ERROR: monday_utils: Subitem created but ID or board ID was missing in response. Result: {result}")
+            return None
+    # --- END MODIFIED SECTION ---
     else:
         print(f"ERROR: monday_utils: Failed to create subitem '{subitem_name}' under item {parent_item_id}. Result: {result}")
         if result and 'errors' in result:
