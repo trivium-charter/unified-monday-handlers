@@ -11,13 +11,12 @@ PLP_CANVAS_SYNC_COLUMN_ID = os.environ.get("PLP_CANVAS_SYNC_COLUMN_ID")
 PLP_CANVAS_SYNC_STATUS_VALUE = os.environ.get("PLP_CANVAS_SYNC_STATUS_VALUE", "Done")
 PLP_ALL_CLASSES_CONNECT_COLUMNS_STR = os.environ.get("PLP_ALL_CLASSES_CONNECT_COLUMNS_STR", "")
 PLP_TO_MASTER_STUDENT_CONNECT_COLUMN = os.environ.get("PLP_TO_MASTER_STUDENT_CONNECT_COLUMN")
-PLP_OP2_SECTION_COLUMN = os.environ.get("PLP_OP2_SECTION_COLUMN")
 PLP_M_SERIES_LABELS_COLUMN = os.environ.get("PLP_M_SERIES_LABELS_COLUMN")
 MASTER_STUDENT_BOARD_ID = os.environ.get("MASTER_STUDENT_BOARD_ID")
 MASTER_STUDENT_SSID_COLUMN = os.environ.get("MASTER_STUDENT_SSID_COLUMN")
 MASTER_STUDENT_EMAIL_COLUMN = os.environ.get("MASTER_STUDENT_EMAIL_COLUMN")
 ALL_COURSES_BOARD_ID = os.environ.get("ALL_COURSES_BOARD_ID")
-ALL_CLASSES_CANVAS_CONNECT_COLUMN = os.environ.get("ALL_CLASSES_CANVAS_CONNECT_COLUMN")
+ALL_CLASSES_CANVAS_ID_COLUMN = os.environ.get("ALL_CLASSES_CANVAS_ID_COLUMN")
 ALL_CLASSES_AG_GRAD_COLUMN = os.environ.get("ALL_CLASSES_AG_GRAD_COLUMN")
 HS_ROSTER_BOARD_ID = os.environ.get("HS_ROSTER_BOARD_ID")
 HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID = os.environ.get("HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID")
@@ -57,28 +56,27 @@ def get_student_details_from_plp(plp_item_id):
 # --- HELPER: Enroll a single class ---
 def enroll_class(plp_item_id, class_item_id, student_details):
     class_name = monday.get_item_name(class_item_id, ALL_COURSES_BOARD_ID)
-    canvas_course_id_val = monday.get_column_value(class_item_id, ALL_COURSES_BOARD_ID, ALL_CLASSES_CANVAS_CONNECT_COLUMN)
+    canvas_course_id_val = monday.get_column_value(class_item_id, ALL_COURSES_BOARD_ID, ALL_CLASSES_CANVAS_ID_COLUMN)
     canvas_course_id = canvas_course_id_val.get('text', '') if canvas_course_id_val else ''
 
     if not canvas_course_id:
         new_course = canvas.create_canvas_course(class_name, CANVAS_TERM_ID)
         if new_course:
             canvas_course_id = new_course.id
-            monday.change_column_value_generic(ALL_COURSES_BOARD_ID, class_item_id, ALL_CLASSES_CANVAS_CONNECT_COLUMN, str(canvas_course_id))
+            monday.change_column_value_generic(ALL_COURSES_BOARD_ID, class_item_id, ALL_CLASSES_CANVAS_ID_COLUMN, str(canvas_course_id))
         else:
             print(f"ERROR: Failed to create Canvas course for '{class_name}'.")
             return
 
-    op2_val = monday.get_column_value(plp_item_id, PLP_BOARD_ID, PLP_OP2_SECTION_COLUMN)
     m_series_val = monday.get_column_value(plp_item_id, PLP_BOARD_ID, PLP_M_SERIES_LABELS_COLUMN)
-    op2_text = op2_val.get('text', '') if op2_val else ''
     m_series_text = m_series_val.get('text', '') if m_series_val else ''
 
     sections = set()
     ag_grad_val = monday.get_column_value(class_item_id, ALL_COURSES_BOARD_ID, ALL_CLASSES_AG_GRAD_COLUMN)
     ag_grad_text = ag_grad_val.get('text', '') if ag_grad_val else ''
+    
     if "A-G" in ag_grad_text: sections.add("A-G")
-    if "Grad" in op2_text: sections.add("Grad")
+    if "Grad" in ag_grad_text: sections.add("Grad")
     if "M-Series" in m_series_text: sections.add("M-Series")
 
     if not sections:
@@ -138,7 +136,7 @@ def process_canvas_delta_sync_from_course_change(event_data):
 
     for class_item_id in removed_ids:
         print(f"DELTA SYNC: Unenrolling removed class {class_item_id}")
-        canvas_course_id_val = monday.get_column_value(class_item_id, ALL_COURSES_BOARD_ID, ALL_CLASSES_CANVAS_CONNECT_COLUMN)
+        canvas_course_id_val = monday.get_column_value(class_item_id, ALL_COURSES_BOARD_ID, ALL_CLASSES_CANVAS_ID_COLUMN)
         canvas_course_id = canvas_course_id_val.get('text', '') if canvas_course_id_val else ''
         if canvas_course_id:
             canvas.unenroll_student_from_course(canvas_course_id, student_details)
