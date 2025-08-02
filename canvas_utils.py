@@ -29,6 +29,12 @@ def create_canvas_user(student_details):
         account = canvas.get_account(1)
         print(f"INFO: CANVAS_UTILS - Creating new Canvas user for email: {student_details['email']}")
         
+        # --- MODIFIED: Added user[terms_of_use] as required by Canvas API ---
+        user_data = {
+            'name': student_details['name'],
+            'terms_of_use': True 
+        }
+        
         pseudonym_data = {
             'unique_id': student_details['email'],
             'sis_user_id': student_details['ssid'], 
@@ -39,9 +45,10 @@ def create_canvas_user(student_details):
         response = account._requester.request(
             "POST",
             f"accounts/{account.id}/users",
-            user={'name': student_details['name']},
+            user=user_data,
             pseudonym=pseudonym_data
         )
+        # --- END MODIFIED SECTION ---
         
         response_data = response.json()
         user_attributes = response_data[0] if isinstance(response_data, list) and response_data else response_data
