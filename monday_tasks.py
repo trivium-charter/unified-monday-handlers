@@ -5,41 +5,39 @@ from celery_app import celery_app
 import monday_utils as monday
 import canvas_utils as canvas
 
-# --- Load All Environment Variables for Tasks ---
+# --- Load All Environment Variables for Tasks, Using Your Exact Names ---
 PLP_BOARD_ID = os.environ.get("PLP_BOARD_ID")
 PLP_CANVAS_SYNC_COLUMN_ID = os.environ.get("PLP_CANVAS_SYNC_COLUMN_ID")
-PLP_STUDENT_NAME_COLUMN_ID = os.environ.get("PLP_STUDENT_NAME_COLUMN_ID")
-PLP_SSID_COLUMN_ID = os.environ.get("PLP_SSID_COLUMN_ID")
-PLP_STUDENT_EMAIL_COLUMN_ID = os.environ.get("PLP_STUDENT_EMAIL_COLUMN_ID")
+PLP_CANVAS_SYNC_STATUS_VALUE = os.environ.get("PLP_CANVAS_SYNC_STATUS_VALUE", "Done")
 PLP_ALL_CLASSES_CONNECT_COLUMNS_STR = os.environ.get("PLP_ALL_CLASSES_CONNECT_COLUMNS_STR", "")
+PLP_TO_MASTER_STUDENT_CONNECT_COLUMN = os.environ.get("PLP_TO_MASTER_STUDENT_CONNECT_COLUMN")
+PLP_OP2_SECTION_COLUMN = os.environ.get("PLP_OP2_SECTION_COLUMN")
+PLP_M_SERIES_LABELS_COLUMN = os.environ.get("PLP_M_SERIES_LABELS_COLUMN")
+
+MASTER_STUDENT_BOARD_ID = os.environ.get("MASTER_STUDENT_BOARD_ID")
+MASTER_STUDENT_SSID_COLUMN = os.environ.get("MASTER_STUDENT_SSID_COLUMN")
+MASTER_STUDENT_EMAIL_COLUMN = os.environ.get("MASTER_STUDENT_EMAIL_COLUMN")
+
 ALL_COURSES_BOARD_ID = os.environ.get("ALL_COURSES_BOARD_ID")
-ALL_CLASSES_CANVAS_ID_COLUMN = os.environ.get("ALL_CLASSES_CANVAS_ID_COLUMN")
-ALL_CLASSES_TERM_ID_COLUMN = os.environ.get("ALL_CLASSES_TERM_ID_COLUMN")
+ALL_CLASSES_CANVAS_CONNECT_COLUMN = os.environ.get("ALL_CLASSES_CANVAS_CONNECT_COLUMN")
 ALL_CLASSES_AG_GRAD_COLUMN = os.environ.get("ALL_CLASSES_AG_GRAD_COLUMN")
-ALL_CLASSES_OP1_OP2_COLUMN = os.environ.get("ALL_CLASSES_OP1_OP2_COLUMN")
-HS_ROSTER_BOARD_ID = os.environ.get("HS_ROSTER_BOARD_ID", "")
-HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID = os.environ.get("HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID", "")
-HS_ROSTER_SUBITEM_DROPDOWN_COLUMN_ID = os.environ.get("HS_ROSTER_SUBITEM_DROPDOWN_COLUMN_ID", "")
-HS_ROSTER_MAIN_ITEM_TO_PLP_CONNECT_COLUMN_ID = os.environ.get("HS_ROSTER_MAIN_ITEM_TO_PLP_CONNECT_COLUMN_ID", "")
-PLP_CATEGORY_TO_CONNECT_COLUMN_MAP_STR = os.environ.get("PLP_CATEGORY_TO_CONNECT_COLUMN_MAP", "{}")
+
+HS_ROSTER_BOARD_ID = os.environ.get("HS_ROSTER_BOARD_ID")
+HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID = os.environ.get("HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID")
+HS_ROSTER_SUBITEM_DROPDOWN_COLUMN_ID = os.environ.get("HS_ROSTER_SUBITEM_DROPDOWN_COLUMN_ID")
+HS_ROSTER_MAIN_ITEM_to_PLP_CONNECT_COLUMN_ID = os.environ.get("HS_ROSTER_MAIN_ITEM_to_PLP_CONNECT_COLUMN_ID")
+
+IEP_AP_BOARD_ID = os.environ.get("IEP_AP_BOARD_ID")
+SPED_TO_IEPAP_CONNECT_COLUMN_ID = os.environ.get("SPED_TO_IEPAP_CONNECT_COLUMN_ID")
+CANVAS_TERM_ID = os.environ.get("CANVAS_TERM_ID")
+
 try:
-    PLP_CATEGORY_TO_CONNECT_COLUMN_MAP = json.loads(PLP_CATEGORY_TO_CONNECT_COLUMN_MAP_STR)
+    PLP_CATEGORY_TO_CONNECT_COLUMN_MAP = json.loads(os.environ.get("PLP_CATEGORY_TO_CONNECT_COLUMN_MAP", "{}"))
+    MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS = json.loads(os.environ.get("MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS", "{}"))
+    SPED_STUDENTS_PEOPLE_COLUMN_MAPPING = json.loads(os.environ.get("SPED_STUDENTS_PEOPLE_COLUMN_MAPPING", "{}"))
 except json.JSONDecodeError:
     PLP_CATEGORY_TO_CONNECT_COLUMN_MAP = {}
-MASTER_STUDENT_LIST_BOARD_ID = os.environ.get("MASTER_STUDENT_LIST_BOARD_ID", "")
-COLUMN_MAPPINGS_STR = os.environ.get("MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS", "{}")
-try:
-    COLUMN_MAPPINGS = json.loads(COLUMN_MAPPINGS_STR)
-except json.JSONDecodeError:
-    COLUMN_MAPPINGS = {}
-SPED_STUDENTS_BOARD_ID = os.environ.get("SPED_STUDENTS_BOARD_ID", "")
-IEP_AP_BOARD_ID = os.environ.get("IEP_AP_BOARD_ID", "")
-SPED_TO_IEPAP_CONNECT_COLUMN_ID = os.environ.get("SPED_TO_IEPAP_CONNECT_COLUMN_ID", "")
-CANVAS_TERM_ID = os.environ.get("CANVAS_TERM_ID")
-SPED_STUDENTS_PEOPLE_COLUMN_MAPPING_STR = os.environ.get("SPED_STUDENTS_PEOPLE_COLUMN_MAPPING", "{}")
-try:
-    SPED_STUDENTS_PEOPLE_COLUMN_MAPPING = json.loads(SPED_STUDENTS_PEOPLE_COLUMN_MAPPING_STR)
-except json.JSONDecodeError:
+    MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS = {}
     SPED_STUDENTS_PEOPLE_COLUMN_MAPPING = {}
 
 # --- Helper Function ---
@@ -50,7 +48,6 @@ def format_name_last_first(name_str):
 
 # --- Celery Tasks ---
 
-@celery_app.task
 @celery_app.task
 def process_canvas_sync_webhook(event_data):
     plp_item_id = event_data.get('pulseId')
@@ -64,14 +61,12 @@ def process_canvas_sync_webhook(event_data):
 
     print(f"INFO: Canvas sync initiated for PLP item {plp_item_id} because status is '{PLP_CANVAS_SYNC_STATUS_VALUE}'.")
 
-    # Get Master Student Item ID from PLP board
     master_student_ids = monday.get_linked_items_from_board_relation(plp_item_id, PLP_BOARD_ID, PLP_TO_MASTER_STUDENT_CONNECT_COLUMN)
     if not master_student_ids:
         print(f"CRITICAL: No Master Student linked to PLP item {plp_item_id}. Cannot get student details.")
         return False
     master_student_item_id = list(master_student_ids)[0]
     
-    # Get student details from Master Student board
     student_name = monday.get_item_name(master_student_item_id, MASTER_STUDENT_BOARD_ID)
     ssid_val = monday.get_column_value(master_student_item_id, MASTER_STUDENT_BOARD_ID, MASTER_STUDENT_SSID_COLUMN)
     email_val = monday.get_column_value(master_student_item_id, MASTER_STUDENT_BOARD_ID, MASTER_STUDENT_EMAIL_COLUMN)
@@ -96,7 +91,6 @@ def process_canvas_sync_webhook(event_data):
         print(f"INFO: Status is '{PLP_CANVAS_SYNC_STATUS_VALUE}' but no courses are linked for PLP item {plp_item_id}.")
         return True
 
-    # Get section info from PLP board once
     op2_val = monday.get_column_value(plp_item_id, PLP_BOARD_ID, PLP_OP2_SECTION_COLUMN)
     m_series_val = monday.get_column_value(plp_item_id, PLP_BOARD_ID, PLP_M_SERIES_LABELS_COLUMN)
     op2_text = op2_val.get('text', '') if op2_val else ''
@@ -120,8 +114,8 @@ def process_canvas_sync_webhook(event_data):
         ag_grad_val = monday.get_column_value(class_item_id, ALL_COURSES_BOARD_ID, ALL_CLASSES_AG_GRAD_COLUMN)
         ag_grad_text = ag_grad_val.get('text', '') if ag_grad_val else ''
         if "A-G" in ag_grad_text: sections.add("A-G")
-        if "Grad" in op2_text: sections.add("Grad") # Note: using op2_text from PLP for Grad
-        if "M-Series" in m_series_text: sections.add("M-Series") # Note: using m_series_text from PLP
+        if "Grad" in op2_text: sections.add("Grad")
+        if "M-Series" in m_series_text: sections.add("M-Series")
 
         if not sections:
             print(f"WARNING: No sections determined for class '{class_name}'.")
@@ -173,12 +167,8 @@ def process_plp_course_sync_webhook(event_data):
             operation_successful = False
     return operation_successful
 
-
 @celery_app.task
 def process_general_webhook(event_data, config_rule):
-    """
-    Celery task to handle general webhook processing in the background.
-    """
     webhook_board_id = event_data.get('boardId')
     item_id_from_webhook = event_data.get('pulseId')
     trigger_column_id_from_webhook = event_data.get('columnId')
@@ -239,21 +229,14 @@ def process_general_webhook(event_data, config_rule):
     
     return success
 
-
-
-    
 @celery_app.task
 def process_master_student_person_sync_webhook(event_data):
-    """
-    Celery task to handle the syncing of People column changes from Master Student List
-    to linked items on other boards.
-    """
     master_item_id = event_data.get('pulseId')
     trigger_column_id = event_data.get('columnId')
     current_column_value_raw = event_data.get('value')
     operation_successful = True
 
-    mappings_for_this_column = COLUMN_MAPPINGS.get(trigger_column_id)
+    mappings_for_this_column = MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS.get(trigger_column_id)
     if not mappings_for_this_column:
         return False
 
@@ -265,7 +248,7 @@ def process_master_student_person_sync_webhook(event_data):
 
         linked_item_ids_on_target_board = monday.get_linked_items_from_board_relation(
             item_id=master_item_id,
-            board_id=MASTER_STUDENT_LIST_BOARD_ID,
+            board_id=MASTER_STUDENT_BOARD_ID,
             connect_column_id=master_connect_column_id
         )
 
@@ -281,13 +264,8 @@ def process_master_student_person_sync_webhook(event_data):
                 operation_successful = False
     return operation_successful
 
-
 @celery_app.task
 def process_sped_students_person_sync_webhook(event_data):
-    """
-    Celery task to handle the syncing of People column changes from SpEd Students board
-    to linked items on the IEP and AP board.
-    """
     source_item_id = event_data.get('pulseId')
     source_board_id = event_data.get('boardId')
     trigger_column_id = event_data.get('columnId')
