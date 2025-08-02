@@ -210,8 +210,10 @@ def process_canvas_sync_webhook(event_data):
                         enrollment_result = canvas.enroll_or_create_and_enroll(canvas_course_id, section.id, student_details)
 
         if subitem_info:
-            status_message = "Successfully enrolled in Canvas" if enrollment_result else "Failed to enroll in Canvas."
-            monday.change_column_value_generic(subitem_info['board_id'], subitem_info['id'], "long_text8__1", status_message)
+    status_message = "Successfully enrolled in Canvas" if enrollment_result else "Failed to enroll in Canvas."
+    # Use the new function here
+    monday.update_long_text_column(subitem_info['board_id'], subitem_info['id'], "long_text8__1", status_message)
+
 
     # --- MODIFIED: Unenrollment loop with subitem logging ---
     for class_item_id in unlinked_class_ids:
@@ -224,9 +226,10 @@ def process_canvas_sync_webhook(event_data):
             if canvas_course_id := (monday.get_column_value(canvas_class_item_id, CANVAS_CLASSES_BOARD_ID, CANVAS_COURSE_ID_COLUMN) or {}).get('text'):
                 if canvas_course_id.strip():
                     unenroll_result = canvas.unenroll_student_from_course(canvas_course_id, student_email)
-        if subitem_info:
-            status_message = "Successfully unenrolled from Canvas" if unenroll_result else "Failed to unenroll from Canvas."
-            monday.change_column_value_generic(subitem_info['board_id'], subitem_info['id'], "long_text8__1", status_message)
+       if subitem_info:
+    status_message = "Successfully unenrolled from Canvas" if unenroll_result else "Failed to unenroll from Canvas."
+    # And also use the new function here
+    monday.update_long_text_column(subitem_info['board_id'], subitem_info['id'], "long_text8__1", status_message)
 
     print("INFO: CANVAS_SYNC - Task finished.")
     return True
