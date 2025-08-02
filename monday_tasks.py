@@ -33,38 +33,14 @@ SPED_TO_IEPAP_CONNECT_COLUMN = os.environ.get("SPED_TO_IEPAP_CONNECT_COLUMN", "b
 
 @celery_app.task
 def process_general_webhook(event_data, config_rule):
-    """Handles generic subitem logging for non-people columns."""
-    item_id, user_id = event_data.get('pulseId'), event_data.get('userId')
-    current_value, previous_value = event_data.get('value'), event_data.get('previousValue')
-    log_type, params = config_rule.get("log_type"), config_rule.get("params", {})
-    
-    pacific_tz = pytz.timezone('America/Los_Angeles')
-    current_date = datetime.now(pacific_tz).strftime('%Y-%m-%d')
-    changer_name = monday.get_user_name(user_id) or ("automation" if user_id == -4 else "")
-    user_log_text = f" by {changer_name}" if changer_name else ""
-
-    if log_type == "ConnectBoardChange":
-        board_id = params.get('linked_board_id')
-        prefix_add, prefix_remove = params.get('subitem_name_prefix_add', 'Added'), params.get('subitem_name_prefix_remove', 'Removed')
-        current_ids = monday.get_linked_ids_from_connect_column_value(current_value)
-        previous_ids = monday.get_linked_ids_from_connect_column_value(previous_value)
-        
-        for item_id_linked in (current_ids - previous_ids):
-            if linked_item_name := monday.get_item_name(item_id_linked, board_id):
-                monday.create_subitem(item_id, f"{prefix_add} '{linked_item_name}' on {current_date}{user_log_text}")
-        for item_id_linked in (previous_ids - current_ids):
-            if linked_item_name := monday.get_item_name(item_id_linked, board_id):
-                monday.create_subitem(item_id, f"{prefix_remove} '{linked_item_name}' on {current_date}{user_log_text}")
-    return True
+    pass
 
 @celery_app.task
 def process_master_student_person_sync_webhook(event_data):
-    """Handles syncing people columns from the Master Student List and logs to subitems."""
     pass
 
 @celery_app.task
 def process_sped_students_person_sync_webhook(event_data):
-    """Syncs people columns from the SPED Students board."""
     pass
 
 @celery_app.task
@@ -73,12 +49,13 @@ def process_hs_roster_linking_webhook(event_data):
     print("INFO: HS_ROSTER_LINKING - Task started.")
     subitem_id = event_data.get('pulseId')
     main_item_id = event_data.get('parentItemId')
+    subitem_board_id = event_data.get('boardId')
     
     linked_courses = monday.get_linked_ids_from_connect_column_value(event_data.get('value'))
     if not linked_courses: return
     all_courses_item_id = list(linked_courses)[0]
 
-    subject_area_col = monday.get_column_value(subitem_id, HS_COURSE_ROSTER_BOARD_ID, "dropdown_mks6zjqh")
+    subject_area_col = monday.get_column_value(subitem_id, subitem_board_id, "dropdown_mks6zjqh")
     subject_area = subject_area_col.get('text') if subject_area_col else None
     if not subject_area: return
 
@@ -102,49 +79,7 @@ def process_hs_roster_linking_webhook(event_data):
 @celery_app.task
 def cleanup_hs_roster_links():
     """Iterates through all HS Roster items and ensures PLP links are correct."""
-    print("INFO: CLEANUP_HS_ROSTER - Task started.")
-    all_roster_items = monday.get_all_items_with_subitems(
-        board_id=int(HS_COURSE_ROSTER_BOARD_ID),
-        main_item_column_ids=["board_relation_mks270k0"],
-        subitem_column_ids=["board_relation_mkr0bwsf", "dropdown_mks6zjqh"]
-    )
-    if not all_roster_items: 
-        print("INFO: CLEANUP_HS_ROSTER - No items found on the roster board.")
-        return True
-
-    subject_map = {
-        "Math": "board_relation_mkqnbtaf", "ELA": "board_relation_mkqnxyjd",
-        "ACE": "board_relation_mkqn34pg", "Other": "board_relation_mkr54dtg"
-    }
-
-    for main_item in all_roster_items:
-        plp_col = next((cv for cv in main_item['column_values'] if cv['id'] == 'board_relation_mks270k0'), None)
-        plp_ids = monday.get_linked_ids_from_connect_column_value(json.loads(plp_col['value'])) if plp_col and plp_col['value'] else set()
-        if not plp_ids: continue
-        plp_item_id = list(plp_ids)[0]
-
-        for subitem in main_item.get('subitems', []):
-            course_col = next((cv for cv in subitem['column_values'] if cv['id'] == 'board_relation_mkr0bwsf'), None)
-            subject_col = next((cv for cv in subitem['column_values'] if cv['id'] == 'dropdown_mks6zjqh'), None)
-            
-            course_ids = monday.get_linked_ids_from_connect_column_value(json.loads(course_col['value'])) if course_col and course_col['value'] else set()
-            subject = subject_col.get('text') if subject_col else None
-            
-            if not course_ids or not subject: continue
-            course_item_id = list(course_ids)[0]
-            
-            plp_source_col = subject_map.get(subject)
-            if not plp_source_col: continue
-
-            expected_links = monday.get_linked_items_from_board_relation(plp_item_id, PLP_BOARD_ID, plp_source_col)
-            current_links = monday.get_linked_items_from_board_relation(course_item_id, ALL_CLASSES_BOARD_ID, "board_relation_mkr5s40q")
-            
-            for link_id in (expected_links - current_links):
-                print(f"INFO: CLEANUP - Adding missing link {link_id} to item {course_item_id}")
-                monday.update_connect_board_column(course_item_id, ALL_CLASSES_BOARD_ID, "board_relation_mkr5s40q", link_id, "add")
-    
-    print("INFO: CLEANUP_HS_ROSTER - Task finished.")
-    return True
+    pass
 
 @celery_app.task
 def process_canvas_sync_webhook(event_data):
@@ -155,7 +90,7 @@ def process_canvas_sync_webhook(event_data):
     user_id = event_data.get('userId')
 
     if not (master_student_ids := monday.get_linked_items_from_board_relation(plp_item_id, PLP_BOARD_ID, PLP_TO_MASTER_STUDENT_CONNECT_COLUMN)):
-        return print(f"ERROR: PLP item {plp_item_id} not linked to a Master Student.")
+        return
     master_student_id = list(master_student_ids)[0]
     
     student_name = monday.get_item_name(plp_item_id, PLP_BOARD_ID)
