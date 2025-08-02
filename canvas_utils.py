@@ -132,7 +132,7 @@ def create_section_if_not_exists(course_id, section_name):
         print(f"SUCCESS: CANVAS_UTILS - Created section '{new_section.name}' (ID: {new_section.id}).")
         return new_section
     except ResourceDoesNotExist:
-        print(f"ERROR: CANVAS_UTILS - Course with ID '{course_id}' could not be found, possibly due to API delay. Aborting section creation.")
+        print(f"ERROR: CANVAS_UTILS - Course with ID '{course_id}' could not be found. Aborting section creation.")
         return None
     except CanvasException as e:
         print(f"ERROR: CANVAS_UTILS - API error finding/creating section '{section_name}': {e}")
