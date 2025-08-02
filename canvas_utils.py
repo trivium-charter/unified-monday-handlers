@@ -105,15 +105,26 @@ def create_section_if_not_exists(course_id, section_name):
         print(f"ERROR: API error finding/creating section '{section_name}': {e}")
     return None
 
+# In canvas_utils.py
+
 def enroll_student_in_section(course_id, user_id, section_id):
     """Enrolls a student and verifies the enrollment."""
     canvas = initialize_canvas_api()
     if not canvas: return None
     try:
-        course, user = canvas.get_course(course_id), canvas.get_user(user_id)
-        enrollment = course.enroll_user(user, "StudentEnrollment", enrollment={'course_section_id': section_id})
-        # CORRECTED: The enroll_user method already returns the enrollment object.
-        # The original `get_enrollment` method caused an error with newer library versions.
+        course = canvas.get_course(course_id)
+        user = canvas.get_user(user_id)
+        
+        # This enrollment payload is the key change
+        enrollment_payload = {
+            'type': 'StudentEnrollment',
+            'enrollment_state': 'active',  # This line auto-accepts the enrollment
+            'course_section_id': section_id,
+            'notify': False  # You can set this to True if you still want them to get an email
+        }
+        
+        enrollment = course.enroll_user(user, enrollment_payload)
+        
         return enrollment
     except CanvasException as e:
         if "already" in str(e).lower():
