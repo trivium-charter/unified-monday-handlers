@@ -75,43 +75,27 @@ def process_hs_roster_linking_webhook(event_data):
     main_item_id = event_data.get('parentItemId')
     
     linked_courses = monday.get_linked_ids_from_connect_column_value(event_data.get('value'))
-    if not linked_courses:
-        return print("INFO: HS_ROSTER_LINKING - No course was linked.")
+    if not linked_courses: return
     all_courses_item_id = list(linked_courses)[0]
 
     subject_area_col = monday.get_column_value(subitem_id, HS_COURSE_ROSTER_BOARD_ID, "dropdown_mks6zjqh")
     subject_area = subject_area_col.get('text') if subject_area_col else None
-    if not subject_area:
-        return print(f"ERROR: HS_ROSTER_LINKING - Could not determine subject area for subitem {subitem_id}.")
+    if not subject_area: return
 
     plp_item_ids = monday.get_linked_items_from_board_relation(main_item_id, HS_COURSE_ROSTER_BOARD_ID, "board_relation_mks270k0")
-    if not plp_item_ids:
-        return print(f"ERROR: HS_ROSTER_LINKING - Main item {main_item_id} is not linked to a PLP item.")
+    if not plp_item_ids: return
     plp_item_id = list(plp_item_ids)[0]
     
     subject_to_plp_column_map = {
-        "Math": "board_relation_mkqnbtaf",
-        "ELA": "board_relation_mkqnxyjd",
-        "ACE": "board_relation_mkqn34pg",
-        "Other": "board_relation_mkr54dtg"
+        "Math": "board_relation_mkqnbtaf", "ELA": "board_relation_mkqnxyjd",
+        "ACE": "board_relation_mkqn34pg", "Other": "board_relation_mkr54dtg"
     }
-    
     plp_source_column_id = subject_to_plp_column_map.get(subject_area)
-    if not plp_source_column_id:
-        return print(f"ERROR: HS_ROSTER_LINKING - Subject area '{subject_area}' has no valid mapping.")
+    if not plp_source_column_id: return
 
     items_to_link = monday.get_linked_items_from_board_relation(plp_item_id, PLP_BOARD_ID, plp_source_column_id)
-    if not items_to_link:
-        return print(f"INFO: HS_ROSTER_LINKING - No items to link from PLP column '{plp_source_column_id}'.")
-
     for item_id_to_link in items_to_link:
-         monday.update_connect_board_column(
-            item_id=all_courses_item_id,
-            board_id=ALL_CLASSES_BOARD_ID,
-            connect_column_id="board_relation_mkr5s40q",
-            item_to_link_id=item_id_to_link,
-            action="add"
-        )
+         monday.update_connect_board_column(all_courses_item_id, ALL_CLASSES_BOARD_ID, "board_relation_mkr5s40q", item_id_to_link, "add")
     print("INFO: HS_ROSTER_LINKING - Task finished.")
     return True
 
@@ -179,7 +163,6 @@ def process_canvas_sync_webhook(event_data):
     student_ssid = (monday.get_column_value(master_student_id, MASTER_STUDENT_BOARD_ID, MASTER_STUDENT_SSID_COLUMN) or {}).get('text') or f"monday_{plp_item_id}"
 
     if not all([student_email, student_name]):
-        print(f"ERROR: Student email or name not found for PLP item {plp_item_id}.")
         monday.create_subitem(plp_item_id, "Canvas Sync Failed: Could not find linked student name or email.")
         return
         
@@ -202,7 +185,6 @@ def process_canvas_sync_webhook(event_data):
             linked_class_ids.update(monday.get_linked_items_from_board_relation(plp_item_id, PLP_BOARD_ID, col_id))
 
     for class_item_id in linked_class_ids:
-        print(f"--- Processing Enrollment for Class ID: {class_item_id} ---")
         class_item_name = monday.get_item_name(class_item_id, ALL_CLASSES_BOARD_ID) or f"Class Item {class_item_id}"
         subitem_info = monday.create_subitem(plp_item_id, f"Canvas Enrollment: {class_item_name}{user_log_text}")
         
@@ -236,7 +218,6 @@ def process_canvas_sync_webhook(event_data):
             monday.update_long_text_column(subitem_info['board_id'], subitem_info['id'], "long_text8__1", status_message)
 
     for class_item_id in unlinked_class_ids:
-        print(f"--- Processing Unenrollment for Class ID: {class_item_id} ---")
         class_item_name = monday.get_item_name(class_item_id, ALL_CLASSES_BOARD_ID) or f"Class Item {class_item_id}"
         subitem_info = monday.create_subitem(plp_item_id, f"Canvas Unenrollment: {class_item_name}{user_log_text}")
         
@@ -245,7 +226,7 @@ def process_canvas_sync_webhook(event_data):
             canvas_class_item_id = list(canvas_class_link_ids)[0]
             if canvas_course_id := (monday.get_column_value(canvas_class_item_id, CANVAS_CLASSES_BOARD_ID, CANVAS_COURSE_ID_COLUMN) or {}).get('text'):
                 if str(canvas_course_id).strip():
-                    unenroll_result = canvas.unenroll_student_from_course(str(canvas_course_id), student_email)
+                    unenroll_result = canvas.unenroll_student_from_course(str(canvas_course_id), student_details)
                     
         if subitem_info:
             status_message = "Successfully unenrolled from Canvas" if unenroll_result else "Failed to unenroll from Canvas."
