@@ -89,10 +89,6 @@ def get_user_name(user_id):
 def get_user_details(user_id):
     """
     Fetches the name and email for a specific monday.com user ID.
-    Args:
-        user_id (str or int): The ID of the user to fetch.
-    Returns:
-        dict: A dictionary with 'name' and 'email', or None if not found or on error.
     """
     try:
         query = f'''
@@ -105,7 +101,8 @@ def get_user_details(user_id):
         }}
         '''
         print(f"DEBUG: Attempting to fetch details for user '{user_id}'")
-        results = execute_query(query)
+        # ** THE FIX: Changed 'execute_query' to 'execute_monday_graphql' **
+        results = execute_monday_graphql(query)
         
         if results and 'data' in results and 'users' in results['data'] and results['data']['users']:
             user_data = results['data']['users'][0]
@@ -121,6 +118,7 @@ def get_user_details(user_id):
     except Exception as e:
         print(f"ERROR: Exception while fetching user details for ID {user_id}: {e}")
         return None
+        
 def get_column_value(item_id, board_id, column_id):
     """
     Fetches the column value and text for a given column.
