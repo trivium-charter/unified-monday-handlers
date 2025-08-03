@@ -43,19 +43,12 @@ except json.JSONDecodeError:
 # --- HELPER: Get Student Details ---
 def get_student_details_from_plp(plp_item_id):
     master_student_ids = monday.get_linked_items_from_board_relation(plp_item_id, PLP_BOARD_ID, PLP_TO_MASTER_STUDENT_CONNECT_COLUMN)
-    if not master_student_ids:
-        print(f"CRITICAL: No Master Student linked to PLP item {plp_item_id}.")
-        return None
+    if not master_student_ids: return None
     master_student_item_id = list(master_student_ids)[0]
-    
     student_name = monday.get_item_name(master_student_item_id, MASTER_STUDENT_BOARD_ID)
     ssid = monday.get_column_value(master_student_item_id, MASTER_STUDENT_BOARD_ID, MASTER_STUDENT_SSID_COLUMN).get('text', '')
     email = monday.get_column_value(master_student_item_id, MASTER_STUDENT_BOARD_ID, MASTER_STUDENT_EMAIL_COLUMN).get('text', '')
-
-    if not all([student_name, ssid, email]):
-        print(f"CRITICAL: Missing details for Master Student {master_student_item_id}.")
-        return None
-        
+    if not all([student_name, ssid, email]): return None
     return {'name': student_name, 'ssid': ssid, 'email': email}
 
 # --- HELPER: Manage a single class enrollment/unenrollment ---
@@ -74,9 +67,7 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details)
     if action == "enroll":
         if not canvas_course_id:
             new_course = canvas.create_canvas_course(class_name, CANVAS_TERM_ID)
-            if not new_course:
-                print(f"ERROR: Failed to create Canvas course for '{class_name}'.")
-                return
+            if not new_course: return
             canvas_course_id = new_course.id
             new_canvas_item_name = f"{class_name} - Canvas"
             column_values = {CANVAS_COURSE_ID_COLUMN: str(canvas_course_id)}
@@ -94,9 +85,9 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details)
         if "Grad" in ag_grad_text: sections.add("Grad")
         if "M-Series" in m_series_text: sections.add("M-Series")
 
+        # CORRECTED: If no sections were found, add a default "All" section.
         if not sections:
-            monday.create_subitem(plp_item_id, f"Canvas Sync Failed: No sections found for {class_name}")
-            return
+            sections.add("All")
             
         for section_name in sections:
             section = canvas.create_section_if_not_exists(canvas_course_id, section_name)
