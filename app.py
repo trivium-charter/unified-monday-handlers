@@ -1,5 +1,5 @@
 # ==============================================================================
-# FINAL CONSOLIDATED APPLICATION (All Functions Restored)
+# FINAL CONSOLIDATED APPLICATION (All Functions Restored & Corrected)
 # ==============================================================================
 import os
 import json
@@ -13,7 +13,6 @@ from canvasapi.exceptions import CanvasException, Conflict, ResourceDoesNotExist
 # ==============================================================================
 # CENTRALIZED CONFIGURATION
 # ==============================================================================
-# --- Load all environment variables from your configuration ---
 MONDAY_API_KEY = os.environ.get("MONDAY_API_KEY")
 CANVAS_API_KEY = os.environ.get("CANVAS_API_KEY")
 CANVAS_API_URL = os.environ.get("CANVAS_API_URL")
@@ -67,7 +66,6 @@ except json.JSONDecodeError:
     LOG_CONFIGS = []
     MASTER_STUDENT_PEOPLE_COLUMNS = {}
 
-
 # ==============================================================================
 # MONDAY.COM UTILITIES
 # ==============================================================================
@@ -82,7 +80,6 @@ def execute_monday_graphql(query):
         print(f"ERROR: Monday.com API Error: {e}")
         return None
 
-# (All other monday_utils functions like get_item_name, update_item_name, etc. go here)
 def get_item_name(item_id, board_id):
     query = f"query {{ boards(ids: {board_id}) {{ items_page(query_params: {{ids: [{item_id}]}}) {{ items {{ name }} }} }} }}"
     result = execute_monday_graphql(query)
@@ -111,16 +108,13 @@ def get_column_value(item_id, board_id, column_id):
                 col_val = item['column_values'][0]
                 parsed_value = None
                 if col_val.get('value'):
-                    try:
-                        parsed_value = json.loads(col_val['value'])
-                    except json.JSONDecodeError:
-                        parsed_value = col_val['value']
+                    try: parsed_value = json.loads(col_val['value'])
+                    except json.JSONDecodeError: parsed_value = col_val['value']
                 return {'value': parsed_value, 'text': col_val.get('text')}
     return None
 
 def update_item_name(item_id, board_id, new_name):
-    column_values = json.dumps({"name": new_name})
-    graphql_value = json.dumps(column_values)
+    graphql_value = json.dumps(json.dumps({"name": new_name}))
     mutation = f"mutation {{ change_multiple_column_values(board_id: {board_id}, item_id: {item_id}, column_values: {graphql_value}) {{ id }} }}"
     return execute_monday_graphql(mutation) is not None
 
@@ -128,6 +122,11 @@ def change_column_value_generic(board_id, item_id, column_id, value):
     graphql_value = json.dumps(json.dumps(str(value)))
     mutation = f"mutation {{ change_column_value(board_id: {board_id}, item_id: {item_id}, column_id: \"{column_id}\", value: {graphql_value}) {{ id }} }}"
     return execute_monday_graphql(mutation) is not None
+
+def get_people_ids_from_value(value_data):
+    if not value_data: return set()
+    persons_and_teams = value_data.get('personsAndTeams', [])
+    return {person['id'] for person in persons_and_teams if 'id' in person}
 
 def get_linked_ids_from_connect_column_value(value_data):
     if not value_data: return set()
@@ -177,11 +176,9 @@ def update_people_column(item_id, board_id, people_column_id, new_people_value, 
     mutation = f"mutation {{ change_column_value(board_id: {board_id}, item_id: {item_id}, column_id: \"{people_column_id}\", value: {graphql_value}) {{ id }} }}"
     return execute_monday_graphql(mutation) is not None
 
-
 # ==============================================================================
 # CANVAS UTILITIES
 # ==============================================================================
-# (All canvas utility functions remain here unchanged)
 def initialize_canvas_api():
     return Canvas(CANVAS_API_URL, CANVAS_API_KEY) if CANVAS_API_URL and CANVAS_API_KEY else None
 
@@ -264,7 +261,6 @@ def unenroll_student_from_course(course_id, student_details):
         print(f"ERROR: Canvas unenrollment failed: {e}")
         return False
 
-
 # ==============================================================================
 # CELERY APP DEFINITION
 # ==============================================================================
@@ -275,80 +271,49 @@ if broker_use_ssl_config:
     celery_app.conf.redis_backend_use_ssl = broker_use_ssl_config
 celery_app.conf.timezone = 'America/Los_Angeles'
 
-
 # ==============================================================================
 # CELERY TASKS
 # ==============================================================================
-
-# --- RESTORED AND FINALIZED GENERAL WEBHOOK HANDLER ---
 @celery_app.task
 def process_general_webhook(event_data, config_rule):
-    """
-    This single task handles various automations based on the MONDAY_LOGGING_CONFIGS.
-    It now includes the logic for NameReformat and CopyToItemName.
-    """
     log_type = config_rule.get("log_type")
     params = config_rule.get("params", {})
     board_id = event_data.get('boardId')
     item_id = event_data.get('pulseId')
 
-    # --- Name Reformatting Logic ---
     if log_type == "NameReformat":
-        print(f"INFO: Running NameReformat for item {item_id}")
         target_col_id = params.get('target_text_column_id')
         current_name = get_item_name(item_id, board_id)
-        if not all([target_col_id, current_name]):
-            print("ERROR: Missing target column or item name for reformatting.")
-            return
-
+        if not all([target_col_id, current_name]): return
         parts = current_name.strip().split()
         if len(parts) >= 2:
-            last_name = parts[-1]
-            first_name = " ".join(parts[:-1])
-            reformatted_name = f"{last_name}, {first_name}"
+            reformatted_name = f"{parts[-1]}, {' '.join(parts[:-1])}"
             change_column_value_generic(board_id, item_id, target_col_id, reformatted_name)
-        else:
-            print(f"INFO: Name '{current_name}' has fewer than 2 parts, cannot reformat.")
 
-    # --- Copy Column to Item Name Logic ---
     elif log_type == "CopyToItemName":
-        print(f"INFO: Running CopyToItemName for item {item_id}")
         source_col_id = params.get('source_column_id')
-        if not source_col_id:
-            print("ERROR: Missing source_column_id in config for CopyToItemName.")
-            return
-
+        if not source_col_id: return
         column_data = get_column_value(item_id, board_id, source_col_id)
         if column_data and column_data.get('text'):
-            new_name = column_data['text']
-            update_item_name(item_id, board_id, new_name)
-        else:
-            print(f"INFO: Source column '{source_col_id}' is empty for item {item_id}.")
+            update_item_name(item_id, board_id, column_data['text'])
 
-    # --- Original Connect Board Change Logging ---
     elif log_type == "ConnectBoardChange":
-        print(f"INFO: Running ConnectBoardChange logging for item {item_id}")
-        # This is your original logic for logging curriculum changes
         current_ids = get_linked_ids_from_connect_column_value(event_data.get('value'))
         previous_ids = get_linked_ids_from_connect_column_value(event_data.get('previousValue'))
-        added = current_ids - previous_ids
-        removed = previous_ids - previous_ids
         changer = get_user_name(event_data.get('userId')) or "automation"
         date = datetime.now().strftime('%Y-%m-%d')
         prefix = params.get('subitem_name_prefix', '')
-        entry_type = params.get('subitem_entry_type')
         linked_board_id = params.get('linked_board_id')
-        entry_col_id = params.get('entry_type_column_id')
-        subitem_cols = {entry_col_id: {"labels": [str(entry_type)]}} if entry_col_id else {}
-
-        for link_id in added:
+        subitem_cols = {}
+        if params.get('entry_type_column_id') and params.get('subitem_entry_type'):
+            subitem_cols[params['entry_type_column_id']] = {"labels": [str(params['subitem_entry_type'])]}
+        for link_id in (current_ids - previous_ids):
             name = get_item_name(link_id, linked_board_id)
             if name: create_subitem(item_id, f"Added {prefix} '{name}' on {date} by {changer}", subitem_cols)
-        for link_id in removed:
+        for link_id in (previous_ids - current_ids):
             name = get_item_name(link_id, linked_board_id)
             if name: create_subitem(item_id, f"Removed {prefix} '{name}' on {date} by {changer}", subitem_cols)
 
-# --- All other specific tasks remain unchanged ---
 def get_student_details_from_plp(plp_item_id):
     master_student_ids = get_linked_items_from_board_relation(plp_item_id, int(PLP_BOARD_ID), PLP_TO_MASTER_STUDENT_CONNECT_COLUMN)
     if not master_student_ids: return None
@@ -361,14 +326,12 @@ def get_student_details_from_plp(plp_item_id):
 def manage_class_enrollment(action, plp_item_id, class_item_id, student_details):
     class_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID))
     if not class_name: return
-    
     linked_canvas_item_ids = get_linked_items_from_board_relation(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_CLASSES_CANVAS_CONNECT_COLUMN)
     canvas_item_id = list(linked_canvas_item_ids)[0] if linked_canvas_item_ids else None
     canvas_course_id = ''
     if canvas_item_id:
         canvas_course_id_val = get_column_value(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_COURSE_ID_COLUMN)
         canvas_course_id = canvas_course_id_val.get('text', '') if canvas_course_id_val else ''
-
     if action == "enroll":
         if not canvas_course_id:
             new_course = create_canvas_course(class_name, CANVAS_TERM_ID)
@@ -377,12 +340,10 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details)
             new_canvas_item_id = create_item(int(CANVAS_BOARD_ID), f"{class_name} - Canvas", {CANVAS_COURSE_ID_COLUMN: str(canvas_course_id)})
             if new_canvas_item_id:
                 update_connect_board_column(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_CLASSES_CANVAS_CONNECT_COLUMN, new_canvas_item_id)
-                if ALL_CLASSES_CANVAS_ID_COLUMN:
-                    change_column_value_generic(int(ALL_COURSES_BOARD_ID), class_item_id, ALL_CLASSES_CANVAS_ID_COLUMN, str(canvas_course_id))
-
+                if ALL_CLASSES_CANVAS_ID_COLUMN: change_column_value_generic(int(ALL_COURSES_BOARD_ID), class_item_id, ALL_CLASSES_CANVAS_ID_COLUMN, str(canvas_course_id))
         m_series_text = (get_column_value(plp_item_id, int(PLP_BOARD_ID), PLP_M_SERIES_LABELS_COLUMN) or {}).get('text', '')
         ag_grad_text = (get_column_value(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_CLASSES_AG_GRAD_COLUMN) or {}).get('text', '')
-        sections = {"A-G" for s in ["AG"] if s in ag_grad_text} | {"Grad" for s in ["Grad"] if s in ag_grad_text} | {"M-Series" for s in ["M-Series"] if s in m_series_text}
+        sections = {"A-G" for s in ["AG"] if s in ag_grad_text} | {"Grad" for s in ["Grad"] if s in ag_grad_text} | {"M-Series" for s in ["M-series"] if s in m_series_text}
         if not sections: sections.add("All")
         for section_name in sections:
             section = create_section_if_not_exists(canvas_course_id, section_name)
@@ -435,15 +396,58 @@ def process_plp_course_sync_webhook(event_data):
     updated_val = (get_column_value(plp_item_id, int(PLP_BOARD_ID), target_plp_col_id) or {}).get('value')
     process_canvas_delta_sync_from_course_change.delay({'pulseId': plp_item_id, 'value': updated_val, 'previousValue': original_val})
 
+# --- CORRECTED AND FINAL VERSION of the Teacher/Person Sync Task ---
 @celery_app.task
 def process_master_student_person_sync_webhook(event_data):
-    master_item_id, col_id, col_val = event_data.get('pulseId'), event_data.get('columnId'), event_data.get('value')
-    mappings = MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS.get(col_id)
-    if not mappings: return
-    for target in mappings["targets"]:
-        linked_ids = get_linked_items_from_board_relation(master_item_id, int(MASTER_STUDENT_BOARD_ID), target["connect_column_id"])
-        for linked_id in linked_ids:
-            update_people_column(linked_id, int(target["board_id"]), target["target_column_id"], col_val, target["target_column_type"])
+    master_item_id = event_data.get('pulseId')
+    trigger_column_id = event_data.get('columnId')
+    user_id = event_data.get('userId')
+    current_value_raw = event_data.get('value')
+    previous_value_raw = event_data.get('previousValue')
+
+    mappings_for_this_column = MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS.get(trigger_column_id)
+    if not mappings_for_this_column: return
+
+    # --- Data Sync Logic (remains the same) ---
+    for target_config in mappings_for_this_column["targets"]:
+        target_board_id = target_config["board_id"]
+        master_connect_column_id = target_config["connect_column_id"]
+        target_people_column_id = target_config["target_column_id"]
+        target_column_type = target_config["target_column_type"]
+        linked_item_ids_on_target_board = get_linked_items_from_board_relation(master_item_id, int(MASTER_STUDENT_BOARD_ID), master_connect_column_id)
+        for linked_target_item_id in linked_item_ids_on_target_board:
+            update_people_column(linked_target_item_id, int(target_board_id), target_people_column_id, current_value_raw, target_column_type)
+
+    # --- Subitem Logging Logic (restored) ---
+    plp_target_config = next((t for t in mappings_for_this_column["targets"] if str(t.get("board_id")) == str(PLP_BOARD_ID)), None)
+    if not plp_target_config: return
+    
+    plp_linked_ids = get_linked_items_from_board_relation(master_item_id, int(MASTER_STUDENT_BOARD_ID), plp_target_config["connect_column_id"])
+    if not plp_linked_ids: return
+    
+    plp_item_id = list(plp_linked_ids)[0]
+    column_friendly_name = mappings_for_this_column.get("name", "Staff")
+    changer_user_name = get_user_name(user_id) or "automation"
+    current_date = datetime.now().strftime('%Y-%m-%d')
+    user_log_text = f" by {changer_user_name}"
+
+    current_ids = get_people_ids_from_value(current_value_raw)
+    previous_ids = get_people_ids_from_value(previous_value_raw)
+    
+    added_ids = current_ids - previous_ids
+    removed_ids = previous_ids - current_ids
+
+    for person_id in added_ids:
+        person_name = get_user_name(person_id)
+        if person_name:
+            subitem_text = f"{column_friendly_name} changed to {person_name} on {current_date}{user_log_text}"
+            create_subitem(plp_item_id, subitem_text)
+
+    for person_id in removed_ids:
+        person_name = get_user_name(person_id)
+        if person_name:
+            subitem_text = f"Removed {person_name} from {column_friendly_name} on {current_date}{user_log_text}"
+            create_subitem(plp_item_id, subitem_text)
 
 @celery_app.task
 def process_sped_students_person_sync_webhook(event_data):
@@ -454,7 +458,6 @@ def process_sped_students_person_sync_webhook(event_data):
     for linked_id in linked_ids:
         update_people_column(linked_id, int(IEP_AP_BOARD_ID), config["target_column_id"], col_val, config["target_column_type"])
 
-
 # ==============================================================================
 # FLASK WEB APP
 # ==============================================================================
@@ -464,44 +467,37 @@ app = Flask(__name__)
 def monday_unified_webhooks():
     data = request.get_json()
     if 'challenge' in data: return jsonify({'challenge': data['challenge']})
-
     event = data.get('event', {})
     board_id = str(event.get('boardId'))
     col_id = event.get('columnId')
     webhook_type = event.get('type')
     parent_board_id = str(event.get('parentItemBoardId')) if event.get('parentItemBoardId') else None
     
-    # --- Canvas Sync Routing ---
     if board_id == PLP_BOARD_ID and webhook_type == "update_column_value":
         if col_id == PLP_CANVAS_SYNC_COLUMN_ID:
             process_canvas_full_sync_from_status.delay(event)
             return jsonify({"message": "Canvas Full Sync queued."}), 202
-        # Check if the trigger column is one of the course connect columns
         if col_id in [c.strip() for c in PLP_ALL_CLASSES_CONNECT_COLUMNS_STR.split(',')]:
             process_canvas_delta_sync_from_course_change.delay(event)
             return jsonify({"message": "Canvas Delta Sync queued."}), 202
     
-    # --- HS Roster to PLP Sync ---
     if parent_board_id == HS_ROSTER_BOARD_ID and col_id == HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID:
         process_plp_course_sync_webhook.delay(event)
         return jsonify({"message": "PLP Course Sync queued."}), 202
 
-    # --- People Sync Routing ---
     if board_id == MASTER_STUDENT_BOARD_ID and col_id in MASTER_STUDENT_PEOPLE_COLUMNS:
         process_master_student_person_sync_webhook.delay(event)
         return jsonify({"message": "Master Student Person Sync queued."}), 202
+        
     if board_id == SPED_STUDENTS_BOARD_ID and col_id in SPED_STUDENTS_PEOPLE_COLUMN_MAPPING:
         process_sped_students_person_sync_webhook.delay(event)
         return jsonify({"message": "SpEd Students Person Sync queued."}), 202
 
-    # --- General Config-Based Routing ---
     for rule in LOG_CONFIGS:
         if str(rule.get("trigger_board_id")) == board_id:
-            # Check for update trigger match
             if webhook_type == "update_column_value" and rule.get("trigger_column_id") == col_id:
                 process_general_webhook.delay(event, rule)
                 return jsonify({"message": f"General task '{rule.get('log_type')}' queued."}), 202
-            # Check for create trigger match (used by some CopyToItemName rules)
             if webhook_type == "create_pulse" and not rule.get("trigger_column_id"):
                  process_general_webhook.delay(event, rule)
                  return jsonify({"message": f"General task '{rule.get('log_type')}' queued."}), 202
