@@ -84,30 +84,43 @@ def get_user_name(user_id):
 
 # In monday_utils.py
 
+# Add this function to the end of monday_utils.py
+
 def get_user_details(user_id):
-    """Fetches a user's name and email from Monday.com given their user ID."""
-    if user_id is None:
-        return None
-
-    query = f"""
-    query {{
-      users (ids: [{user_id}]) {{
-        id
-        name
-        email
-      }}
-    }}
     """
-    print(f"DEBUG: Attempting to fetch details for user '{user_id}'")
-    result = execute_monday_graphql(query)
-
-    if result and 'data' in result and result['data'].get('users'):
-        user_data = result['data']['users'][0]
-        print(f"DEBUG: Fetched user {user_id} details: Name='{user_data.get('name')}', Email='{user_data.get('email')}'")
-        return {'name': user_data.get('name'), 'email': user_data.get('email')}
+    Fetches the name and email for a specific monday.com user ID.
+    Args:
+        user_id (str or int): The ID of the user to fetch.
+    Returns:
+        dict: A dictionary with 'name' and 'email', or None if not found or on error.
+    """
+    try:
+        query = f'''
+        query {{
+            users (ids: [{user_id}]) {{
+                id
+                name
+                email
+            }}
+        }}
+        '''
+        print(f"DEBUG: Attempting to fetch details for user '{user_id}'")
+        results = execute_query(query)
         
-    print(f"DEBUG: Could not fetch details for user {user_id}. Result: {result}")
-    return None
+        if results and 'data' in results and 'users' in results['data'] and results['data']['users']:
+            user_data = results['data']['users'][0]
+            print(f"DEBUG: Fetched user {user_id} details: Name='{user_data.get('name')}', Email='{user_data.get('email')}'")
+            return {
+                'id': user_data.get('id'),
+                'name': user_data.get('name'),
+                'email': user_data.get('email')
+            }
+        else:
+            print(f"WARNING: Could not find user details for ID: {user_id}. Response: {results}")
+            return None
+    except Exception as e:
+        print(f"ERROR: Exception while fetching user details for ID {user_id}: {e}")
+        return None
 def get_column_value(item_id, board_id, column_id):
     """
     Fetches the column value and text for a given column.
