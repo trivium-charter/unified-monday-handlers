@@ -5,7 +5,7 @@ from celery_app import celery_app
 import monday_utils as monday
 import canvas_utils as canvas
 
-# --- Load All Environment Variables ---
+# --- (All environment variable loading remains the same) ---
 PLP_BOARD_ID = os.environ.get("PLP_BOARD_ID")
 PLP_CANVAS_SYNC_COLUMN_ID = os.environ.get("PLP_CANVAS_SYNC_COLUMN_ID")
 PLP_CANVAS_SYNC_STATUS_VALUE = os.environ.get("PLP_CANVAS_SYNC_STATUS_VALUE", "Done")
@@ -17,7 +17,7 @@ MASTER_STUDENT_SSID_COLUMN = os.environ.get("MASTER_STUDENT_SSID_COLUMN")
 MASTER_STUDENT_EMAIL_COLUMN = os.environ.get("MASTER_STUDENT_EMAIL_COLUMN")
 ALL_COURSES_BOARD_ID = os.environ.get("ALL_COURSES_BOARD_ID")
 ALL_CLASSES_CANVAS_CONNECT_COLUMN = os.environ.get("ALL_CLASSES_CANVAS_CONNECT_COLUMN")
-ALL_CLASSES_CANVAS_ID_COLUMN = os.environ.get("ALL_CLASSES_CANVAS_ID_COLUMN") 
+ALL_CLASSES_CANVAS_ID_COLUMN = os.environ.get("ALL_CLASSES_CANVAS_ID_COLUMN")
 ALL_CLASSES_AG_GRAD_COLUMN = os.environ.get("ALL_CLASSES_AG_GRAD_COLUMN")
 HS_ROSTER_BOARD_ID = os.environ.get("HS_ROSTER_BOARD_ID")
 HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID = os.environ.get("HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID")
@@ -40,7 +40,6 @@ except json.JSONDecodeError:
     SPED_STUDENTS_PEOPLE_COLUMN_MAPPING = {}
     LOG_CONFIGS = []
 
-# --- HELPER: Get Student Details ---
 def get_student_details_from_plp(plp_item_id):
     master_student_ids = monday.get_linked_items_from_board_relation(plp_item_id, PLP_BOARD_ID, PLP_TO_MASTER_STUDENT_CONNECT_COLUMN)
     if not master_student_ids: return None
@@ -51,7 +50,6 @@ def get_student_details_from_plp(plp_item_id):
     if not all([student_name, ssid, email]): return None
     return {'name': student_name, 'ssid': ssid, 'email': email}
 
-# --- HELPER: Manage a single class enrollment/unenrollment ---
 def manage_class_enrollment(action, plp_item_id, class_item_id, student_details):
     class_name = monday.get_item_name(class_item_id, ALL_COURSES_BOARD_ID)
     if not class_name: return
@@ -85,7 +83,6 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details)
         if "Grad" in ag_grad_text: sections.add("Grad")
         if "M-Series" in m_series_text: sections.add("M-Series")
 
-        # CORRECTED: If no sections were found, add a default "All" section.
         if not sections:
             sections.add("All")
             
@@ -101,7 +98,6 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details)
             result = canvas.unenroll_student_from_course(canvas_course_id, student_details)
             log_text = f"Unenrolled from {class_name}: {'Success' if result else 'Failed'}"
             monday.create_subitem(plp_item_id, log_text)
-
 # --- CANVAS TASKS ---
 @celery_app.task
 def process_canvas_full_sync_from_status(event_data):
