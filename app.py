@@ -214,6 +214,9 @@ def create_canvas_user(student_details):
         return None
 
 def create_canvas_course(course_name, term_id):
+    """
+    Creates a new course in Canvas. It does NOT search for existing courses.
+    """
     canvas_api = initialize_canvas_api()
     if not all([canvas_api, CANVAS_SUBACCOUNT_ID, CANVAS_TEMPLATE_COURSE_ID]):
         print("ERROR: Missing Canvas Sub-Account or Template Course ID config.")
@@ -221,24 +224,9 @@ def create_canvas_course(course_name, term_id):
         
     try:
         account = canvas_api.get_account(CANVAS_SUBACCOUNT_ID)
-        # Create a unique, clean SIS ID for the new course
         sis_id_name = ''.join(e for e in course_name if e.isalnum()).replace(' ', '_').lower()
         sis_id = f"{sis_id_name}_{term_id}"
-
-        # First, try a direct, efficient lookup for an existing course
-        print(f"INFO: Searching for existing Canvas course with SIS ID '{sis_id}'.")
-        try:
-            # Use a direct get_course call, which is much faster than searching
-            existing_course = canvas_api.get_course(f"sis_course_id:{sis_id}")
-            if existing_course:
-                print(f"INFO: Found existing course '{existing_course.name}'.")
-                return existing_course
-        except ResourceDoesNotExist:
-            # This is the expected outcome if the course does not exist.
-            pass
-
-        # If the direct lookup fails, create the new course
-        print(f"INFO: No existing course found. Creating new course '{course_name}'.")
+        
         course_data = {
             'name': course_name,
             'course_code': course_name,
@@ -249,7 +237,7 @@ def create_canvas_course(course_name, term_id):
         return account.create_course(course=course_data)
 
     except CanvasException as e:
-        print(f"ERROR: An unexpected API error occurred during course creation/search: {e}")
+        print(f"ERROR: An unexpected API error occurred during course creation: {e}")
         return None
 
 def create_section_if_not_exists(course_id, section_name):
@@ -265,14 +253,30 @@ def create_section_if_not_exists(course_id, section_name):
 
 def enroll_student_in_section(course_id, user_id, section_id):
     canvas_api = initialize_canvas_api()
-    if not canvas_api: return "Failed: Canvas API not initialized"
+    if not canvas_api:
+        return "Failed: Canvas API not initialized"
+        
     try:
         course = canvas_api.get_course(course_id)
         user = canvas_api.get_user(user_id)
-        enrollment = course.enroll_user(user, 'StudentEnrollment', enrollment={'enrollment_state': 'active', 'course_section_id': section_id, 'notify': False})
+        
+        # Correctly pass enrollment details as direct keyword arguments
+        enrollment = course.enroll_user(
+            user,
+            'StudentEnrollment',
+            enrollment_state='active',
+            course_section_id=section_id,
+            notify=False
+        )
         return "Success" if enrollment else "Failed"
+        
+    except Conflict:
+        # A Conflict exception often means the user is already enrolled.
+        return "Already Enrolled"
     except CanvasException as e:
-        return "Already Enrolled" if "already" in str(e).lower() else "Failed"
+        # Handle other potential Canvas errors
+        print(f"ERROR: Failed to enroll user {user_id} in section {section_id}. Details: {e}")
+        return "Failed"
 
 def enroll_or_create_and_enroll(course_id, section_id, student_details):
     canvas_api = initialize_canvas_api()
@@ -370,24 +374,48 @@ def get_student_details_from_plp(plp_item_id):
 
 def manage_class_enrollment(action, plp_item_id, class_item_id, student_details):
     class_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID))
-    if not class_name: return
+    if not class_name:
+        return
 
-    linked_canvas_item_ids = get_linked_items_from_board_relation(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
+    # Get the Monday.com item that represents the Canvas course
+    linked_canvas_item_ids = get_linked_items_from_board_relation(
+        class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID
+    )
     
     canvas_item_id = list(linked_canvas_item_ids)[0] if linked_canvas_item_ids else None
-    canvas_course_id = ''
-    if canvas_item_id:
-        canvas_course_id_val = get_column_value(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_COURSE_ID_COLUMN_ID)
-        canvas_course_id = canvas_course_id_val.get('text', '') if canvas_course_id_val else ''
+    if not canvas_item_id:
+        # If the course in "All Courses" isn't linked to the Canvas board, do nothing.
+        return
 
+    canvas_course_id = ''
     if action == "enroll":
+        # Check the Monday.com item for an existing Canvas Course ID
+        course_id_val = get_column_value(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_COURSE_ID_COLUMN_ID)
+        canvas_course_id = course_id_val.get('text', '') if course_id_val else ''
+
+        # --- THIS IS THE CORE LOGIC YOU REQUESTED ---
         if not canvas_course_id:
+            print(f"INFO: No Canvas ID found on Monday item {canvas_item_id}. Creating new course for '{class_name}'.")
+            # 1. Create the course in Canvas
             new_course = create_canvas_course(class_name, CANVAS_TERM_ID)
-            if not new_course: return
-            canvas_course_id = new_course.id
-            if canvas_item_id:
-                change_column_value_generic(int(CANVAS_BOARD_ID), canvas_item_id, CANVAS_COURSE_ID_COLUMN_ID, str(canvas_course_id))
             
+            if new_course:
+                # 2. Get the new ID from Canvas
+                canvas_course_id = new_course.id
+                print(f"INFO: New course created with ID: {canvas_course_id}. Updating Monday.com.")
+                
+                # 3. PUT the new ID back into the Monday.com item
+                change_column_value_generic(
+                    int(CANVAS_BOARD_ID), 
+                    canvas_item_id, 
+                    CANVAS_COURSE_ID_COLUMN_ID, 
+                    str(canvas_course_id)
+                )
+            else:
+                print(f"ERROR: Failed to create Canvas course for '{class_name}'. Aborting enrollment.")
+                return # Stop if course creation failed
+
+        # --- Proceed with enrollment using the (now guaranteed) canvas_course_id ---
         m_series_val = get_column_value(plp_item_id, int(PLP_BOARD_ID), PLP_M_SERIES_LABELS_COLUMN)
         m_series_text = m_series_val.get('text') if m_series_val and m_series_val.get('text') is not None else ""
         
@@ -403,9 +431,13 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details)
                 result = enroll_or_create_and_enroll(canvas_course_id, section.id, student_details)
                 create_subitem(plp_item_id, f"Enrolled in {class_name} ({section_name}): {result}")
 
-    elif action == "unenroll" and canvas_course_id:
-        result = unenroll_student_from_course(canvas_course_id, student_details)
-        create_subitem(plp_item_id, f"Unenrolled from {class_name}: {'Success' if result else 'Failed'}")
+    elif action == "unenroll":
+        # Unenroll logic doesn't need to create, just read the ID
+        course_id_val = get_column_value(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_COURSE_ID_COLUMN_ID)
+        canvas_course_id = course_id_val.get('text', '') if course_id_val else ''
+        if canvas_course_id:
+            result = unenroll_student_from_course(canvas_course_id, student_details)
+            create_subitem(plp_item_id, f"Unenrolled from {class_name}: {'Success' if result else 'Failed'}")
 
 @celery_app.task
 def process_canvas_full_sync_from_status(event_data):
