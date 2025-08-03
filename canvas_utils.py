@@ -162,6 +162,8 @@ def enroll_or_create_and_enroll(course_id, section_id, student_details):
     print(f"CRITICAL: User '{student_details['email']}' could not be found or created. Aborting enrollment.")
     return None
 
+# In canvas_utils.py
+
 def unenroll_student_from_course(course_id, student_details):
     """Deactivates active enrollments or deletes pending invitations for a student."""
     canvas = initialize_canvas_api()
@@ -180,18 +182,22 @@ def unenroll_student_from_course(course_id, student_details):
                 pass
 
     if not user:
-        print(f"INFO: User '{student_email}' not found in Canvas by email or SIS ID. No action taken.")
+        print(f"INFO: User '{student_email}' not found in Canvas. No action taken.")
         return True
 
     try:
         course = canvas.get_course(course_id)
+        # This gets a list of lightweight enrollment objects
         enrollments = course.get_enrollments(user_id=user.id)
         
         if not enrollments:
             print(f"INFO: No enrollments found for '{student_email}' in course {course_id}.")
             return True
 
-        for enrollment in enrollments:
+        for enrollment_summary in enrollments:
+            # CORRECTED: Get the full, detailed enrollment object from the summary object
+            enrollment = course.get_enrollment(enrollment_summary.id)
+            
             if enrollment.workflow_state == 'invited':
                 print(f"INFO: Deleting pending invitation for '{student_email}' (Enrollment ID: {enrollment.id}).")
                 enrollment.delete()
