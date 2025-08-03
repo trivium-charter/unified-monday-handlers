@@ -1,2 +1,2 @@
-web: gunicorn --worker-class gevent -w 4 app_unified_webhook_handler:app
-worker: celery -A tasks.celery_app worker --loglevel=info
+web: gunicorn --worker-class gevent -w 4 app:app
+worker: celery -A app.celery_app worker --loglevel=info
