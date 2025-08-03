@@ -176,7 +176,6 @@ def unenroll_student_from_course(course_id, student_details):
             print(f"INFO: No enrollments found for '{student_email}' in course {course_id}.")
             return True
 
-        # CORRECTED: Directly use the enrollment object from the list to deactivate it.
         for enrollment in enrollments:
             print(f"INFO: Concluding enrollment for '{student_email}' (Enrollment ID: {enrollment.id}).")
             enrollment.deactivate(task='conclude')
