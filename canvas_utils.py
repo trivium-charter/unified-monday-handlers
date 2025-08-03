@@ -164,6 +164,8 @@ def enroll_or_create_and_enroll(course_id, section_id, student_details):
 
 # In canvas_utils.py
 
+# In canvas_utils.py
+
 def unenroll_student_from_course(course_id, student_details):
     """Deactivates active enrollments or deletes pending invitations for a student."""
     canvas = initialize_canvas_api()
@@ -187,7 +189,7 @@ def unenroll_student_from_course(course_id, student_details):
 
     try:
         course = canvas.get_course(course_id)
-        # This gets a list of lightweight enrollment objects
+        # This gets a list of lightweight summary objects
         enrollments = course.get_enrollments(user_id=user.id)
         
         if not enrollments:
@@ -198,12 +200,13 @@ def unenroll_student_from_course(course_id, student_details):
             # CORRECTED: Get the full, detailed enrollment object from the summary object
             enrollment = course.get_enrollment(enrollment_summary.id)
             
-            if enrollment.workflow_state == 'invited':
-                print(f"INFO: Deleting pending invitation for '{student_email}' (Enrollment ID: {enrollment.id}).")
-                enrollment.delete()
-            elif enrollment.workflow_state == 'active':
-                print(f"INFO: Deactivating active enrollment for '{student_email}' (Enrollment ID: {enrollment.id}).")
-                enrollment.deactivate(task='conclude')
+            if hasattr(enrollment, 'workflow_state'):
+                if enrollment.workflow_state == 'invited':
+                    print(f"INFO: Deleting pending invitation for '{student_email}' (Enrollment ID: {enrollment.id}).")
+                    enrollment.delete()
+                elif enrollment.workflow_state == 'active':
+                    print(f"INFO: Deactivating active enrollment for '{student_email}' (Enrollment ID: {enrollment.id}).")
+                    enrollment.deactivate(task='conclude')
         
         return True
     except CanvasException as e:
