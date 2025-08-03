@@ -30,7 +30,8 @@ CANVAS_COURSE_ID_COLUMN = os.environ.get("CANVAS_COURSE_ID_COLUMN")
 CANVAS_TERM_ID = os.environ.get("CANVAS_TERM_ID")
 CANVAS_COURSES_TEACHER_COLUMN_ID = os.environ.get("CANVAS_COURSES_TEACHER_COLUMN_ID")
 PLP_TO_HS_ROSTER_CONNECT_COLUMN = os.environ.get("PLP_TO_HS_ROSTER_CONNECT_COLUMN")
-
+HS_ROSTER_SUBITEM_INTEGRITY_STATUS_COLUMN_ID = os.environ.get("HS_ROSTER_SUBITEM_INTEGRITY_STATUS_COLUMN_ID")
+HS_ROSTER_SUBITEM_MISMATCH_STATUS_VALUE = os.environ.get("HS_ROSTER_SUBITEM_MISMATCH_STATUS_VALUE", "⚠️ PLP Mismatch")
 try:
     CANVAS_BOARD_COURSE_NAME_COLUMN_ID = os.environ.get("CANVAS_BOARD_COURSE_NAME_COLUMN_ID")
     PLP_CATEGORY_TO_CONNECT_COLUMN_MAP = json.loads(os.environ.get("PLP_CATEGORY_TO_CONNECT_COLUMN_MAP", "{}"))
@@ -133,7 +134,7 @@ def process_canvas_full_sync_from_status(event_data):
 @celery_app.task
 
 def process_canvas_delta_sync_from_course_change(event_data, user_id):
-    # === Part 1: Canvas Sync Logic (Unchanged and correct) ===
+    # === Part 1: Canvas Sync Logic (Unchanged) ===
     plp_item_id = event_data.get('pulseId')
     trigger_column_id = event_data.get('columnId')
     
@@ -146,23 +147,18 @@ def process_canvas_delta_sync_from_course_change(event_data, user_id):
     added_ids = current_ids - previous_ids
     removed_ids = previous_ids - current_ids
     
-    if not added_ids and not removed_ids:
-        return True # No changes, nothing more to do.
+    if not added_ids and not removed_ids: return True
 
-    for class_item_id in added_ids:
-        manage_class_enrollment("enroll", plp_item_id, class_item_id, student_details, user_id)
-    for class_item_id in removed_ids:
-        manage_class_enrollment("unenroll", plp_item_id, class_item_id, student_details, user_id)
+    for class_item_id in added_ids: manage_class_enrollment("enroll", plp_item_id, class_item_id, student_details, user_id)
+    for class_item_id in removed_ids: manage_class_enrollment("unenroll", plp_item_id, class_item_id, student_details, user_id)
 
-    # === Part 2: Create Alert Subitem on HS Roster (Simplified) ===
-    print("INFO: Canvas sync complete. Checking if alert subitem needs to be created on HS Roster.")
+    # === Part 2: HS Roster Alerting Logic (Now Split) ===
+    print("INFO: Checking if HS Roster alerting is needed.")
 
-    if not PLP_TO_HS_ROSTER_CONNECT_COLUMN:
-        return True # Alerting feature not configured, so we are done.
+    if not PLP_TO_HS_ROSTER_CONNECT_COLUMN: return True
 
     hs_roster_linked_ids = monday.get_linked_items_from_board_relation(plp_item_id, PLP_BOARD_ID, PLP_TO_HS_ROSTER_CONNECT_COLUMN)
-    if not hs_roster_linked_ids:
-        return True # Not an HS student, so we are done.
+    if not hs_roster_linked_ids: return True
 
     hs_roster_parent_item_id = int(list(hs_roster_linked_ids)[0])
     
@@ -175,33 +171,55 @@ def process_canvas_delta_sync_from_course_change(event_data, user_id):
     except Exception as e:
         print(f"ERROR: Could not reverse category map: {e}")
         return False
-        
-    # Process any added courses
+
+    changer_user_name = monday.get_user_name(user_id) or "an Automation"
+
+    # --- LOGIC FOR ADDED COURSES ---
     for course_id in added_ids:
         course_name = monday.get_item_name(course_id) or "Unknown Course"
         subitem_name = f"⚠️ Added from PLP: {course_name}"
-        
-        # This dictionary is now simpler, with no status column.
         column_values = {
             HS_ROSTER_SUBITEM_DROPDOWN_COLUMN_ID: category_name,
             HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID: {"item_ids": [int(course_id)]}
         }
-        
-        print(f"INFO: Creating 'Added from PLP' subitem for course '{course_name}' under parent {hs_roster_parent_item_id}")
+        print(f"INFO: Creating 'Added from PLP' subitem for course '{course_name}'.")
         monday.create_subitem_with_columns(hs_roster_parent_item_id, subitem_name, column_values)
 
-    # Process any removed courses
+    # --- LOGIC FOR REMOVED COURSES ---
+    if not HS_ROSTER_SUBITEM_INTEGRITY_STATUS_COLUMN_ID:
+        print("INFO: Status column for 'removed' alerts not configured. Skipping.")
+        return True
+        
     for course_id in removed_ids:
-        course_name = monday.get_item_name(course_id) or "Unknown Course"
-        subitem_name = f"⚠️ Removed from PLP: {course_name}"
+        # 1. Find the subitem that contains this removed course
+        target_subitem_id = monday.find_subitem_by_category_and_linked_course(
+            hs_roster_parent_item_id,
+            HS_ROSTER_SUBITEM_DROPDOWN_COLUMN_ID, category_name,
+            HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID, int(course_id)
+        )
         
-        # This dictionary is also simpler.
-        column_values = {
-            HS_ROSTER_SUBITEM_DROPDOWN_COLUMN_ID: category_name
-        }
-        
-        print(f"INFO: Creating 'Removed from PLP' subitem for course '{course_name}' under parent {hs_roster_parent_item_id}")
-        monday.create_subitem_with_columns(hs_roster_parent_item_id, subitem_name, column_values)
+        if target_subitem_id:
+            # 2. If found, modify it by updating the Status and posting a note.
+            print(f"INFO: Found subitem {target_subitem_id} containing removed course. Flagging it.")
+            
+            # Change the status
+            monday.change_column_value_generic(
+                board_id=int(HS_ROSTER_PARENT_BOARD_ID),
+                item_id=int(target_subitem_id),
+                column_id=HS_ROSTER_SUBITEM_INTEGRITY_STATUS_COLUMN_ID,
+                value=HS_ROSTER_SUBITEM_MISMATCH_STATUS_VALUE
+            )
+            
+            # Post a detailed update
+            course_name = monday.get_item_name(course_id) or "A course"
+            update_text = (
+                f"**PROCESS ALERT:**\n"
+                f"{course_name} was **removed** from the PLP by {changer_user_name}, but remains on this roster. "
+                f"This subitem is now out of sync."
+            )
+            monday.create_update(target_subitem_id, update_text)
+        else:
+            print(f"WARNING: A course ({course_id}) was removed from the PLP, but no corresponding subitem was found on the HS Roster to flag.")
 
     return True
     
