@@ -222,9 +222,12 @@ def unenroll_student_from_course(course_id, student_details):
         return False
 # In canvas_utils.py
 
+# Add these two functions to the end of canvas_utils.py
+
 def enroll_or_create_and_enroll_teacher(course_id, teacher_details):
     """
-    Finds or creates a user (teacher) with robust logic, then enrolls them as a Teacher.
+    Finds or creates a user (teacher) with robust 3-step logic, then enrolls them as a Teacher.
+    This version includes a 3-step lookup to find 'ghost' users before attempting creation.
     """
     canvas = initialize_canvas_api()
     if not canvas: return None
@@ -235,27 +238,45 @@ def enroll_or_create_and_enroll_teacher(course_id, teacher_details):
         print(f"CRITICAL: Teacher details are missing an email address. Cannot enroll.")
         return None
 
-    # --- THE FIX: ADDED ROBUST LOOKUP LOGIC ---
+    # --- Robust 3-Step Lookup Logic ---
     try:
-        # First, try to find user by their primary login ID (email)
-        print(f"INFO: Searching for teacher by email (login_id): {teacher_email}")
+        # 1. Try to find user by their primary login ID (email)
+        print(f"INFO: [Lookup 1/3] Searching for teacher by email (login_id): {teacher_email}")
         user = canvas.get_user(teacher_email, 'login_id')
         print(f"SUCCESS: Found teacher by login_id with ID: {user.id}")
     except ResourceDoesNotExist:
-        print("INFO: Teacher not found by login_id. Trying SIS ID...")
+        print("INFO: Teacher not found by login_id.")
         try:
-            # If that fails, try to find them by their SIS ID (which we also set to email)
-            print(f"INFO: Searching for teacher by sis_user_id: {teacher_email}")
+            # 2. If that fails, try to find them by their SIS ID
+            print(f"INFO: [Lookup 2/3] Searching for teacher by sis_user_id: {teacher_email}")
             user = canvas.get_user(teacher_email, 'sis_user_id')
             print(f"SUCCESS: Found teacher by SIS ID with ID: {user.id}")
         except ResourceDoesNotExist:
-            print("INFO: Teacher not found by SIS ID either. Proceeding to create user.")
-            pass # User not found by either method, so we will create them below.
-    # --- END FIX ---
+            print("INFO: Teacher not found by SIS ID.")
+            try:
+                # 3. As a last resort, search the entire account for the user.
+                print(f"INFO: [Lookup 3/3] Performing account-wide search for email: {teacher_email}")
+                account = canvas.get_account(1) # Assumes the main account ID is 1
+                possible_users = account.get_users(search_term=teacher_email)
+                
+                found_users = [u for u in possible_users if hasattr(u, 'login_id') and u.login_id.lower() == teacher_email.lower()]
+                
+                if len(found_users) == 1:
+                    user = found_users[0]
+                    print(f"SUCCESS: Found teacher via account-wide search with ID: {user.id}")
+                else:
+                    print(f"INFO: Account-wide search found {len(found_users)} matching users. Cannot proceed with this method.")
+            except CanvasException as e:
+                print(f"ERROR: An error occurred during account-wide user search: {e}")
 
     if not user:
-        # Only create the user if both lookups fail.
-        user = create_canvas_user({'name': teacher_details.get('name'), 'email': teacher_email, 'ssid': teacher_email})
+        # Only create the user if ALL three lookups fail.
+        print("INFO: All lookup methods failed. Proceeding to create a new user.")
+        user = create_canvas_user({
+            'name': teacher_details.get('name'), 
+            'email': teacher_email, 
+            'ssid': teacher_email # Use email as SIS ID for consistency
+        })
 
     if user:
         try:
@@ -264,6 +285,7 @@ def enroll_or_create_and_enroll_teacher(course_id, teacher_details):
             return enrollment
         except CanvasException as e:
             if "already" in str(e).lower():
+                print(f"INFO: User {teacher_email} is already enrolled as a teacher in course {course_id}.")
                 return "Already Enrolled as Teacher"
             print(f"ERROR: A Canvas API error occurred during teacher enrollment: {e}")
             return None
@@ -271,26 +293,44 @@ def enroll_or_create_and_enroll_teacher(course_id, teacher_details):
     print(f"CRITICAL: Teacher with email '{teacher_email}' could not be found or created. Aborting enrollment.")
     return None
 
+
 def unenroll_teacher_from_course(course_id, teacher_details):
-    """Deactivates a teacher's enrollment from a course."""
+    """
+    Finds an existing teacher's enrollment in a course and deactivates (unenrolls) it.
+    """
     canvas = initialize_canvas_api()
-    if not canvas: return False
+    if not canvas: return None
     
     teacher_email = teacher_details.get('email')
-    if not teacher_email: return True # Cannot unenroll without an email
-
+    if not teacher_email:
+        print(f"CRITICAL: Teacher details are missing an email address for unenrollment.")
+        return None
+    
     try:
-        user = canvas.get_user(teacher_email, 'login_id')
-        course = canvas.get_course(course_id)
-        enrollments = course.get_enrollments(user_id=user.id, type=['TeacherEnrollment'])
+        # User must exist to be unenrolled. Use the most reliable search method first.
+        account = canvas.get_account(1)
+        possible_users = account.get_users(search_term=teacher_email)
+        found_users = [u for u in possible_users if hasattr(u, 'login_id') and u.login_id.lower() == teacher_email.lower()]
         
-        for enrollment in enrollments:
-            print(f"INFO: Concluding TEACHER enrollment for '{teacher_email}' (Enrollment ID: {enrollment.id}).")
-            enrollment.deactivate(task='conclude')
-        return True
-    except ResourceDoesNotExist:
-        print(f"INFO: Teacher '{teacher_email}' not found in Canvas. Cannot unenroll.")
-        return True # If user doesn't exist, they aren't enrolled.
-    except CanvasException as e:
-        print(f"ERROR: API error during teacher un-enrollment for '{teacher_email}': {e}")
+        if len(found_users) != 1:
+            print(f"ERROR: Cannot unenroll. Found {len(found_users)} users for email {teacher_email}.")
+            return None
+        
+        user = found_users[0]
+        course = canvas.get_course(course_id)
+        
+        # Get all enrollments for this user in this course
+        enrollments = course.get_enrollments(user_id=user.id)
+        teacher_enrollment = next((e for e in enrollments if e.type == 'TeacherEnrollment'), None)
+
+        if teacher_enrollment:
+            print(f"INFO: Found teacher enrollment {teacher_enrollment.id} for user {user.id} in course {course_id}. Deactivating.")
+            teacher_enrollment.deactivate() # Deactivate is the "unenroll" action
+            return True
+        else:
+            print(f"WARNING: No active teacher enrollment found for user {user.id} in course {course_id} to unenroll.")
+            return False
+            
+    except Exception as e:
+        print(f"ERROR: Exception during teacher unenrollment: {e}")
         return False
