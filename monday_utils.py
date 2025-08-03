@@ -524,3 +524,38 @@ def get_linked_items_from_board_relation(item_id, board_id, connect_column_id):
         return get_linked_ids_from_connect_column_value(column_data['value'])
     print(f"DEBUG: monday_utils: No linked items found or column data missing for item {item_id}, column {connect_column_id}.")
     return set()
+# In monday_utils.py
+
+def find_subitem_by_column_value(parent_item_id, target_column_id, target_text_value):
+    """
+    Finds a subitem ID under a parent item by matching a text value in a specific column.
+    This is useful for finding a categorized subitem (e.g., where 'Category' dropdown is 'Math').
+    """
+    query = f"""
+    query {{
+      items (ids: [{parent_item_id}]) {{
+        subitems {{
+          id
+          column_values (ids: ["{target_column_id}"]) {{
+            id
+            text
+          }}
+        }}
+      }}
+    }}
+    """
+    print(f"DEBUG: Searching for subitem under parent '{parent_item_id}' where column '{target_column_id}' has text '{target_text_value}'")
+    result = execute_monday_graphql(query)
+
+    if result and 'data' in result and result['data'].get('items'):
+        parent_item = result['data']['items'][0]
+        if parent_item.get('subitems'):
+            for subitem in parent_item['subitems']:
+                for col_val in subitem['column_values']:
+                    if col_val.get('id') == target_column_id and col_val.get('text').lower() == target_text_value.lower():
+                        subitem_id = subitem.get('id')
+                        print(f"DEBUG: Found matching subitem with ID: {subitem_id}")
+                        return subitem_id
+    
+    print(f"WARNING: No subitem found under parent {parent_item_id} matching the criteria.")
+    return None
