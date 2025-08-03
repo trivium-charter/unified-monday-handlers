@@ -354,11 +354,10 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details)
             new_course = create_canvas_course(class_name, CANVAS_TERM_ID)
             if not new_course: return
             canvas_course_id = new_course.id
-            new_canvas_item_id = create_item(int(CANVAS_BOARD_ID), f"{class_name} - Canvas", {CANVAS_COURSE_ID_COLUMN: str(canvas_course_id)})
-            if new_canvas_item_id:
-                update_connect_board_column(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID, new_canvas_item_id)
-                if ALL_CLASSES_CANVAS_ID_COLUMN: change_column_value_generic(int(ALL_COURSES_BOARD_ID), class_item_id, ALL_CLASSES_CANVAS_ID_COLUMN, str(canvas_course_id))
-        
+            # --- FINAL FIX: Update existing Canvas item, don't create a new one ---
+            if canvas_item_id:
+                change_column_value_generic(int(CANVAS_BOARD_ID), canvas_item_id, CANVAS_COURSE_ID_COLUMN, str(canvas_course_id))
+            
         m_series_val = get_column_value(plp_item_id, int(PLP_BOARD_ID), PLP_M_SERIES_LABELS_COLUMN)
         m_series_text = m_series_val.get('text') if m_series_val and m_series_val.get('text') is not None else ""
         
