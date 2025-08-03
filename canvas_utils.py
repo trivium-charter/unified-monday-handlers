@@ -3,7 +3,7 @@
 #
 import os
 from canvasapi import Canvas
-from canvasapi.exceptions import CanvasException, Conflict, ResourceNotFound
+from canvasapi.exceptions import CanvasException, Conflict, NotFound
 
 # --- Canvas API Configuration ---
 CANVAS_API_URL = os.environ.get("CANVAS_API_URL")
