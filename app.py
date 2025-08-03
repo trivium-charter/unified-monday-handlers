@@ -47,7 +47,8 @@ SPED_STUDENTS_BOARD_ID = os.environ.get("SPED_STUDENTS_BOARD_ID")
 SPED_TO_IEPAP_CONNECT_COLUMN_ID = os.environ.get("SPED_TO_IEPAP_CONNECT_COLUMN_ID")
 
 CANVAS_BOARD_ID = os.environ.get("CANVAS_BOARD_ID")
-CANVAS_COURSE_ID_COLUMN = os.environ.get("CANVAS_COURSE_ID_COLUMN")
+# --- CORRECTED VARIABLE NAME ---
+CANVAS_COURSE_ID_COLUMN_ID = os.environ.get("CANVAS_COURSE_ID_COLUMN_ID")
 
 CANVAS_TERM_ID = os.environ.get("CANVAS_TERM_ID")
 CANVAS_SUBACCOUNT_ID = os.environ.get("CANVAS_SUBACCOUNT_ID")
@@ -235,7 +236,7 @@ def create_section_if_not_exists(course_id, section_name):
 
 def enroll_student_in_section(course_id, user_id, section_id):
     canvas_api = initialize_canvas_api()
-    if not canvas_api: return None
+    if not canvas_api: return "Failed: Canvas API not initialized"
     try:
         course = canvas_api.get_course(course_id)
         user = canvas_api.get_user(user_id)
@@ -246,7 +247,7 @@ def enroll_student_in_section(course_id, user_id, section_id):
 
 def enroll_or_create_and_enroll(course_id, section_id, student_details):
     canvas_api = initialize_canvas_api()
-    if not canvas_api: return "Failed"
+    if not canvas_api: return "Failed: Canvas API not initialized"
     user = None
     try: user = canvas_api.get_user(student_details['email'], 'login_id')
     except ResourceDoesNotExist:
@@ -347,7 +348,8 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details)
     canvas_item_id = list(linked_canvas_item_ids)[0] if linked_canvas_item_ids else None
     canvas_course_id = ''
     if canvas_item_id:
-        canvas_course_id_val = get_column_value(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_COURSE_ID_COLUMN)
+        # --- CORRECTED to use the right environment variable ---
+        canvas_course_id_val = get_column_value(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_COURSE_ID_COLUMN_ID)
         canvas_course_id = canvas_course_id_val.get('text', '') if canvas_course_id_val else ''
 
     if action == "enroll":
@@ -356,7 +358,7 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details)
             if not new_course: return
             canvas_course_id = new_course.id
             if canvas_item_id:
-                change_column_value_generic(int(CANVAS_BOARD_ID), canvas_item_id, CANVAS_COURSE_ID_COLUMN, str(canvas_course_id))
+                change_column_value_generic(int(CANVAS_BOARD_ID), canvas_item_id, CANVAS_COURSE_ID_COLUMN_ID, str(canvas_course_id))
             
         m_series_val = get_column_value(plp_item_id, int(PLP_BOARD_ID), PLP_M_SERIES_LABELS_COLUMN)
         m_series_text = m_series_val.get('text') if m_series_val and m_series_val.get('text') is not None else ""
