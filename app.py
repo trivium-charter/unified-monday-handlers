@@ -120,8 +120,27 @@ def update_item_name(item_id, board_id, new_name):
     return execute_monday_graphql(mutation) is not None
 
 def change_column_value_generic(board_id, item_id, column_id, value):
-    graphql_value = json.dumps(json.dumps(str(value)))
-    mutation = f"mutation {{ change_column_value(board_id: {board_id}, item_id: {item_id}, column_id: \"{column_id}\", value: {graphql_value}) {{ id }} }}"
+    """
+    Changes a column value for a specific item on a board.
+    This version correctly encodes the value for the 'change_column_value' mutation.
+    """
+    # The 'value' argument for the change_column_value mutation expects a 
+    # JSON-encoded string. For a text column, json.dumps(str(value)) correctly
+    # formats it. For example, if value is "123", json.dumps creates "\"123\"".
+    graphql_value = json.dumps(str(value))
+    
+    mutation = f"""
+        mutation {{
+            change_column_value(
+                board_id: {board_id},
+                item_id: {item_id},
+                column_id: "{column_id}",
+                value: {graphql_value}
+            ) {{
+                id
+            }}
+        }}
+    """
     return execute_monday_graphql(mutation) is not None
 
 def get_people_ids_from_value(value_data):
