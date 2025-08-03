@@ -106,6 +106,8 @@ def create_section_if_not_exists(course_id, section_name):
         print(f"ERROR: API error finding/creating section '{section_name}': {e}")
     return None
 
+# In canvas_utils.py
+
 def enroll_student_in_section(course_id, user_id, section_id):
     """Enrolls a student, making them active immediately."""
     canvas = initialize_canvas_api()
@@ -114,14 +116,17 @@ def enroll_student_in_section(course_id, user_id, section_id):
         course = canvas.get_course(course_id)
         user = canvas.get_user(user_id)
         
-        enrollment_payload = {
-            'type': 'StudentEnrollment',
+        # CORRECTED: The enrollment type is the second argument.
+        # The rest of the details go into the 'enrollment' dictionary.
+        enrollment_type = 'StudentEnrollment'
+        enrollment_details = {
             'enrollment_state': 'active',
             'course_section_id': section_id,
             'notify': False
         }
         
-        enrollment = course.enroll_user(user, enrollment_payload)
+        enrollment = course.enroll_user(user, enrollment_type, enrollment=enrollment_details)
+        
         return enrollment
     except CanvasException as e:
         if "already" in str(e).lower():
