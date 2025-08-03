@@ -358,15 +358,23 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details)
             if new_canvas_item_id:
                 update_connect_board_column(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID, new_canvas_item_id)
                 if ALL_CLASSES_CANVAS_ID_COLUMN: change_column_value_generic(int(ALL_COURSES_BOARD_ID), class_item_id, ALL_CLASSES_CANVAS_ID_COLUMN, str(canvas_course_id))
-        m_series_text = (get_column_value(plp_item_id, int(PLP_BOARD_ID), PLP_M_SERIES_LABELS_COLUMN) or {}).get('text', '')
-        ag_grad_text = (get_column_value(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_CLASSES_AG_GRAD_COLUMN) or {}).get('text', '')
+        
+        # --- FINAL FIX for TypeError ---
+        m_series_val = get_column_value(plp_item_id, int(PLP_BOARD_ID), PLP_M_SERIES_LABELS_COLUMN)
+        m_series_text = m_series_val.get('text') if m_series_val and m_series_val.get('text') is not None else ""
+        
+        ag_grad_val = get_column_value(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_CLASSES_AG_GRAD_COLUMN)
+        ag_grad_text = ag_grad_val.get('text') if ag_grad_val and ag_grad_val.get('text') is not None else ""
+        
         sections = {"A-G" for s in ["AG"] if s in ag_grad_text} | {"Grad" for s in ["Grad"] if s in ag_grad_text} | {"M-Series" for s in ["M-series"] if s in m_series_text}
         if not sections: sections.add("All")
+        
         for section_name in sections:
             section = create_section_if_not_exists(canvas_course_id, section_name)
             if section:
                 result = enroll_or_create_and_enroll(canvas_course_id, section.id, student_details)
                 create_subitem(plp_item_id, f"Enrolled in {class_name} ({section_name}): {result}")
+
     elif action == "unenroll" and canvas_course_id:
         result = unenroll_student_from_course(canvas_course_id, student_details)
         create_subitem(plp_item_id, f"Unenrolled from {class_name}: {'Success' if result else 'Failed'}")
