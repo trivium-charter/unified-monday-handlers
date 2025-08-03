@@ -8,6 +8,7 @@ from canvasapi.enrollment import Enrollment
 # --- Canvas API Configuration ---
 CANVAS_API_URL = os.environ.get("CANVAS_API_URL")
 CANVAS_API_KEY = os.environ.get("CANVAS_API_KEY")
+CANVAS_ACCOUNT_ID = os.environ.get("CANVAS_ACCOUNT_ID", "1") # Default to '1'
 
 def initialize_canvas_api():
     """Initializes and returns a Canvas API object if configured."""
@@ -334,3 +335,82 @@ def unenroll_teacher_from_course(course_id, teacher_details):
     except Exception as e:
         print(f"ERROR: Exception during teacher unenrollment: {e}")
         return False
+def get_or_create_canvas_user(details):
+    """
+    Finds a user in Canvas using a prioritized search, or creates them if not found.
+    This is the definitive method for retrieving a user object.
+
+    Search Priority:
+    1. SIS User ID (details['ssid']) - Most reliable and unique.
+    2. Login ID (details['email']) - Also highly reliable.
+    3. General Search Term (details['email']) - Broader search.
+
+    If not found, it will create a new user with the provided details.
+
+    Args:
+        details (dict): A dictionary containing 'name', 'ssid', and 'email'.
+
+    Returns:
+        A Canvas User object if found or created, otherwise None.
+    """
+    try:
+        account = canvas.get_account(CANVAS_ACCOUNT_ID)
+        
+        # --- Search Strategy 1: SIS User ID (Highest Priority) ---
+        if details.get('ssid'):
+            sis_id = f"sis_user_id:{details['ssid']}"
+            print(f"DEBUG: Searching for Canvas user with {sis_id}")
+            users = account.get_users(sis_user_id=details['ssid'])
+            user_list = list(users)
+            if user_list:
+                print(f"SUCCESS: Found user '{user_list[0].name}' by SIS ID.")
+                return user_list[0]
+
+        # --- Search Strategy 2: Login ID (Second Priority) ---
+        # Often the login ID is the email address.
+        if details.get('email'):
+            login_id = f"sis_login_id:{details['email']}"
+            print(f"INFO: Search by SIS ID failed. Searching with {login_id}")
+            users = account.get_users(sis_login_id=details['email'])
+            user_list = list(users)
+            if user_list:
+                print(f"SUCCESS: Found user '{user_list[0].name}' by Login ID.")
+                return user_list[0]
+
+        # --- Search Strategy 3: General Search (Last Resort) ---
+        if details.get('email'):
+            email_search = f"email:{details['email']}"
+            print(f"INFO: Search by Login ID failed. Searching with {email_search}")
+            # This is a general search, less precise but can find users if login_id differs.
+            users = account.get_users(search_term=details['email'])
+            # We must filter the results to find an exact email match.
+            for user in users:
+                if hasattr(user, 'email') and user.email and user.email.lower() == details['email'].lower():
+                    print(f"SUCCESS: Found user '{user.name}' by general email search.")
+                    return user
+
+        # --- If all searches fail, proceed to CREATE the user ---
+        print(f"INFO: User not found with any search method. Proceeding to create user with details: {details}")
+        
+        # Prepare the data for the new user payload
+        user_payload = {
+            'name': details['name'],
+            'sortable_name': f"{details['name'].split(',')[0].strip()}, {details['name'].split(',')[1].strip()}" if ',' in details['name'] else details['name'],
+            'skip_registration': True,
+            'terms_of_use': True # Automatically accept terms of use
+        }
+        pseudonym_payload = {
+            'unique_id': details['email'], # This becomes the login_id
+            'sis_user_id': details.get('ssid'),
+            'send_confirmation': False
+        }
+
+        print(f"DEBUG: Creating user with payload: user={user_payload}, pseudonym={pseudonym_payload}")
+        new_user = account.create_user(pseudonym=pseudonym_payload, user=user_payload)
+        
+        print(f"SUCCESS: Created new Canvas user '{new_user.name}' with ID: {new_user.id}")
+        return new_user
+
+    except Exception as e:
+        print(f"CRITICAL: An error occurred during get_or_create_canvas_user: {e}")
+        return None
