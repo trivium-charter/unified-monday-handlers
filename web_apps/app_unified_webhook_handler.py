@@ -8,7 +8,8 @@ from monday_tasks import (
     process_master_student_person_sync_webhook,
     process_sped_students_person_sync_webhook,
     process_canvas_full_sync_from_status,
-    process_canvas_delta_sync_from_course_change
+    process_canvas_delta_sync_from_course_change,
+    process_teacher_enrollment_webhook
 )
 
 app = Flask(__name__)
@@ -19,7 +20,9 @@ HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID = os.environ.get("HS_ROSTER_CONNECT_ALL_
 MASTER_STUDENT_BOARD_ID = os.environ.get("MASTER_STUDENT_BOARD_ID", "")
 PLP_BOARD_ID = os.environ.get("PLP_BOARD_ID", "")
 SPED_STUDENTS_BOARD_ID = os.environ.get("SPED_STUDENTS_BOARD_ID", "")
-
+# In app_unified_webhook_handler.py (at the top with other env vars)
+CANVAS_COURSES_BOARD_ID = os.environ.get("CANVAS_COURSES_BOARD_ID", "")
+CANVAS_COURSES_TEACHER_COLUMN_ID = os.environ.get("CANVAS_COURSES_TEACHER_COLUMN_ID", "")
 try:
     MASTER_STUDENT_PEOPLE_COLUMNS = json.loads(os.environ.get("MASTER_STUDENT_PEOPLE_COLUMNS", "{}"))
     SPED_STUDENTS_PEOPLE_COLUMN_MAPPING = json.loads(os.environ.get("SPED_STUDENTS_PEOPLE_COLUMN_MAPPING", "{}"))
@@ -92,7 +95,15 @@ def monday_unified_webhooks():
             process_sped_students_person_sync_webhook.delay(event)
             return jsonify({"status": "success", "message": "SpEd Students Person Sync task queued."}), 202
 
-        # 5. General Logger Check
+        # 5. Canvas Course Teacher Enrollment Check
+        if (webhook_type == "update_column_value" and CANVAS_COURSES_BOARD_ID and
+            webhook_board_id == CANVAS_COURSES_BOARD_ID and
+            trigger_column_id == CANVAS_COURSES_TEACHER_COLUMN_ID):
+            print("INFO: Dispatching to Teacher Enrollment task.")
+            process_teacher_enrollment_webhook.delay(event)
+            return jsonify({"status": "success", "message": "Teacher Enrollment task queued."}), 202
+                
+        # 6. General Logger Check
         for config_rule in LOG_CONFIGS:
             if str(config_rule.get("trigger_board_id")) == webhook_board_id:
                 if (webhook_type in ["create_item", "create_pulse"] and config_rule.get("log_type") == "CopyToItemName") or \
