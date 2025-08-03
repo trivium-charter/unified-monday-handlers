@@ -305,3 +305,68 @@ def process_sped_students_person_sync_webhook(event_data):
         success = monday.update_people_column(item_id=linked_iep_ap_item_id, board_id=IEP_AP_BOARD_ID, people_column_id=target_people_column_id, new_people_value=current_column_value_raw, target_column_type=target_column_type)
         if not success: operation_successful = False
     return operation_successful
+### --- ADDED FOR CREATING A CANVAS COURSE SHELL FROM THE "ALL COURSES" BOARD --- ###
+@celery_app.task
+def create_course_shell_from_monday(event_data):
+    """
+    A workflow triggered by a change on the 'All Courses' board.
+    This task orchestrates the process: check Monday.com -> call the Canvas utility -> update Monday.com.
+    """
+    item_id = event_data.get('pulseId')
+    board_id = event_data.get('boardId')
+
+    # Environment variables you already have defined
+    canvas_id_column = os.environ.get("CANVAS_COURSE_ID_COLUMN") # 'canvas_course_id_mkm1fwt4'
+    course_title_column = os.environ.get("ALL_COURSES_NAME_COLUMN_ID") # 'text65__1'
+    term_id = os.environ.get("CANVAS_TERM_ID")
+
+    print(f"TASK STARTED: create_course_shell_from_monday for item {item_id} on board {board_id}.")
+
+    # 1. [WORKFLOW STEP] Check if the action is even needed
+    canvas_id_col_data = monday.get_column_value(item_id, board_id, canvas_id_column)
+    if canvas_id_col_data and canvas_id_col_data.get('text'):
+        print(f"INFO: Item {item_id} already has a Canvas Course ID. Workflow complete.")
+        return True
+
+    print(f"INFO: Canvas Course ID is blank. Proceeding with workflow.")
+
+    # 2. [WORKFLOW STEP] Get the required data from Monday.com
+    course_title_col_data = monday.get_column_value(item_id, board_id, course_title_column)
+    course_title = course_title_col_data.get('text') if course_title_col_data else None
+
+    if not course_title:
+        print(f"ERROR: Cannot create course. Title column '{course_title_column}' is blank.")
+        monday.create_update(item_id, "CANVAS SYNC ERROR: Title column is blank, cannot create course.")
+        return False
+
+    # 3. [WORKFLOW STEP] Use your existing utility function (the "tool") to perform the action
+    print(f"INFO: Calling the canvas_utils.create_canvas_course tool with title: '{course_title}'")
+    #
+    #   THIS IS THE KEY PART - WE ARE REUSING YOUR EXISTING FUNCTION
+    #
+    new_course = canvas.create_canvas_course(course_title, term_id)
+
+    if not new_course or not hasattr(new_course, 'id'):
+        print(f"ERROR: canvas_utils.create_canvas_course failed to return a valid course object.")
+        monday.create_update(item_id, f"CANVAS SYNC FAILED: The Canvas API did not create the course '{course_title}'.")
+        return False
+
+    new_canvas_id = str(new_course.id)
+    print(f"SUCCESS: The tool 'create_canvas_course' returned a new course with ID: {new_canvas_id}")
+
+    # 4. [WORKFLOW STEP] Update Monday.com with the result
+    success = monday.change_column_value_generic(
+        board_id=board_id,
+        item_id=item_id,
+        column_id=canvas_id_column,
+        value=new_canvas_id
+    )
+
+    if success:
+        print(f"SUCCESS: Workflow complete. Updated item {item_id} with ID {new_canvas_id}.")
+        monday.create_update(item_id, f"Canvas course successfully created. ID: {new_canvas_id}")
+    else:
+        print(f"ERROR: Failed to update Monday.com item {item_id}.")
+        monday.create_update(item_id, f"CANVAS SYNC ERROR: Course was created in Canvas (ID: {new_canvas_id}) but FAILED to update this Monday item.")
+
+    return success
