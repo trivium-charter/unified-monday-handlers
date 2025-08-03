@@ -1,5 +1,5 @@
 # ==============================================================================
-# FINAL CONSOLIDATED APPLICATION (All Functions Restored & Corrected)
+# FINAL CONSOLIDATED APPLICATION (SSID is now Optional)
 # ==============================================================================
 import os
 import json
@@ -314,14 +314,22 @@ def process_general_webhook(event_data, config_rule):
             name = get_item_name(link_id, linked_board_id)
             if name: create_subitem(item_id, f"Removed {prefix} '{name}' on {date} by {changer}", subitem_cols)
 
+# --- CORRECTED: SSID is now optional for the Canvas sync ---
 def get_student_details_from_plp(plp_item_id):
     master_student_ids = get_linked_items_from_board_relation(plp_item_id, int(PLP_BOARD_ID), PLP_TO_MASTER_STUDENT_CONNECT_COLUMN)
     if not master_student_ids: return None
+    
     master_student_id = list(master_student_ids)[0]
     student_name = get_item_name(master_student_id, int(MASTER_STUDENT_BOARD_ID))
     ssid = (get_column_value(master_student_id, int(MASTER_STUDENT_BOARD_ID), MASTER_STUDENT_SSID_COLUMN) or {}).get('text', '')
     email = (get_column_value(master_student_id, int(MASTER_STUDENT_BOARD_ID), MASTER_STUDENT_EMAIL_COLUMN) or {}).get('text', '')
-    return {'name': student_name, 'ssid': ssid, 'email': email} if all([student_name, ssid, email]) else None
+
+    # Only Name and Email are strictly required for the automation to proceed.
+    if not all([student_name, email]):
+        print(f"WARN: Missing Name or Email for master student item {master_student_id}. Halting sync.")
+        return None
+        
+    return {'name': student_name, 'ssid': ssid, 'email': email}
 
 def manage_class_enrollment(action, plp_item_id, class_item_id, student_details):
     class_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID))
@@ -396,58 +404,35 @@ def process_plp_course_sync_webhook(event_data):
     updated_val = (get_column_value(plp_item_id, int(PLP_BOARD_ID), target_plp_col_id) or {}).get('value')
     process_canvas_delta_sync_from_course_change.delay({'pulseId': plp_item_id, 'value': updated_val, 'previousValue': original_val})
 
-# --- CORRECTED AND FINAL VERSION of the Teacher/Person Sync Task ---
 @celery_app.task
 def process_master_student_person_sync_webhook(event_data):
-    master_item_id = event_data.get('pulseId')
-    trigger_column_id = event_data.get('columnId')
-    user_id = event_data.get('userId')
-    current_value_raw = event_data.get('value')
-    previous_value_raw = event_data.get('previousValue')
+    master_item_id, trigger_column_id, user_id = event_data.get('pulseId'), event_data.get('columnId'), event_data.get('userId')
+    current_value_raw, previous_value_raw = event_data.get('value'), event_data.get('previousValue')
+    mappings = MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS.get(trigger_column_id)
+    if not mappings: return
 
-    mappings_for_this_column = MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS.get(trigger_column_id)
-    if not mappings_for_this_column: return
-
-    # --- Data Sync Logic (remains the same) ---
-    for target_config in mappings_for_this_column["targets"]:
-        target_board_id = target_config["board_id"]
-        master_connect_column_id = target_config["connect_column_id"]
-        target_people_column_id = target_config["target_column_id"]
-        target_column_type = target_config["target_column_type"]
-        linked_item_ids_on_target_board = get_linked_items_from_board_relation(master_item_id, int(MASTER_STUDENT_BOARD_ID), master_connect_column_id)
-        for linked_target_item_id in linked_item_ids_on_target_board:
-            update_people_column(linked_target_item_id, int(target_board_id), target_people_column_id, current_value_raw, target_column_type)
-
-    # --- Subitem Logging Logic (restored) ---
-    plp_target_config = next((t for t in mappings_for_this_column["targets"] if str(t.get("board_id")) == str(PLP_BOARD_ID)), None)
-    if not plp_target_config: return
+    for target in mappings["targets"]:
+        linked_ids = get_linked_items_from_board_relation(master_item_id, int(MASTER_STUDENT_BOARD_ID), target["connect_column_id"])
+        for linked_id in linked_ids:
+            update_people_column(linked_id, int(target["board_id"]), target["target_column_id"], current_value_raw, target["target_column_type"])
     
-    plp_linked_ids = get_linked_items_from_board_relation(master_item_id, int(MASTER_STUDENT_BOARD_ID), plp_target_config["connect_column_id"])
+    plp_target = next((t for t in mappings["targets"] if str(t.get("board_id")) == str(PLP_BOARD_ID)), None)
+    if not plp_target: return
+    plp_linked_ids = get_linked_items_from_board_relation(master_item_id, int(MASTER_STUDENT_BOARD_ID), plp_target["connect_column_id"])
     if not plp_linked_ids: return
-    
     plp_item_id = list(plp_linked_ids)[0]
-    column_friendly_name = mappings_for_this_column.get("name", "Staff")
-    changer_user_name = get_user_name(user_id) or "automation"
-    current_date = datetime.now().strftime('%Y-%m-%d')
-    user_log_text = f" by {changer_user_name}"
-
-    current_ids = get_people_ids_from_value(current_value_raw)
-    previous_ids = get_people_ids_from_value(previous_value_raw)
     
-    added_ids = current_ids - previous_ids
-    removed_ids = previous_ids - current_ids
+    col_name = mappings.get("name", "Staff")
+    changer = get_user_name(user_id) or "automation"
+    date = datetime.now().strftime('%Y-%m-%d')
+    current_ids, previous_ids = get_people_ids_from_value(current_value_raw), get_people_ids_from_value(previous_value_raw)
 
-    for person_id in added_ids:
-        person_name = get_user_name(person_id)
-        if person_name:
-            subitem_text = f"{column_friendly_name} changed to {person_name} on {current_date}{user_log_text}"
-            create_subitem(plp_item_id, subitem_text)
-
-    for person_id in removed_ids:
-        person_name = get_user_name(person_id)
-        if person_name:
-            subitem_text = f"Removed {person_name} from {column_friendly_name} on {current_date}{user_log_text}"
-            create_subitem(plp_item_id, subitem_text)
+    for p_id in (current_ids - previous_ids):
+        name = get_user_name(p_id)
+        if name: create_subitem(plp_item_id, f"{col_name} changed to {name} on {date} by {changer}")
+    for p_id in (previous_ids - current_ids):
+        name = get_user_name(p_id)
+        if name: create_subitem(plp_item_id, f"Removed {name} from {col_name} on {date} by {changer}")
 
 @celery_app.task
 def process_sped_students_person_sync_webhook(event_data):
