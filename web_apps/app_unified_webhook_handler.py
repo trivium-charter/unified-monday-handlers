@@ -23,6 +23,8 @@ SPED_STUDENTS_BOARD_ID = os.environ.get("SPED_STUDENTS_BOARD_ID", "")
 # In app_unified_webhook_handler.py (at the top with other env vars)
 CANVAS_BOARD_ID = os.environ.get("CANVAS_BOARD_ID", "")
 CANVAS_COURSES_TEACHER_COLUMN_ID = os.environ.get("CANVAS_COURSES_TEACHER_COLUMN_ID", "")
+CANVAS_BOARD_COURSE_NAME_COLUMN_ID = os.environ.get("CANVAS_BOARD_COURSE_NAME_COLUMN_ID", "")
+
 try:
     MASTER_STUDENT_PEOPLE_COLUMNS = json.loads(os.environ.get("MASTER_STUDENT_PEOPLE_COLUMNS", "{}"))
     SPED_STUDENTS_PEOPLE_COLUMN_MAPPING = json.loads(os.environ.get("SPED_STUDENTS_PEOPLE_COLUMN_MAPPING", "{}"))
@@ -100,12 +102,14 @@ def monday_unified_webhooks():
         # ... after the "SpEd Students Person Sync Check" block ...
 
         # 5. Canvas Course Teacher Enrollment Check
+        # Triggers when the 'Teacher' person column changes on the Canvas Courses board.
         if (webhook_type == "update_column_value" and CANVAS_BOARD_ID and
             webhook_board_id == CANVAS_BOARD_ID and
             trigger_column_id == CANVAS_COURSES_TEACHER_COLUMN_ID):
             print("INFO: Dispatching to Teacher Enrollment task.")
             process_teacher_enrollment_webhook.delay(event)
             return jsonify({"status": "success", "message": "Teacher Enrollment task queued."}), 202
+
 
                 
         # 6. General Logger Check
