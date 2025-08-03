@@ -44,7 +44,7 @@ def monday_unified_webhooks():
         
         # --- DISPATCHING LOGIC ---
 
-        # 1. Unified Canvas Sync Check (routes to different tasks based on column)
+         # 1. Unified Canvas Sync Check (routes to different tasks based on column)
         PLP_TRIGGER_COLUMNS_STR = os.environ.get("PLP_ALL_CLASSES_CONNECT_COLUMNS_STR", "")
         PLP_TRIGGER_COLUMN_IDS = [c.strip() for c in PLP_TRIGGER_COLUMNS_STR.split(',') if c.strip()]
         PLP_CANVAS_SYNC_COLUMN_ID = os.environ.get("PLP_CANVAS_SYNC_COLUMN_ID")
@@ -55,11 +55,17 @@ def monday_unified_webhooks():
 
             if trigger_column_id == PLP_CANVAS_SYNC_COLUMN_ID:
                 print("INFO: Dispatching to Canvas FULL Sync task from status change.")
-                process_canvas_full_sync_from_status.delay(event)
+                # Notice we already have 'event' available here, so we just pass it
+                process_canvas_full_sync_from_status.delay(event) 
                 return jsonify({"status": "success", "message": "Canvas Full Sync task queued."}), 202
             else:
                 print("INFO: Dispatching to Canvas DELTA Sync task from course change.")
-                process_canvas_delta_sync_from_course_change.delay(event, LOG_CONFIGS)
+                # --- THE FIX ---
+                # 1. Get the user_id from the event object
+                user_id = event.get('userId')
+                # 2. Pass the user_id to the celery task
+                process_canvas_delta_sync_from_course_change.delay(event, LOG_CONFIGS, user_id)
+                # ---- END FIX ----
                 return jsonify({"status": "success", "message": "Canvas Delta Sync task queued."}), 202
 
         # 2. PLP Course Sync Check (HS Roster to PLP)
