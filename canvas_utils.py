@@ -220,3 +220,61 @@ def unenroll_student_from_course(course_id, student_details):
     except CanvasException as e:
         print(f"ERROR: API error during un-enrollment for '{student_email}': {e}")
         return False
+# In canvas_utils.py
+
+def enroll_or_create_and_enroll_teacher(course_id, teacher_details):
+    """
+    Finds or creates a user (teacher) with robust logic, then enrolls them as a Teacher.
+    """
+    canvas = initialize_canvas_api()
+    if not canvas: return None
+    user = None
+    teacher_email = teacher_details.get('email')
+    
+    if not teacher_email:
+        print(f"CRITICAL: Teacher details are missing an email address. Cannot enroll.")
+        return None
+
+    try:
+        user = canvas.get_user(teacher_email, 'login_id')
+    except ResourceDoesNotExist:
+        # User doesn't exist, create them
+        user = create_canvas_user({'name': teacher_details.get('name'), 'email': teacher_email, 'ssid': teacher_email})
+
+    if user:
+        try:
+            course = canvas.get_course(course_id)
+            enrollment = course.enroll_user(user, 'TeacherEnrollment', enrollment={'enrollment_state': 'active', 'notify': False})
+            return enrollment
+        except CanvasException as e:
+            if "already" in str(e).lower():
+                return "Already Enrolled as Teacher"
+            print(f"ERROR: A Canvas API error occurred during teacher enrollment: {e}")
+            return None
+    
+    print(f"CRITICAL: Teacher with email '{teacher_email}' could not be found or created. Aborting enrollment.")
+    return None
+
+def unenroll_teacher_from_course(course_id, teacher_details):
+    """Deactivates a teacher's enrollment from a course."""
+    canvas = initialize_canvas_api()
+    if not canvas: return False
+    
+    teacher_email = teacher_details.get('email')
+    if not teacher_email: return True # Cannot unenroll without an email
+
+    try:
+        user = canvas.get_user(teacher_email, 'login_id')
+        course = canvas.get_course(course_id)
+        enrollments = course.get_enrollments(user_id=user.id, type=['TeacherEnrollment'])
+        
+        for enrollment in enrollments:
+            print(f"INFO: Concluding TEACHER enrollment for '{teacher_email}' (Enrollment ID: {enrollment.id}).")
+            enrollment.deactivate(task='conclude')
+        return True
+    except ResourceDoesNotExist:
+        print(f"INFO: Teacher '{teacher_email}' not found in Canvas. Cannot unenroll.")
+        return True # If user doesn't exist, they aren't enrolled.
+    except CanvasException as e:
+        print(f"ERROR: API error during teacher un-enrollment for '{teacher_email}': {e}")
+        return False
