@@ -8,8 +8,7 @@ from monday_tasks import (
     process_master_student_person_sync_webhook,
     process_sped_students_person_sync_webhook,
     process_canvas_full_sync_from_status,
-    process_canvas_delta_sync_from_course_change,
-    create_course_shell_from_monday
+    process_canvas_delta_sync_from_course_change
 )
 
 app = Flask(__name__)
@@ -20,7 +19,6 @@ HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID = os.environ.get("HS_ROSTER_CONNECT_ALL_
 MASTER_STUDENT_BOARD_ID = os.environ.get("MASTER_STUDENT_BOARD_ID", "")
 PLP_BOARD_ID = os.environ.get("PLP_BOARD_ID", "")
 SPED_STUDENTS_BOARD_ID = os.environ.get("SPED_STUDENTS_BOARD_ID", "")
-ALL_COURSES_BOARD_ID = os.environ.get("ALL_COURSES_BOARD_ID", "")
 
 try:
     MASTER_STUDENT_PEOPLE_COLUMNS = json.loads(os.environ.get("MASTER_STUDENT_PEOPLE_COLUMNS", "{}"))
@@ -44,18 +42,7 @@ def monday_unified_webhooks():
         trigger_column_id = event.get('columnId')
         parent_item_board_id = str(event.get('parentItemBoardId')) if event.get('parentItemBoardId') else None
         
-        # --- FINAL DISPATCHING LOGIC ---
-
-        # ### ADDED FOR DIRECT CANVAS COURSE CREATION ###
-        # This rule is designed for the "All Courses" board. It triggers the simple workflow
-        # to create a course shell if one doesn't exist. This rule is placed first
-        # to ensure it's evaluated before other rules.
-        if (webhook_type == "update_column_value" and
-            ALL_COURSES_BOARD_ID and webhook_board_id == ALL_COURSES_BOARD_ID):
-            print("INFO: Dispatching to 'create_course_shell_from_monday' workflow.")
-            create_course_shell_from_monday.delay(event)
-            return jsonify({"status": "success", "message": "Course Shell Creation workflow queued."}), 202
-
+        # --- DISPATCHING LOGIC ---
 
         # 1. Unified Canvas Sync Check (routes to different tasks based on column)
         PLP_TRIGGER_COLUMNS_STR = os.environ.get("PLP_ALL_CLASSES_CONNECT_COLUMNS_STR", "")
