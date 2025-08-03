@@ -43,10 +43,13 @@ except (json.JSONDecodeError, TypeError):
     # ... other JSON error handling ...
 
 # FIXED: This function now gets the Canvas User ID
+# In monday_tasks.py
+
 def get_student_details_from_plp(plp_item_id):
     """
-    Gets base student details from Monday.com and enriches them with the Canvas User ID.
-    Returns a dictionary with name, ssid, email, AND canvas_user_id, or None if anything fails.
+    Gets base student details from Monday.com and enriches them with the Canvas User object.
+    It delegates the complex find-or-create logic to canvas_utils.
+    Returns the enriched details dictionary or None if anything fails.
     """
     master_student_ids = monday.get_linked_items_from_board_relation(plp_item_id, PLP_BOARD_ID, PLP_TO_MASTER_STUDENT_CONNECT_COLUMN)
     if not master_student_ids: return None
@@ -60,24 +63,21 @@ def get_student_details_from_plp(plp_item_id):
     ssid = ssid_val.get('text') if ssid_val else None
     email = email_val.get('text') if email_val else None
 
-    if not all([student_name, ssid, email]): 
-        print(f"ERROR: Missing name, SSID, or email for master student item {master_student_item_id}")
+    if not all([student_name, email]): # Email is essential, SSID is highly recommended
+        print(f"ERROR: Missing Name or Email for master student item {master_student_item_id}")
         return None
 
-    details = {'name': student_name, 'ssid': ssid, 'email': email}
+    # This is the only information we need to pass to our powerful utility function
+    base_details = {'name': student_name, 'ssid': ssid, 'email': email}
 
-    # FIX IS HERE: Look up the user in Canvas
-    canvas_user = canvas.get_user_by_details(details)
+    # Delegate the heavy lifting to canvas_utils
+    canvas_user = canvas.get_or_create_canvas_user(base_details)
+
     if canvas_user and hasattr(canvas_user, 'id'):
-        details['canvas_user_id'] = canvas_user.id
-        return details
+        base_details['canvas_user_id'] = canvas_user.id
+        return base_details
     else:
-        print(f"ERROR: Could not find user in Canvas with details: {details}")
-        # Optionally, create the user here if they don't exist
-        # new_user = canvas.create_user(details)
-        # if new_user:
-        #     details['canvas_user_id'] = new_user.id
-        #     return details
+        print(f"FATAL: Could not get or create Canvas user for: {base_details}. Aborting process for this student.")
         return None
 
 
