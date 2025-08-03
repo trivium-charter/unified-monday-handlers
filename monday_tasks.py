@@ -5,62 +5,82 @@ from celery_app import celery_app
 import monday_utils as monday
 import canvas_utils as canvas
 
-# --- Environment Variable Loading ---
+# --- Environment Variable Loading (Standardized Names) ---
 PLP_BOARD_ID = os.environ.get("PLP_BOARD_ID")
+ALL_COURSES_BOARD_ID = os.environ.get("ALL_COURSES_BOARD_ID")
+CANVAS_BOARD_ID = os.environ.get("CANVAS_BOARD_ID")
+MASTER_STUDENT_BOARD_ID = os.environ.get("MASTER_STUDENT_BOARD_ID")
+HS_ROSTER_BOARD_ID = os.environ.get("HS_ROSTER_BOARD_ID")
+IEP_AP_BOARD_ID = os.environ.get("IEP_AP_BOARD_ID")
+SPED_STUDENTS_BOARD_ID = os.environ.get("SPED_STUDENTS_BOARD_ID")
+CANVAS_TERM_ID = os.environ.get("CANVAS_TERM_ID")
+
 PLP_CANVAS_SYNC_COLUMN_ID = os.environ.get("PLP_CANVAS_SYNC_COLUMN_ID")
-PLP_CANVAS_SYNC_STATUS_VALUE = os.environ.get("PLP_CANVAS_SYNC_STATUS_VALUE", "Done")
 PLP_ALL_CLASSES_CONNECT_COLUMNS_STR = os.environ.get("PLP_ALL_CLASSES_CONNECT_COLUMNS_STR", "")
 PLP_TO_MASTER_STUDENT_CONNECT_COLUMN = os.environ.get("PLP_TO_MASTER_STUDENT_CONNECT_COLUMN")
-PLP_M_SERIES_LABELS_COLUMN = os.environ.get("PLP_M_SERIES_LABELS_COLUMN")
-MASTER_STUDENT_BOARD_ID = os.environ.get("MASTER_STUDENT_BOARD_ID")
+PLP_TO_HS_ROSTER_CONNECT_COLUMN = os.environ.get("PLP_TO_HS_ROSTER_CONNECT_COLUMN")
 MASTER_STUDENT_SSID_COLUMN = os.environ.get("MASTER_STUDENT_SSID_COLUMN")
 MASTER_STUDENT_EMAIL_COLUMN = os.environ.get("MASTER_STUDENT_EMAIL_COLUMN")
-ALL_COURSES_BOARD_ID = os.environ.get("ALL_COURSES_BOARD_ID")
-ALL_CLASSES_CANVAS_CONNECT_COLUMN = os.environ.get("ALL_CLASSES_CANVAS_CONNECT_COLUMN")
-ALL_CLASSES_AG_GRAD_COLUMN = os.environ.get("ALL_CLASSES_AG_GRAD_COLUMN")
-HS_ROSTER_BOARD_ID = os.environ.get("HS_ROSTER_BOARD_ID")
+# Standardized Name:
+ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID = os.environ.get("ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID")
+# Standardized Name:
+CANVAS_COURSE_ID_COLUMN_ID = os.environ.get("CANVAS_COURSE_ID_COLUMN_ID")
+CANVAS_COURSES_TEACHER_COLUMN_ID = os.environ.get("CANVAS_COURSES_TEACHER_COLUMN_ID")
 HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID = os.environ.get("HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID")
 HS_ROSTER_SUBITEM_DROPDOWN_COLUMN_ID = os.environ.get("HS_ROSTER_SUBITEM_DROPDOWN_COLUMN_ID")
 HS_ROSTER_MAIN_ITEM_to_PLP_CONNECT_COLUMN_ID = os.environ.get("HS_ROSTER_MAIN_ITEM_to_PLP_CONNECT_COLUMN_ID")
-IEP_AP_BOARD_ID = os.environ.get("IEP_AP_BOARD_ID")
-SPED_STUDENTS_BOARD_ID = os.environ.get("SPED_STUDENTS_BOARD_ID")
-SPED_TO_IEPAP_CONNECT_COLUMN_ID = os.environ.get("SPED_TO_IEPAP_CONNECT_COLUMN_ID")
-CANVAS_BOARD_ID = os.environ.get("CANVAS_BOARD_ID")
-CANVAS_COURSE_ID_COLUMN = os.environ.get("CANVAS_COURSE_ID_COLUMN")
-CANVAS_TERM_ID = os.environ.get("CANVAS_TERM_ID")
-CANVAS_COURSES_TEACHER_COLUMN_ID = os.environ.get("CANVAS_COURSES_TEACHER_COLUMN_ID")
-PLP_TO_HS_ROSTER_CONNECT_COLUMN = os.environ.get("PLP_TO_HS_ROSTER_CONNECT_COLUMN")
 HS_ROSTER_SUBITEM_INTEGRITY_STATUS_COLUMN_ID = os.environ.get("HS_ROSTER_SUBITEM_INTEGRITY_STATUS_COLUMN_ID")
-HS_ROSTER_SUBITEM_MISMATCH_STATUS_VALUE = os.environ.get("HS_ROSTER_SUBITEM_MISMATCH_STATUS_VALUE", "⚠️ PLP Mismatch")
-try:
-    CANVAS_BOARD_COURSE_NAME_COLUMN_ID = os.environ.get("CANVAS_BOARD_COURSE_NAME_COLUMN_ID")
-    PLP_CATEGORY_TO_CONNECT_COLUMN_MAP = json.loads(os.environ.get("PLP_CATEGORY_TO_CONNECT_COLUMN_MAP", "{}"))
-    MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS = json.loads(os.environ.get("MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS", "{}"))
-    SPED_STUDENTS_PEOPLE_COLUMN_MAPPING = json.loads(os.environ.get("SPED_STUDENTS_PEOPLE_COLUMN_MAPPING", "{}"))
-    LOG_CONFIGS = json.loads(os.environ.get("MONDAY_LOGGING_CONFIGS", "[]"))
-except (json.JSONDecodeError, TypeError):
-    CANVAS_BOARD_COURSE_NAME_COLUMN_ID = None
-    PLP_CATEGORY_TO_CONNECT_COLUMN_MAP = {}
-    MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS = {}
-    SPED_STUDENTS_PEOPLE_COLUMN_MAPPING = {}
-    LOG_CONFIGS = []
+SPED_TO_IEPAP_CONNECT_COLUMN_ID = os.environ.get("SPED_TO_IEPAP_CONNECT_COLUMN_ID")
 
+HS_ROSTER_SUBITEM_MISMATCH_STATUS_VALUE = os.environ.get("HS_ROSTER_SUBITEM_MISMATCH_STATUS_VALUE", "⚠️ PLP Mismatch")
+PLP_CANVAS_SYNC_STATUS_VALUE = os.environ.get("PLP_CANVAS_SYNC_STATUS_VALUE", "Done")
+
+try:
+    PLP_CATEGORY_TO_CONNECT_COLUMN_MAP = json.loads(os.environ.get("PLP_CATEGORY_TO_CONNECT_COLUMN_MAP", "{}"))
+    # ... other JSON loads ...
+except (json.JSONDecodeError, TypeError):
+    PLP_CATEGORY_TO_CONNECT_COLUMN_MAP = {}
+    # ... other JSON error handling ...
+
+# FIXED: This function now gets the Canvas User ID
 def get_student_details_from_plp(plp_item_id):
-    # This function is unchanged
+    """
+    Gets base student details from Monday.com and enriches them with the Canvas User ID.
+    Returns a dictionary with name, ssid, email, AND canvas_user_id, or None if anything fails.
+    """
     master_student_ids = monday.get_linked_items_from_board_relation(plp_item_id, PLP_BOARD_ID, PLP_TO_MASTER_STUDENT_CONNECT_COLUMN)
     if not master_student_ids: return None
+
     master_student_item_id = list(master_student_ids)[0]
+    
     student_name = monday.get_item_name(master_student_item_id, MASTER_STUDENT_BOARD_ID)
     ssid_val = monday.get_column_value(master_student_item_id, MASTER_STUDENT_BOARD_ID, MASTER_STUDENT_SSID_COLUMN)
     email_val = monday.get_column_value(master_student_item_id, MASTER_STUDENT_BOARD_ID, MASTER_STUDENT_EMAIL_COLUMN)
-    ssid = ssid_val.get('text', '') if ssid_val else ''
-    email = email_val.get('text', '') if email_val else ''
-    if not all([student_name, ssid, email]): return None
-    return {'name': student_name, 'ssid': ssid, 'email': email}
+    
+    ssid = ssid_val.get('text') if ssid_val else None
+    email = email_val.get('text') if email_val else None
 
-# In monday_tasks.py (or wherever manage_class_enrollment lives)
+    if not all([student_name, ssid, email]): 
+        print(f"ERROR: Missing name, SSID, or email for master student item {master_student_item_id}")
+        return None
 
-# This function now takes the 'all_courses_item_id' and does the lookup itself.
+    details = {'name': student_name, 'ssid': ssid, 'email': email}
+
+    # FIX IS HERE: Look up the user in Canvas
+    canvas_user = canvas.get_user_by_details(details)
+    if canvas_user and hasattr(canvas_user, 'id'):
+        details['canvas_user_id'] = canvas_user.id
+        return details
+    else:
+        print(f"ERROR: Could not find user in Canvas with details: {details}")
+        # Optionally, create the user here if they don't exist
+        # new_user = canvas.create_user(details)
+        # if new_user:
+        #     details['canvas_user_id'] = new_user.id
+        #     return details
+        return None
+
+
 def manage_class_enrollment(action, plp_item_id, all_courses_item_id, student_details, user_id):
     """
     Manages a student's enrollment in a Canvas course.
@@ -68,73 +88,42 @@ def manage_class_enrollment(action, plp_item_id, all_courses_item_id, student_de
     - If the course doesn't exist in Canvas, it will CREATE it.
     - Then, it will enroll or unenroll the student.
     """
-    
-    # === Step 1: Get the Canvas API ID. This is where the "get or create" logic now lives. ===
-    
-    # First, try to look up the existing ID.
     canvas_api_id = monday.get_canvas_api_id_from_all_courses_item(all_courses_item_id)
     
-    # If the lookup fails, it means the course needs to be created in Canvas.
     if not canvas_api_id:
-        print(f"INFO: No Canvas API ID found for All Courses item {all_courses_item_id}. Attempting to create course in Canvas.")
-        
-        # Get the name from the "All Courses" board to use for the new Canvas course.
+        print(f"INFO: No Canvas ID found for All Courses item {all_courses_item_id}. Creating course in Canvas.")
         course_name = monday.get_item_name(int(all_courses_item_id), ALL_COURSES_BOARD_ID)
-        
         if not course_name:
-            print(f"ERROR: Cannot create Canvas course because name for item {all_courses_item_id} could not be found. Skipping enrollment.")
+            print(f"ERROR: Cannot create Canvas course, name for item {all_courses_item_id} not found.")
             return False
             
-        # Call the Canvas utility to create the course.
-        # This function should return the new numeric Canvas course ID.
-        new_canvas_course = canvas.create_course(course_name)
-        
+        new_canvas_course = canvas.create_course(course_name) # Assuming you have this function in canvas_utils
         if not new_canvas_course or 'id' not in new_canvas_course:
-            print(f"ERROR: Failed to create course '{course_name}' in Canvas. Skipping enrollment.")
+            print(f"ERROR: Failed to create course '{course_name}' in Canvas.")
             return False
             
         canvas_api_id = new_canvas_course['id']
         print(f"SUCCESS: Created new Canvas course '{course_name}' with ID: {canvas_api_id}")
         
-        # IMPORTANT: Now, we must update the Canvas Board item with this new ID.
-        # This links our system together for future lookups.
-        
-        # Find the linked item on the Canvas Board
         linked_canvas_ids = monday.get_linked_items_from_board_relation(all_courses_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
         if linked_canvas_ids:
             canvas_item_id = int(list(linked_canvas_ids)[0])
-            # Update the 'Canvas Course ID' column on that item
-            monday.change_column_value_generic(
-                board_id=int(CANVAS_BOARD_ID),
-                item_id=canvas_item_id,
-                column_id=CANVAS_COURSE_ID_COLUMN_ID,
-                value=str(canvas_api_id)
-            )
+            monday.change_column_value_generic(int(CANVAS_BOARD_ID), canvas_item_id, CANVAS_COURSE_ID_COLUMN_ID, str(canvas_api_id))
             print(f"SUCCESS: Updated item {canvas_item_id} on Canvas Board with new API ID {canvas_api_id}.")
 
-    # If at this point we still don't have an ID, we cannot proceed.
     if not canvas_api_id:
-        print(f"FATAL ERROR: Could not get or create a Canvas API ID for item {all_courses_item_id}. Aborting.")
+        print(f"FATAL ERROR: Could not get or create a Canvas API ID for item {all_courses_item_id}.")
         return False
         
-    # === Step 2: Now that we are GUARANTEED to have a canvas_api_id, proceed with enrollment ===
     canvas.enroll_user_in_course(canvas_api_id, student_details['canvas_user_id'], action)
     
-    # (Optional but recommended) Create a log subitem on the PLP board
     course_name_for_log = monday.get_item_name(int(all_courses_item_id), ALL_COURSES_BOARD_ID)
     changer_name = monday.get_user_name(user_id) or "Automation"
     log_message = f"User {changer_name} triggered '{action}' for course '{course_name_for_log}' on {datetime.now().strftime('%Y-%m-%d')}"
-    monday.create_subitem_with_columns(plp_item_id, log_message, {}) # No columns needed, just a log entry
+    monday.create_subitem(plp_item_id, log_message)
 
     return True
 
-
-**Step 2: Use the Corrected `process_canvas_delta_sync_from_course_change`**
-
-This main task is now correct. Its logic is simple because the complex "get or create" work is properly delegated to `manage_class_enrollment`.
-
-```python
-# In monday_tasks.py
 
 @celery_app.task
 def process_canvas_delta_sync_from_course_change(event_data, user_id):
@@ -148,21 +137,15 @@ def process_canvas_delta_sync_from_course_change(event_data, user_id):
         
     current_ids = monday.get_linked_ids_from_connect_column_value(event_data.get('value'))
     previous_ids = monday.get_linked_ids_from_connect_column_value(event_data.get('previousValue'))
-    
     added_ids = current_ids - previous_ids
     removed_ids = previous_ids - current_ids
-    
     if not added_ids and not removed_ids: return True
 
-    # Part 1: DELEGATE enrollment/unenrollment to our robust function.
-    # It now handles the "get or create" logic internally.
     for course_id in added_ids:
         manage_class_enrollment("enroll", plp_item_id, int(course_id), student_details, user_id)
-    
     for course_id in removed_ids:
         manage_class_enrollment("unenroll", plp_item_id, int(course_id), student_details, user_id)
 
-    # Part 2: HS Roster Alerting remains the same. This logic is correct.
     hs_roster_linked_ids = monday.get_linked_items_from_board_relation(plp_item_id, int(PLP_BOARD_ID), PLP_TO_HS_ROSTER_CONNECT_COLUMN)
     if not hs_roster_linked_ids: return True
 
@@ -190,118 +173,30 @@ def process_canvas_delta_sync_from_course_change(event_data, user_id):
                 update_text = f"**PROCESS ALERT:**\nThis roster item may be out of sync. \"{course_name}\" was **removed** from the PLP by {changer_user_name}."
                 monday.change_column_value_generic(hs_roster_parent_item_id, target_subitem_id, HS_ROSTER_SUBITEM_INTEGRITY_STATUS_COLUMN_ID, HS_ROSTER_SUBITEM_MISMATCH_STATUS_VALUE)
                 monday.create_update(target_subitem_id, update_text)
-
     return True
 
 @celery_app.task
 def process_canvas_full_sync_from_status(event_data):
-    # This function is unchanged
     plp_item_id = event_data.get('pulseId')
     user_id = event_data.get('userId')
     status_label = event_data.get('value', {}).get('label', {}).get('text', '')
     if status_label != PLP_CANVAS_SYNC_STATUS_VALUE: return True
+    
     student_details = get_student_details_from_plp(plp_item_id)
-    if not student_details: return False
+    if not student_details or not student_details.get('canvas_user_id'): 
+        print(f"ERROR: Could not get student details or Canvas User ID for full sync of PLP {plp_item_id}.")
+        return False
+        
     course_column_ids = [c.strip() for c in PLP_ALL_CLASSES_CONNECT_COLUMNS_STR.split(',') if c.strip() and c.strip() != PLP_CANVAS_SYNC_COLUMN_ID]
     all_class_ids = set()
     for col_id in course_column_ids:
         class_link_data = monday.get_column_value(plp_item_id, PLP_BOARD_ID, col_id)
         if class_link_data and class_link_data.get('value'):
             all_class_ids.update(monday.get_linked_ids_from_connect_column_value(class_link_data.get('value')))
+    
+    # FIXED: This loop now calls manage_class_enrollment correctly.
     for class_item_id in all_class_ids:
-        manage_class_enrollment("enroll", plp_item_id, class_item_id, student_details, user_id)
-    return True
-
-@celery_app.task
-
-def process_canvas_delta_sync_from_course_change(event_data, user_id):
-    # === Part 1: Canvas Sync Logic (Unchanged) ===
-    plp_item_id = event_data.get('pulseId')
-    trigger_column_id = event_data.get('columnId')
-    
-    student_details = get_student_details_from_plp(plp_item_id)
-    if not student_details: return False
-        
-    current_ids = monday.get_linked_ids_from_connect_column_value(event_data.get('value'))
-    previous_ids = monday.get_linked_ids_from_connect_column_value(event_data.get('previousValue'))
-    
-    added_ids = current_ids - previous_ids
-    removed_ids = previous_ids - current_ids
-    
-    if not added_ids and not removed_ids: return True
-
-    for class_item_id in added_ids: manage_class_enrollment("enroll", plp_item_id, class_item_id, student_details, user_id)
-    for class_item_id in removed_ids: manage_class_enrollment("unenroll", plp_item_id, class_item_id, student_details, user_id)
-
-    # === Part 2: HS Roster Alerting Logic (Now Split) ===
-    print("INFO: Checking if HS Roster alerting is needed.")
-
-    if not PLP_TO_HS_ROSTER_CONNECT_COLUMN: return True
-
-    hs_roster_linked_ids = monday.get_linked_items_from_board_relation(plp_item_id, PLP_BOARD_ID, PLP_TO_HS_ROSTER_CONNECT_COLUMN)
-    if not hs_roster_linked_ids: return True
-
-    hs_roster_parent_item_id = int(list(hs_roster_linked_ids)[0])
-    
-    try:
-        CONNECT_COLUMN_TO_CATEGORY_MAP = {v: k for k, v in PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.items()}
-        category_name = CONNECT_COLUMN_TO_CATEGORY_MAP.get(trigger_column_id)
-        if not category_name:
-            print(f"ERROR: No category found for column {trigger_column_id}.")
-            return False
-    except Exception as e:
-        print(f"ERROR: Could not reverse category map: {e}")
-        return False
-
-    changer_user_name = monday.get_user_name(user_id) or "an Automation"
-
-    # --- LOGIC FOR ADDED COURSES ---
-    for course_id in added_ids:
-        course_name = monday.get_item_name(course_id) or "Unknown Course"
-        subitem_name = f"⚠️ Added from PLP: {course_name}"
-        column_values = {
-            HS_ROSTER_SUBITEM_DROPDOWN_COLUMN_ID: category_name,
-            HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID: {"item_ids": [int(course_id)]}
-        }
-        print(f"INFO: Creating 'Added from PLP' subitem for course '{course_name}'.")
-        monday.create_subitem_with_columns(hs_roster_parent_item_id, subitem_name, column_values)
-
-    # --- LOGIC FOR REMOVED COURSES ---
-    if not HS_ROSTER_SUBITEM_INTEGRITY_STATUS_COLUMN_ID:
-        print("INFO: Status column for 'removed' alerts not configured. Skipping.")
-        return True
-        
-    for course_id in removed_ids:
-        # 1. Find the subitem that contains this removed course
-        target_subitem_id = monday.find_subitem_by_category_and_linked_course(
-            hs_roster_parent_item_id,
-            HS_ROSTER_SUBITEM_DROPDOWN_COLUMN_ID, category_name,
-            HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID, int(course_id)
-        )
-        
-        if target_subitem_id:
-            # 2. If found, modify it by updating the Status and posting a note.
-            print(f"INFO: Found subitem {target_subitem_id} containing removed course. Flagging it.")
-            
-            # Change the status
-            monday.change_column_value_generic(
-                board_id=int(HS_ROSTER_PARENT_BOARD_ID),
-                item_id=int(target_subitem_id),
-                column_id=HS_ROSTER_SUBITEM_INTEGRITY_STATUS_COLUMN_ID,
-                value=HS_ROSTER_SUBITEM_MISMATCH_STATUS_VALUE
-            )
-            
-            # Post a detailed update
-            course_name = monday.get_item_name(course_id) or "A course"
-            update_text = (
-                f"**PROCESS ALERT:**\n"
-                f"{course_name} was **removed** from the PLP by {changer_user_name}, but remains on this roster. "
-                f"This subitem is now out of sync."
-            )
-            monday.create_update(target_subitem_id, update_text)
-        else:
-            print(f"WARNING: A course ({course_id}) was removed from the PLP, but no corresponding subitem was found on the HS Roster to flag.")
-
+        manage_class_enrollment("enroll", plp_item_id, int(class_item_id), student_details, user_id)
     return True
     
 @celery_app.task
