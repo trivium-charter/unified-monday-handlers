@@ -82,6 +82,32 @@ def get_user_name(user_id):
     print(f"DEBUG: Could not fetch name for user {user_id}. Result: {result}")
     return None
 
+# In monday_utils.py
+
+def get_user_details(user_id):
+    """Fetches a user's name and email from Monday.com given their user ID."""
+    if user_id is None:
+        return None
+
+    query = f"""
+    query {{
+      users (ids: [{user_id}]) {{
+        id
+        name
+        email
+      }}
+    }}
+    """
+    print(f"DEBUG: Attempting to fetch details for user '{user_id}'")
+    result = execute_monday_graphql(query)
+
+    if result and 'data' in result and result['data'].get('users'):
+        user_data = result['data']['users'][0]
+        print(f"DEBUG: Fetched user {user_id} details: Name='{user_data.get('name')}', Email='{user_data.get('email')}'")
+        return {'name': user_data.get('name'), 'email': user_data.get('email')}
+        
+    print(f"DEBUG: Could not fetch details for user {user_id}. Result: {result}")
+    return None
 def get_column_value(item_id, board_id, column_id):
     """
     Fetches the column value and text for a given column.
