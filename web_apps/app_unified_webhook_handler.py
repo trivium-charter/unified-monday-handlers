@@ -59,7 +59,7 @@ def monday_unified_webhooks():
                 return jsonify({"status": "success", "message": "Canvas Full Sync task queued."}), 202
             else:
                 print("INFO: Dispatching to Canvas DELTA Sync task from course change.")
-                process_canvas_delta_sync_from_course_change.delay(event)
+                process_canvas_delta_sync_from_course_change.delay(event, LOG_CONFIGS)
                 return jsonify({"status": "success", "message": "Canvas Delta Sync task queued."}), 202
 
         # 2. PLP Course Sync Check (HS Roster to PLP)
