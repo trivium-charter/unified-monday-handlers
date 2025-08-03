@@ -239,13 +239,14 @@ def enroll_student_in_section(course_id, user_id, section_id):
     try:
         course = canvas_api.get_course(course_id)
         user = canvas_api.get_user(user_id)
-        return course.enroll_user(user, 'StudentEnrollment', enrollment={'enrollment_state': 'active', 'course_section_id': section_id, 'notify': False})
+        enrollment = course.enroll_user(user, 'StudentEnrollment', enrollment={'enrollment_state': 'active', 'course_section_id': section_id, 'notify': False})
+        return "Success" if enrollment else "Failed"
     except CanvasException as e:
-        return "Already Enrolled" if "already" in str(e).lower() else None
+        return "Already Enrolled" if "already" in str(e).lower() else "Failed"
 
 def enroll_or_create_and_enroll(course_id, section_id, student_details):
     canvas_api = initialize_canvas_api()
-    if not canvas_api: return None
+    if not canvas_api: return "Failed"
     user = None
     try: user = canvas_api.get_user(student_details['email'], 'login_id')
     except ResourceDoesNotExist:
@@ -253,7 +254,7 @@ def enroll_or_create_and_enroll(course_id, section_id, student_details):
             try: user = canvas_api.get_user(student_details['ssid'], 'sis_user_id')
             except ResourceDoesNotExist: pass
     if not user: user = create_canvas_user(student_details)
-    return enroll_student_in_section(course_id, user.id, section_id) if user else None
+    return enroll_student_in_section(course_id, user.id, section_id) if user else "Failed: User not found/created"
 
 def unenroll_student_from_course(course_id, student_details):
     canvas_api = initialize_canvas_api()
@@ -354,7 +355,6 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details)
             new_course = create_canvas_course(class_name, CANVAS_TERM_ID)
             if not new_course: return
             canvas_course_id = new_course.id
-            # --- FINAL FIX: Update existing Canvas item, don't create a new one ---
             if canvas_item_id:
                 change_column_value_generic(int(CANVAS_BOARD_ID), canvas_item_id, CANVAS_COURSE_ID_COLUMN, str(canvas_course_id))
             
