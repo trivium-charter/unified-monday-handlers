@@ -165,6 +165,8 @@ def enroll_or_create_and_enroll(course_id, section_id, student_details):
 # In canvas_utils.py
 
 
+# In canvas_utils.py
+
 def unenroll_student_from_course(course_id, student_details):
     """Deactivates active enrollments or deletes pending invitations for a student."""
     canvas = initialize_canvas_api()
