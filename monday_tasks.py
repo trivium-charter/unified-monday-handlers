@@ -110,7 +110,7 @@ def manage_class_enrollment(action, plp_item_id, all_courses_item_id, student_de
         # 5. Proceed with enrollment using the correct and verified data.
         m_series_val = monday.get_column_value(plp_item_id, PLP_BOARD_ID, PLP_M_SERIES_LABELS_COLUMN)
         m_series_text = (m_series_val.get('text') or '') if m_series_val else ''
-        ag_grad_val = monday.get_column_value(all_courses_item_id, ALL_COURSES_BOARD_ID, ALL_CLASSES_AG_ GRAD_COLUMN)
+        ag_grad_val = monday.get_column_value(all_courses_item_id, ALL_COURSES_BOARD_ID, ALL_CLASSES_AG_GRAD_COLUMN)
         ag_grad_text = (ag_grad_val.get('text') or '') if ag_grad_val else ''
 
         sections = set()
