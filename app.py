@@ -47,7 +47,6 @@ SPED_STUDENTS_BOARD_ID = os.environ.get("SPED_STUDENTS_BOARD_ID")
 SPED_TO_IEPAP_CONNECT_COLUMN_ID = os.environ.get("SPED_TO_IEPAP_CONNECT_COLUMN_ID")
 
 CANVAS_BOARD_ID = os.environ.get("CANVAS_BOARD_ID")
-# --- CORRECTED VARIABLE NAME ---
 CANVAS_COURSE_ID_COLUMN_ID = os.environ.get("CANVAS_COURSE_ID_COLUMN_ID")
 
 CANVAS_TERM_ID = os.environ.get("CANVAS_TERM_ID")
@@ -348,7 +347,6 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details)
     canvas_item_id = list(linked_canvas_item_ids)[0] if linked_canvas_item_ids else None
     canvas_course_id = ''
     if canvas_item_id:
-        # --- CORRECTED to use the right environment variable ---
         canvas_course_id_val = get_column_value(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_COURSE_ID_COLUMN_ID)
         canvas_course_id = canvas_course_id_val.get('text', '') if canvas_course_id_val else ''
 
