@@ -62,6 +62,8 @@ def update_user_ssid(user, new_ssid):
 
 # In canvas_utils.py
 
+# In canvas_utils.py
+
 def create_canvas_course(course_name, term_id):
     """Creates a new course in a specific sub-account and uses a template course."""
     canvas = initialize_canvas_api()
