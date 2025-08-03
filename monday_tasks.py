@@ -55,26 +55,27 @@ def get_student_details_from_plp(plp_item_id):
     if not all([student_name, ssid, email]): return None
     return {'name': student_name, 'ssid': ssid, 'email': email}
 
-def manage_class_enrollment(action, plp_item_id, all_courses_item_id, student_details):
-    linked_canvas_item_ids = monday.get_linked_items_from_board_relation(
-        all_courses_item_id, ALL_COURSES_BOARD_ID, ALL_CLASSES_CANVAS_CONNECT_COLUMN
-    )
+def manage_class_enrollment(action, plp_item_id, all_courses_item_id, student_details, user_id):
+    current_date = datetime.now().strftime('%Y-%m-%d')
+    changer_user_name = monday.get_user_name(user_id) or "automation"
+    user_log_text = f" on {current_date} by {changer_user_name}"
+
+    linked_canvas_item_ids = monday.get_linked_items_from_board_relation(all_courses_item_id, ALL_COURSES_BOARD_ID, ALL_CLASSES_CANVAS_CONNECT_COLUMN)
     canvas_source_item_id = list(linked_canvas_item_ids)[0] if linked_canvas_item_ids else None
     if not canvas_source_item_id:
         monday.create_update(plp_item_id, f"Could not enroll in course (item {all_courses_item_id}): It is not properly linked to the Canvas source board.")
         return
-    course_name = ""
-    name_column_data = monday.get_column_value(canvas_source_item_id, CANVAS_BOARD_ID, ALL_COURSES_NAME_COLUMN_ID)
-    if name_column_data and name_column_data.get('text'):
-        course_name = name_column_data['text']
-    if not course_name: course_name = monday.get_item_name(all_courses_item_id, ALL_COURSES_BOARD_ID)
+        
+    course_name_val = monday.get_column_value(canvas_source_item_id, CANVAS_BOARD_ID, ALL_COURSES_NAME_COLUMN_ID)
+    course_name = course_name_val.get('text') if course_name_val and course_name_val.get('text') else monday.get_item_name(all_courses_item_id, ALL_COURSES_BOARD_ID) or ""
+    
     if not course_name:
-        monday.create_update(plp_item_id, f"Could not enroll in course (item {all_courses_item_id}): Its title is missing.")
+        monday.create_update(plp_item_id, f"Could not process course (item {all_courses_item_id}): Its title is missing.")
         return
-    canvas_course_id = None
+        
     canvas_id_val = monday.get_column_value(canvas_source_item_id, CANVAS_BOARD_ID, CANVAS_COURSE_ID_COLUMN)
-    if canvas_id_val and canvas_id_val.get('text'):
-        canvas_course_id = canvas_id_val['text']
+    canvas_course_id = canvas_id_val.get('text') if canvas_id_val and canvas_id_val.get('text') else None
+    
     if action == "enroll":
         if not canvas_course_id:
             new_course = canvas.create_canvas_course(course_name, CANVAS_TERM_ID)
@@ -82,10 +83,8 @@ def manage_class_enrollment(action, plp_item_id, all_courses_item_id, student_de
                 monday.create_update(plp_item_id, f"Failed to enroll in '{course_name}': The Canvas API did not create the course.")
                 return 
             canvas_course_id = str(new_course.id)
-            monday.change_column_value_generic(
-                board_id=CANVAS_BOARD_ID, item_id=canvas_source_item_id,
-                column_id=CANVAS_COURSE_ID_COLUMN, value=canvas_course_id
-            )
+            monday.change_column_value_generic(board_id=CANVAS_BOARD_ID, item_id=canvas_source_item_id, column_id=CANVAS_COURSE_ID_COLUMN, value=canvas_course_id)
+        
         m_series_val = monday.get_column_value(plp_item_id, PLP_BOARD_ID, PLP_M_SERIES_LABELS_COLUMN)
         m_series_text = (m_series_val.get('text') or '') if m_series_val else ''
         ag_grad_val = monday.get_column_value(all_courses_item_id, ALL_COURSES_BOARD_ID, ALL_CLASSES_AG_GRAD_COLUMN)
@@ -95,16 +94,18 @@ def manage_class_enrollment(action, plp_item_id, all_courses_item_id, student_de
         if "Grad" in ag_grad_text: sections.add("Grad")
         if "M-Series" in m_series_text: sections.add("M-Series")
         if not sections: sections.add("All")
+        
         for section_name in sections:
             section = canvas.create_section_if_not_exists(canvas_course_id, section_name)
             if section:
                 result = canvas.enroll_or_create_and_enroll(canvas_course_id, section.id, student_details)
-                log_text = f"Enrolled in {course_name} ({section_name}): {result}"
+                log_text = f"Enrolled in {course_name} ({section_name}): {result}{user_log_text}"
                 monday.create_subitem(plp_item_id, log_text)
+                
     elif action == "unenroll":
         if canvas_course_id:
             result = canvas.unenroll_student_from_course(canvas_course_id, student_details)
-            log_text = f"Unenrolled from {course_name}: {'Success' if result else 'Failed'}"
+            log_text = f"Unenrolled from {course_name}: {'Success' if result else 'Failed'}{user_log_text}"
             monday.create_subitem(plp_item_id, log_text)
 
 @celery_app.task
