@@ -50,13 +50,32 @@ def get_student_details_from_plp(plp_item_id):
     if not all([student_name, ssid, email]): return None
     return {'name': student_name, 'ssid': ssid, 'email': email}
 
+# In monday_tasks.py
+
+# (All your other functions and environment variable loading remain the same)
+# ...
+
 def manage_class_enrollment(action, plp_item_id, class_item_id, student_details):
-    class_name = monday.get_item_name(class_item_id, ALL_COURSES_BOARD_ID)
-    if not class_name: return
+    # CORRECTED: Prioritize the specific text column for the course name
+    course_name_column_id = os.environ.get("ALL_COURSES_NAME_COLUMN_ID")
+    class_name = ""
+
+    if course_name_column_id:
+        name_column_data = monday.get_column_value(class_item_id, ALL_COURSES_BOARD_ID, course_name_column_id)
+        if name_column_data and name_column_data.get('text'):
+            class_name = name_column_data['text']
+
+    # Fallback to the item name if the specified column is empty or not set
+    if not class_name:
+        class_name = monday.get_item_name(class_item_id, ALL_COURSES_BOARD_ID)
+
+    if not class_name:
+        print(f"ERROR: Could not determine course name for item ID {class_item_id}. Aborting.")
+        return
 
     linked_canvas_item_ids = monday.get_linked_items_from_board_relation(class_item_id, ALL_COURSES_BOARD_ID, ALL_CLASSES_CANVAS_CONNECT_COLUMN)
     canvas_item_id = list(linked_canvas_item_ids)[0] if linked_canvas_item_ids else None
-    
+
     canvas_course_id = None
     if canvas_item_id:
         canvas_course_id_val = monday.get_column_value(canvas_item_id, CANVAS_BOARD_ID, CANVAS_COURSE_ID_COLUMN)
@@ -77,7 +96,7 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details)
         m_series_text = (m_series_val.get('text') or '') if m_series_val else ''
         ag_grad_val = monday.get_column_value(class_item_id, ALL_COURSES_BOARD_ID, ALL_CLASSES_AG_GRAD_COLUMN)
         ag_grad_text = (ag_grad_val.get('text') or '') if ag_grad_val else ''
-        
+
         sections = set()
         if "AG" in ag_grad_text: sections.add("A-G")
         if "Grad" in ag_grad_text: sections.add("Grad")
@@ -85,7 +104,7 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details)
 
         if not sections:
             sections.add("All")
-            
+
         for section_name in sections:
             section = canvas.create_section_if_not_exists(canvas_course_id, section_name)
             if section:
