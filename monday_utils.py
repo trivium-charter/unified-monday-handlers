@@ -528,14 +528,18 @@ def get_linked_items_from_board_relation(item_id, board_id, connect_column_id):
 
 def find_subitem_by_column_value(parent_item_id, target_column_id, target_text_value):
     """
-    Finds a subitem ID under a parent item by matching a text value in a specific column.
-    This is useful for finding a categorized subitem (e.g., where 'Category' dropdown is 'Math').
+    Finds a subitem's ID and its board_id under a parent item by matching a 
+    text value in a specific column.
+    Returns a dictionary like {'id': 12345, 'board_id': 67890} or None if not found.
     """
     query = f"""
     query {{
       items (ids: [{parent_item_id}]) {{
         subitems {{
           id
+          board {{
+            id
+          }}
           column_values (ids: ["{target_column_id}"]) {{
             id
             text
@@ -552,10 +556,12 @@ def find_subitem_by_column_value(parent_item_id, target_column_id, target_text_v
         if parent_item.get('subitems'):
             for subitem in parent_item['subitems']:
                 for col_val in subitem['column_values']:
-                    if col_val.get('id') == target_column_id and col_val.get('text').lower() == target_text_value.lower():
-                        subitem_id = subitem.get('id')
-                        print(f"DEBUG: Found matching subitem with ID: {subitem_id}")
-                        return subitem_id
+                    if col_val.get('id') == target_column_id and col_val.get('text', '').lower() == target_text_value.lower():
+                        subitem_id = int(subitem.get('id'))
+                        subitem_board_id = int(subitem.get('board', {}).get('id'))
+                        if subitem_id and subitem_board_id:
+                            print(f"DEBUG: Found matching subitem with ID: {subitem_id} on Board ID: {subitem_board_id}")
+                            return {'id': subitem_id, 'board_id': subitem_board_id}
     
     print(f"WARNING: No subitem found under parent {parent_item_id} matching the criteria.")
     return None
