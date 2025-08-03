@@ -205,7 +205,7 @@ def process_master_student_person_sync_webhook(event_data):
         print(f"WARNING: No mapping found for column ID {trigger_column_id}. Aborting.")
         return False
         
-    column_friendly_name = column_config.get("friendly_name", "Staff")
+    column_friendly_name = column_config.get("name", "Staff")
 
     # --- ROBUST CHANGE DETECTION ---
     current_persons = current_value_raw.get('personsAndTeams', []) if current_value_raw else []
