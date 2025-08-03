@@ -1,5 +1,5 @@
 # ==============================================================================
-# FINAL CONSOLIDATED APPLICATION (WITH DETAILED DEBUG LOGGING)
+# FINAL CONSOLIDATED APPLICATION (All Fixes Included)
 # ==============================================================================
 import os
 import json
@@ -10,8 +10,6 @@ from celery import Celery
 from canvasapi import Canvas
 from canvasapi.exceptions import CanvasException, Conflict, ResourceDoesNotExist
 
-# (All configuration and most utility functions remain the same)
-# ...
 # ==============================================================================
 # CENTRALIZED CONFIGURATION
 # ==============================================================================
@@ -35,7 +33,8 @@ MASTER_STUDENT_EMAIL_COLUMN = os.environ.get("MASTER_STUDENT_EMAIL_COLUMN")
 
 ALL_COURSES_BOARD_ID = os.environ.get("ALL_COURSES_BOARD_ID")
 ALL_COURSES_NAME_COLUMN_ID = os.environ.get("ALL_COURSES_NAME_COLUMN_ID")
-ALL_CLASSES_CANVAS_CONNECT_COLUMN = os.environ.get("ALL_CLASSES_CANVAS_CONNECT_COLUMN")
+# --- CORRECTED VARIABLE NAME ---
+ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID = os.environ.get("ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID")
 ALL_CLASSES_CANVAS_ID_COLUMN = os.environ.get("ALL_CLASSES_CANVAS_ID_COLUMN")
 ALL_CLASSES_AG_GRAD_COLUMN = os.environ.get("ALL_CLASSES_AG_GRAD_COLUMN")
 
@@ -100,6 +99,7 @@ def get_user_name(user_id):
     return None
 
 def get_column_value(item_id, board_id, column_id):
+    if not column_id: return None
     query = f"query {{ boards(ids: {board_id}) {{ items_page(query_params: {{ids: [{item_id}]}}) {{ items {{ column_values(ids: [\"{column_id}\"]) {{ id value text }} }} }} }} }}"
     result = execute_monday_graphql(query)
     if result and 'data' in result and result['data'].get('boards'):
@@ -316,91 +316,50 @@ def process_general_webhook(event_data, config_rule):
             name = get_item_name(link_id, linked_board_id)
             if name: create_subitem(item_id, f"Removed {prefix} '{name}' on {date} by {changer}", subitem_cols)
 
-# --- START OF DEBUG LOGGING BLOCK ---
 def get_student_details_from_plp(plp_item_id):
-    print(f"DEBUG: Entered get_student_details_from_plp for PLP item ID: {plp_item_id}")
     master_student_ids = get_linked_items_from_board_relation(plp_item_id, int(PLP_BOARD_ID), PLP_TO_MASTER_STUDENT_CONNECT_COLUMN)
-    
-    if not master_student_ids:
-        print("DEBUG: No linked master student ID found. Exiting.")
-        return None
-    print(f"DEBUG: Found linked master student IDs: {master_student_ids}")
-    
+    if not master_student_ids: return None
     master_student_id = list(master_student_ids)[0]
     student_name = get_item_name(master_student_id, int(MASTER_STUDENT_BOARD_ID))
-    ssid_val = get_column_value(master_student_id, int(MASTER_STUDENT_BOARD_ID), MASTER_STUDENT_SSID_COLUMN)
-    email_val = get_column_value(master_student_id, int(MASTER_STUDENT_BOARD_ID), MASTER_STUDENT_EMAIL_COLUMN)
-    
-    ssid = ssid_val.get('text', '') if ssid_val else ''
-    email = email_val.get('text', '') if email_val else ''
-
-    print(f"DEBUG: Fetched Details - Name: '{student_name}', SSID: '{ssid}', Email: '{email}'")
-
-    if not all([student_name, email]):
-        print("DEBUG: Name or Email is missing. Exiting.")
-        return None
-    
-    print("DEBUG: Name and Email are valid. Proceeding.")
+    ssid = (get_column_value(master_student_id, int(MASTER_STUDENT_BOARD_ID), MASTER_STUDENT_SSID_COLUMN) or {}).get('text', '')
+    email = (get_column_value(master_student_id, int(MASTER_STUDENT_BOARD_ID), MASTER_STUDENT_EMAIL_COLUMN) or {}).get('text', '')
+    if not all([student_name, email]): return None
     return {'name': student_name, 'ssid': ssid, 'email': email}
 
 def manage_class_enrollment(action, plp_item_id, class_item_id, student_details):
-    print(f"DEBUG: Entered manage_class_enrollment for action '{action}' on class item {class_item_id}")
     class_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID))
-    print(f"DEBUG: Determined class name: '{class_name}'")
-    if not class_name:
-        print("DEBUG: Could not get class name. Exiting manage_class_enrollment.")
-        return
+    if not class_name: return
 
-    linked_canvas_item_ids = get_linked_items_from_board_relation(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_CLASSES_CANVAS_CONNECT_COLUMN)
-    canvas_item_id = list(linked_canvas_item_ids)[0] if linked_canvas_item_ids else None
-    print(f"DEBUG: Found linked Canvas board item ID: {canvas_item_id}")
+    # --- CORRECTED to use the right environment variable ---
+    linked_canvas_item_ids = get_linked_items_from_board_relation(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
     
+    canvas_item_id = list(linked_canvas_item_ids)[0] if linked_canvas_item_ids else None
     canvas_course_id = ''
     if canvas_item_id:
         canvas_course_id_val = get_column_value(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_COURSE_ID_COLUMN)
         canvas_course_id = canvas_course_id_val.get('text', '') if canvas_course_id_val else ''
-    print(f"DEBUG: Fetched Canvas Course ID from Monday.com: '{canvas_course_id}'")
 
     if action == "enroll":
         if not canvas_course_id:
-            print("DEBUG: Canvas Course ID not found. Attempting to create a new course...")
             new_course = create_canvas_course(class_name, CANVAS_TERM_ID)
-            if not new_course:
-                print("DEBUG: Failed to create new course in Canvas. Exiting.")
-                return
+            if not new_course: return
             canvas_course_id = new_course.id
-            print(f"DEBUG: New Canvas course created with ID: {canvas_course_id}")
             new_canvas_item_id = create_item(int(CANVAS_BOARD_ID), f"{class_name} - Canvas", {CANVAS_COURSE_ID_COLUMN: str(canvas_course_id)})
             if new_canvas_item_id:
-                print(f"DEBUG: Created new item on Canvas board with ID: {new_canvas_item_id}")
-                update_connect_board_column(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_CLASSES_CANVAS_CONNECT_COLUMN, new_canvas_item_id)
-                if ALL_CLASSES_CANVAS_ID_COLUMN:
-                    change_column_value_generic(int(ALL_COURSES_BOARD_ID), class_item_id, ALL_CLASSES_CANVAS_ID_COLUMN, str(canvas_course_id))
-
+                update_connect_board_column(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID, new_canvas_item_id)
+                if ALL_CLASSES_CANVAS_ID_COLUMN: change_column_value_generic(int(ALL_COURSES_BOARD_ID), class_item_id, ALL_CLASSES_CANVAS_ID_COLUMN, str(canvas_course_id))
         m_series_text = (get_column_value(plp_item_id, int(PLP_BOARD_ID), PLP_M_SERIES_LABELS_COLUMN) or {}).get('text', '')
         ag_grad_text = (get_column_value(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_CLASSES_AG_GRAD_COLUMN) or {}).get('text', '')
         sections = {"A-G" for s in ["AG"] if s in ag_grad_text} | {"Grad" for s in ["Grad"] if s in ag_grad_text} | {"M-Series" for s in ["M-series"] if s in m_series_text}
         if not sections: sections.add("All")
-        print(f"DEBUG: Determined sections for enrollment: {sections}")
-
         for section_name in sections:
             section = create_section_if_not_exists(canvas_course_id, section_name)
             if section:
-                print(f"DEBUG: Enrolling student in section {section.id} ('{section_name}')...")
                 result = enroll_or_create_and_enroll(canvas_course_id, section.id, student_details)
-                print(f"DEBUG: Enrollment result: {result}")
-                print("DEBUG: Creating 'Enrolled' subitem...")
                 create_subitem(plp_item_id, f"Enrolled in {class_name} ({section_name}): {result}")
-            else:
-                print(f"DEBUG: Could not create or find section '{section_name}'.")
-
     elif action == "unenroll" and canvas_course_id:
-        print(f"DEBUG: Unenrolling student from course {canvas_course_id}...")
         result = unenroll_student_from_course(canvas_course_id, student_details)
-        print(f"DEBUG: Unenrollment result: {result}")
-        print("DEBUG: Creating 'Unenrolled' subitem...")
         create_subitem(plp_item_id, f"Unenrolled from {class_name}: {'Success' if result else 'Failed'}")
-# --- END OF DEBUG LOGGING BLOCK ---
 
 @celery_app.task
 def process_canvas_full_sync_from_status(event_data):
@@ -417,15 +376,39 @@ def process_canvas_full_sync_from_status(event_data):
     for class_item_id in all_class_ids:
         manage_class_enrollment("enroll", plp_item_id, class_item_id, student_details)
 
+# --- CORRECTED to handle both Canvas and non-Canvas courses ---
 @celery_app.task
 def process_canvas_delta_sync_from_course_change(event_data):
     plp_item_id = event_data.get('pulseId')
+    user_id = event_data.get('userId')
     student_details = get_student_details_from_plp(plp_item_id)
     if not student_details: return
+
     current_ids = get_linked_ids_from_connect_column_value(event_data.get('value'))
     previous_ids = get_linked_ids_from_connect_column_value(event_data.get('previousValue'))
-    for class_id in (current_ids - previous_ids): manage_class_enrollment("enroll", plp_item_id, class_id, student_details)
-    for class_id in (previous_ids - current_ids): manage_class_enrollment("unenroll", plp_item_id, class_id, student_details)
+    added_ids = current_ids - previous_ids
+    removed_ids = previous_ids - current_ids
+
+    date = datetime.now().strftime('%Y-%m-%d')
+    changer = get_user_name(user_id) or "automation"
+
+    for class_id in added_ids:
+        is_canvas_course = get_linked_items_from_board_relation(class_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
+        if is_canvas_course:
+            manage_class_enrollment("enroll", plp_item_id, class_id, student_details)
+        else:
+            class_name = get_item_name(class_id, int(ALL_COURSES_BOARD_ID))
+            if class_name:
+                create_subitem(plp_item_id, f"Added non-Canvas course '{class_name}' on {date} by {changer}")
+
+    for class_id in removed_ids:
+        is_canvas_course = get_linked_items_from_board_relation(class_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
+        if is_canvas_course:
+            manage_class_enrollment("unenroll", plp_item_id, class_id, student_details)
+        else:
+            class_name = get_item_name(class_id, int(ALL_COURSES_BOARD_ID))
+            if class_name:
+                create_subitem(plp_item_id, f"Removed non-Canvas course '{class_name}' on {date} by {changer}")
 
 @celery_app.task
 def process_plp_course_sync_webhook(event_data):
@@ -442,7 +425,14 @@ def process_plp_course_sync_webhook(event_data):
     for course_id in (current - previous): update_connect_board_column(plp_item_id, int(PLP_BOARD_ID), target_plp_col_id, course_id, "add")
     for course_id in (previous - current): update_connect_board_column(plp_item_id, int(PLP_BOARD_ID), target_plp_col_id, course_id, "remove")
     updated_val = (get_column_value(plp_item_id, int(PLP_BOARD_ID), target_plp_col_id) or {}).get('value')
-    process_canvas_delta_sync_from_course_change.delay({'pulseId': plp_item_id, 'value': updated_val, 'previousValue': original_val})
+    # Pass the user_id for logging non-Canvas courses
+    downstream_event = {
+        'pulseId': plp_item_id, 
+        'value': updated_val, 
+        'previousValue': original_val,
+        'userId': event_data.get('userId')
+    }
+    process_canvas_delta_sync_from_course_change.delay(downstream_event)
 
 @celery_app.task
 def process_master_student_person_sync_webhook(event_data):
