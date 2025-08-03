@@ -21,7 +21,7 @@ MASTER_STUDENT_BOARD_ID = os.environ.get("MASTER_STUDENT_BOARD_ID", "")
 PLP_BOARD_ID = os.environ.get("PLP_BOARD_ID", "")
 SPED_STUDENTS_BOARD_ID = os.environ.get("SPED_STUDENTS_BOARD_ID", "")
 # In app_unified_webhook_handler.py (at the top with other env vars)
-CANVAS_COURSES_BOARD_ID = os.environ.get("CANVAS_COURSES_BOARD_ID", "")
+CANVAS_BOARD_ID = os.environ.get("CANVAS_BOARD_ID", "")
 CANVAS_COURSES_TEACHER_COLUMN_ID = os.environ.get("CANVAS_COURSES_TEACHER_COLUMN_ID", "")
 try:
     MASTER_STUDENT_PEOPLE_COLUMNS = json.loads(os.environ.get("MASTER_STUDENT_PEOPLE_COLUMNS", "{}"))
@@ -95,13 +95,18 @@ def monday_unified_webhooks():
             process_sped_students_person_sync_webhook.delay(event)
             return jsonify({"status": "success", "message": "SpEd Students Person Sync task queued."}), 202
 
+        # In app_unified_webhook_handler.py -> monday_unified_webhooks()
+
+        # ... after the "SpEd Students Person Sync Check" block ...
+
         # 5. Canvas Course Teacher Enrollment Check
-        if (webhook_type == "update_column_value" and CANVAS_COURSES_BOARD_ID and
-            webhook_board_id == CANVAS_COURSES_BOARD_ID and
+        if (webhook_type == "update_column_value" and CANVAS_BOARD_ID and
+            webhook_board_id == CANVAS_BOARD_ID and
             trigger_column_id == CANVAS_COURSES_TEACHER_COLUMN_ID):
             print("INFO: Dispatching to Teacher Enrollment task.")
             process_teacher_enrollment_webhook.delay(event)
             return jsonify({"status": "success", "message": "Teacher Enrollment task queued."}), 202
+
                 
         # 6. General Logger Check
         for config_rule in LOG_CONFIGS:
