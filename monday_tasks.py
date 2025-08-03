@@ -109,8 +109,10 @@ def manage_class_enrollment(action, plp_item_id, all_courses_item_id, student_de
             monday.create_subitem(plp_item_id, log_text)
 
 @celery_app.task
+@celery_app.task
 def process_canvas_full_sync_from_status(event_data):
     plp_item_id = event_data.get('pulseId')
+    user_id = event_data.get('userId')
     status_label = event_data.get('value', {}).get('label', {}).get('text', '')
     if status_label != PLP_CANVAS_SYNC_STATUS_VALUE: return True
     student_details = get_student_details_from_plp(plp_item_id)
@@ -122,7 +124,7 @@ def process_canvas_full_sync_from_status(event_data):
         if class_link_data and class_link_data.get('value'):
             all_class_ids.update(monday.get_linked_ids_from_connect_column_value(class_link_data.get('value')))
     for class_item_id in all_class_ids:
-        manage_class_enrollment("enroll", plp_item_id, class_item_id, student_details)
+        manage_class_enrollment("enroll", plp_item_id, class_item_id, student_details, user_id)
     return True
 
 @celery_app.task
