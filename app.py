@@ -359,7 +359,6 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details)
                 update_connect_board_column(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID, new_canvas_item_id)
                 if ALL_CLASSES_CANVAS_ID_COLUMN: change_column_value_generic(int(ALL_COURSES_BOARD_ID), class_item_id, ALL_CLASSES_CANVAS_ID_COLUMN, str(canvas_course_id))
         
-        # --- FINAL FIX for TypeError ---
         m_series_val = get_column_value(plp_item_id, int(PLP_BOARD_ID), PLP_M_SERIES_LABELS_COLUMN)
         m_series_text = m_series_val.get('text') if m_series_val and m_series_val.get('text') is not None else ""
         
