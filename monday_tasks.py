@@ -28,9 +28,7 @@ SPED_TO_IEPAP_CONNECT_COLUMN_ID = os.environ.get("SPED_TO_IEPAP_CONNECT_COLUMN_I
 CANVAS_BOARD_ID = os.environ.get("CANVAS_BOARD_ID")
 CANVAS_COURSE_ID_COLUMN = os.environ.get("CANVAS_COURSE_ID_COLUMN")
 CANVAS_TERM_ID = os.environ.get("CANVAS_TERM_ID")
-CANVAS_COURSES_BOARD_ID = os.environ.get("CANVAS_COURSES_BOARD_ID")
 CANVAS_COURSES_TEACHER_COLUMN_ID = os.environ.get("CANVAS_COURSES_TEACHER_COLUMN_ID")
-CANVAS_COURSES_COURSE_ID_COLUMN = os.environ.get("CANVAS_COURSES_COURSE_ID_COLUMN")
 try:
     ALL_COURSES_NAME_COLUMN_ID = os.environ.get("ALL_COURSES_NAME_COLUMN_ID")
     PLP_CATEGORY_TO_CONNECT_COLUMN_MAP = json.loads(os.environ.get("PLP_CATEGORY_TO_CONNECT_COLUMN_MAP", "{}"))
@@ -245,9 +243,11 @@ def process_sped_students_person_sync_webhook(event_data):
 # In monday_tasks.py (at the end of the file)
 
 @celery_app.task
+# In monday_tasks.py (at the end of the file)
+
+@celery_app.task
 def process_teacher_enrollment_webhook(event_data):
     item_id = event_data.get('pulseId')
-    user_id_of_changer = event_data.get('userId')
     current_value = event_data.get('value')
     previous_value = event_data.get('previousValue')
 
@@ -259,16 +259,15 @@ def process_teacher_enrollment_webhook(event_data):
     removed_teacher_ids = previous_ids - current_ids
 
     if not added_teacher_ids and not removed_teacher_ids:
-        print("INFO: Teacher column changed, but no effective change in users.")
         return True
 
-    # 2. Get the Canvas Course ID from the Monday item
-    canvas_course_id_val = monday.get_column_value(item_id, CANVAS_COURSES_BOARD_ID, CANVAS_COURSES_COURSE_ID_COLUMN)
+    # 2. Get Canvas Course ID using existing environment variables
+    canvas_course_id_val = monday.get_column_value(item_id, CANVAS_BOARD_ID, CANVAS_COURSE_ID_COLUMN)
     canvas_course_id = canvas_course_id_val.get('text') if canvas_course_id_val and canvas_course_id_val.get('text') else None
 
-    # This is the "Create if not exists" logic
+    # "Create if not exists" logic
     if not canvas_course_id and added_teacher_ids:
-        course_name = monday.get_item_name(item_id, CANVAS_COURSES_BOARD_ID)
+        course_name = monday.get_item_name(item_id, CANVAS_BOARD_ID)
         if not course_name:
             monday.create_update(item_id, "ERROR: Cannot create Canvas course because the item name is missing.")
             return False
@@ -280,9 +279,9 @@ def process_teacher_enrollment_webhook(event_data):
             canvas_course_id = str(new_course.id)
             # Update the Monday board with the new ID
             monday.change_column_value_generic(
-                board_id=CANVAS_COURSES_BOARD_ID, 
+                board_id=CANVAS_BOARD_ID, 
                 item_id=item_id, 
-                column_id=CANVAS_COURSES_COURSE_ID_COLUMN, 
+                column_id=CANVAS_COURSE_ID_COLUMN, 
                 value=canvas_course_id
             )
             monday.create_update(item_id, f"Successfully created new Canvas course (ID: {canvas_course_id}).")
