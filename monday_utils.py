@@ -565,3 +565,52 @@ def find_subitem_by_column_value(parent_item_id, target_column_id, target_text_v
     
     print(f"WARNING: No subitem found under parent {parent_item_id} matching the criteria.")
     return None
+# In monday_utils.py
+
+def find_subitem_by_category_and_linked_course(parent_item_id, category_col_id, category_name, connect_col_id, linked_course_id):
+    """
+    Finds a subitem under a parent that matches a category and contains a specific linked item.
+    Returns the subitem ID if found, otherwise None.
+    """
+    query = f"""
+    query {{
+      items (ids: [{parent_item_id}]) {{
+        subitems {{
+          id
+          column_values (ids: ["{category_col_id}", "{connect_col_id}"]) {{
+            id
+            text
+            value
+          }}
+        }}
+      }}
+    }}
+    """
+    print(f"DEBUG: Searching for subitem under parent '{parent_item_id}' with category '{category_name}' containing course '{linked_course_id}'")
+    result = execute_monday_graphql(query)
+
+    if result and 'data' in result and result['data'].get('items'):
+        parent_item = result['data']['items'][0]
+        if parent_item.get('subitems'):
+            for subitem in parent_item['subitems']:
+                category_match = False
+                course_match = False
+                
+                for col_val in subitem['column_values']:
+                    # Check if the category dropdown matches
+                    if col_val['id'] == category_col_id and col_val.get('text', '').lower() == category_name.lower():
+                        category_match = True
+                    
+                    # Check if the connect_boards column contains the course
+                    if col_val['id'] == connect_col_id:
+                        linked_ids = get_linked_ids_from_connect_column_value(col_val.get('value'))
+                        if linked_course_id in linked_ids:
+                            course_match = True
+                
+                if category_match and course_match:
+                    subitem_id = int(subitem['id'])
+                    print(f"DEBUG: Found matching subitem: {subitem_id}")
+                    return subitem_id
+    
+    print(f"WARNING: No subitem found matching all criteria.")
+    return None
