@@ -194,75 +194,39 @@ def process_general_webhook(event_data, config_rule):
 
 # --- THIS IS THE FIXED FUNCTION ---
 @celery_app.task
+@celery_app.task
 def process_master_student_person_sync_webhook(event_data):
-    master_item_id = event_data.get('pulseId')
-    trigger_column_id = event_data.get('columnId')
-    event_user_id = event_data.get('userId')
-    current_value_raw = event_data.get('value')
-    previous_value_raw = event_data.get('previousValue') or {}
-
+    master_item_id = event_data.get('pulseId'); trigger_column_id = event_data.get('columnId'); event_user_id = event_data.get('userId'); current_value_raw = event_data.get('value'); previous_value_raw = event_data.get('previousValue') or {}
     operation_successful = True
-
     column_config = MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS.get(trigger_column_id)
-    if not column_config:
-        print(f"WARNING: No mapping found for column ID {trigger_column_id}. Aborting.")
-        return False
-        
+    if not column_config: return False
     column_friendly_name = column_config.get("name", "Staff")
-
-    # --- ROBUST CHANGE DETECTION ---
-    current_persons = current_value_raw.get('personsAndTeams', []) if current_value_raw else []
-    previous_persons = previous_value_raw.get('personsAndTeams', [])
-    
-    current_ids = {p['id'] for p in current_persons}
-    previous_ids = {p['id'] for p in previous_persons}
-
-    added_ids = current_ids - previous_ids
-    removed_ids = previous_ids - current_ids
-
-    if not added_ids and not removed_ids:
-        print("INFO: People column changed, but no effective change in users. Syncing anyway.")
-    # --- END ROBUST CHANGE DETECTION ---
-
-    changer_user_name = monday.get_user_name(event_user_id) or "automation"
-    current_date = datetime.now().strftime('%Y-%m-%d')
-    
+    current_persons = current_value_raw.get('personsAndTeams', []) if current_value_raw else []; previous_persons = previous_value_raw.get('personsAndTeams', [])
+    current_ids = {p['id'] for p in current_persons}; previous_ids = {p['id'] for p in previous_persons}
+    added_ids = current_ids - previous_ids; removed_ids = previous_ids - current_ids
+    changer_user_name = monday.get_user_name(event_user_id) or "automation"; current_date = datetime.now().strftime('%Y-%m-%d')
     for target_config in column_config.get("targets", []):
         target_board_id = target_config["board_id"]
         master_connect_column_id = target_config["connect_column_id"]
         target_people_column_id = target_config["target_column_id"]
-
-        linked_target_item_ids = monday.get_linked_items_from_board_relation(
-            item_id=master_item_id, 
-            board_id=MASTER_STUDENT_BOARD_ID, 
-            connect_column_id=master_connect_column_id
-        )
-
+        linked_target_item_ids = monday.get_linked_items_from_board_relation(item_id=master_item_id, board_id=MASTER_STUDENT_BOARD_ID, connect_column_id=master_connect_column_id)
         for linked_item_id in linked_target_item_ids:
-            # --- CREATE SUBITEMS FOR CHANGES ---
-            # Loop through the IDs of people who were added
-            for person_id in added_ids:
-                person_name = monday.get_user_name(person_id) or "a new user"
-                subitem_name = f"{column_friendly_name} changed to {person_name} on {current_date} by {changer_user_name}"
-                monday.create_subitem(linked_item_id, subitem_name)
+
+            # THE FIX: This IF statement ensures subitems are ONLY created on the PLP board.
+            if str(target_board_id) == str(PLP_BOARD_ID):
+                for person_id in added_ids:
+                    person_name = monday.get_user_name(person_id) or "a new user"
+                    subitem_name = f"{column_friendly_name} changed to {person_name} on {current_date} by {changer_user_name}"
+                    monday.create_subitem(linked_item_id, subitem_name)
+                for person_id in removed_ids:
+                    person_name = monday.get_user_name(person_id) or "a previous user"
+                    subitem_name = f"{column_friendly_name} assignment of {person_name} removed on {current_date} by {changer_user_name}"
+                    monday.create_subitem(linked_item_id, subitem_name)
             
-            # Loop through the IDs of people who were removed
-            for person_id in removed_ids:
-                person_name = monday.get_user_name(person_id) or "a previous user"
-                subitem_name = f"{column_friendly_name} assignment of {person_name} removed on {current_date} by {changer_user_name}"
-                monday.create_subitem(linked_item_id, subitem_name)
-                    
-            # --- ALWAYS SYNC THE COLUMN REGARDLESS ---
-            success = monday.update_people_column(
-                item_id=linked_item_id, 
-                board_id=target_board_id, 
-                people_column_id=target_people_column_id, 
-                new_people_value=current_value_raw, 
-                target_column_type="people"
-            )
-            if not success:
-                operation_successful = False
-                
+            # This 'update_people_column' part runs for ALL boards (PLP, HS Roster, etc.), which is correct.
+            success = monday.update_people_column(item_id=linked_item_id, board_id=target_board_id, people_column_id=target_people_column_id, new_people_value=current_value_raw, target_column_type="people")
+            if not success: operation_successful = False
+            
     return operation_successful
 
 @celery_app.task
