@@ -5,7 +5,7 @@ from celery_app import celery_app
 import monday_utils as monday
 import canvas_utils as canvas
 
-# --- (All environment variable loading remains the same) ---
+# --- Environment Variable Loading ---
 PLP_BOARD_ID = os.environ.get("PLP_BOARD_ID")
 PLP_CANVAS_SYNC_COLUMN_ID = os.environ.get("PLP_CANVAS_SYNC_COLUMN_ID")
 PLP_CANVAS_SYNC_STATUS_VALUE = os.environ.get("PLP_CANVAS_SYNC_STATUS_VALUE", "Done")
@@ -53,8 +53,6 @@ def get_student_details_from_plp(plp_item_id):
     return {'name': student_name, 'ssid': ssid, 'email': email}
 
 def manage_class_enrollment(action, plp_item_id, all_courses_item_id, student_details):
-    ### FINAL CORRECTED FUNCTION ###
-
     # 1. Find the source item on the "Canvas" board. This is the Source of Truth.
     linked_canvas_item_ids = monday.get_linked_items_from_board_relation(
         all_courses_item_id, ALL_COURSES_BOARD_ID, ALL_CLASSES_CANVAS_CONNECT_COLUMN
@@ -101,7 +99,6 @@ def manage_class_enrollment(action, plp_item_id, all_courses_item_id, student_de
             canvas_course_id = str(new_course.id)
             print(f"SUCCESS: Created new Canvas course with ID: {canvas_course_id}")
 
-            # THIS IS THE KEY FIX: Update the column on the SOURCE "CANVAS" ITEM.
             print(f"INFO: Updating column '{CANVAS_COURSE_ID_COLUMN}' on source Canvas item {canvas_source_item_id}...")
             monday.change_column_value_generic(
                 board_id=CANVAS_BOARD_ID,
@@ -113,7 +110,7 @@ def manage_class_enrollment(action, plp_item_id, all_courses_item_id, student_de
         # 5. Proceed with enrollment using the correct and verified data.
         m_series_val = monday.get_column_value(plp_item_id, PLP_BOARD_ID, PLP_M_SERIES_LABELS_COLUMN)
         m_series_text = (m_series_val.get('text') or '') if m_series_val else ''
-        ag_grad_val = monday.get_column_value(all_courses_item_id, ALL_COURSES_BOARD_ID, ALL_CLASSES_AG_GRAD_COLUMN)
+        ag_grad_val = monday.get_column_value(all_courses_item_id, ALL_COURSES_BOARD_ID, ALL_CLASSES_AG_ GRAD_COLUMN)
         ag_grad_text = (ag_grad_val.get('text') or '') if ag_grad_val else ''
 
         sections = set()
@@ -134,8 +131,6 @@ def manage_class_enrollment(action, plp_item_id, all_courses_item_id, student_de
             result = canvas.unenroll_student_from_course(canvas_course_id, student_details)
             log_text = f"Unenrolled from {course_name}: {'Success' if result else 'Failed'}"
             monday.create_subitem(plp_item_id, log_text)
-
-# --- ALL OTHER TASKS BELOW ARE UNCHANGED ---
 
 @celery_app.task
 def process_canvas_full_sync_from_status(event_data):
@@ -204,8 +199,8 @@ def process_plp_course_sync_webhook(event_data):
     updated_plp_column_data = monday.get_column_value(plp_item_id, PLP_BOARD_ID, target_plp_connect_column_id)
     updated_plp_value = updated_plp_column_data.get('value') if updated_plp_column_data else {}    
     downstream_event = {
-        'boardId': int(PLP_BOARD_ID), 'pulseId': plp_item_id, 'columnId': target_plp_connect_column_id,
-        'userId': user_id, 'value': updated_plp_value, 'previousValue': original_plp_value, 'type': 'update_column_value'
+        'boardId': int(PLP_BOARD_ID), 'pulseId': plp_item_id, 'columnId': target_plp_connect_column_id, 'userId': user_id, 
+        'value': updated_plp_value, 'previousValue': original_plp_value, 'type': 'update_column_value'
     }
     print(f"INFO: Chaining from PLP Sync to Delta Sync for item {plp_item_id}.")
     process_canvas_delta_sync_from_course_change.delay(downstream_event, LOG_CONFIGS)
