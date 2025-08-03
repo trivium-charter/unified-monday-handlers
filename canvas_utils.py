@@ -56,13 +56,19 @@ def update_user_ssid(user, new_ssid):
         print(f"ERROR: API error updating SSID for user '{user.name}': {e}")
     return False
 
+# In canvas_utils.py
+
 def create_canvas_course(course_name, term_id):
     """Creates a new course in Canvas, handling conflicts."""
     canvas = initialize_canvas_api()
     if not canvas: return None
     account = canvas.get_account(1)
-    sis_id_name = ''.join(e for e in course_name if e.isalnum() or e.isspace()).replace(' ', '_').lower()
+
+    # CORRECTED: Create a more unique SIS ID by cleaning the name more carefully
+    # This keeps characters like '+' and numbers, making IDs for similar courses distinct
+    sis_id_name = ''.join(e for e in course_name if e.isalnum() or e in ['+', '-']).replace(' ', '_').lower()
     sis_id = f"{sis_id_name}_{term_id}"
+
     course_data = {
         'name': course_name, 'course_code': course_name,
         'enrollment_term_id': f"sis_term_id:{term_id}", 'sis_course_id': sis_id
@@ -73,6 +79,7 @@ def create_canvas_course(course_name, term_id):
     except Conflict:
         print(f"INFO: Course with SIS ID '{sis_id}' already exists. Searching for it.")
         try:
+            # When a conflict occurs, we find the existing course to avoid creating duplicates
             courses = account.get_courses(sis_course_id=sis_id)
             for course in courses:
                 if course.sis_course_id == sis_id:
@@ -83,7 +90,7 @@ def create_canvas_course(course_name, term_id):
     except Exception as e:
         print(f"ERROR: Unexpected API error during course creation for '{course_name}': {e}")
     return None
-
+    
 def create_section_if_not_exists(course_id, section_name):
     """Finds a section by name or creates it if it doesn't exist."""
     canvas = initialize_canvas_api()
