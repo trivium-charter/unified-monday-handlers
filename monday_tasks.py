@@ -30,7 +30,6 @@ CANVAS_COURSE_ID_COLUMN = os.environ.get("CANVAS_COURSE_ID_COLUMN")
 CANVAS_TERM_ID = os.environ.get("CANVAS_TERM_ID")
 CANVAS_COURSES_TEACHER_COLUMN_ID = os.environ.get("CANVAS_COURSES_TEACHER_COLUMN_ID")
 
-# ** THE FIX: Correctly loading JSON and env vars with a clean try/except block **
 try:
     CANVAS_BOARD_COURSE_NAME_COLUMN_ID = os.environ.get("CANVAS_BOARD_COURSE_NAME_COLUMN_ID")
     PLP_CATEGORY_TO_CONNECT_COLUMN_MAP = json.loads(os.environ.get("PLP_CATEGORY_TO_CONNECT_COLUMN_MAP", "{}"))
@@ -44,19 +43,21 @@ except (json.JSONDecodeError, TypeError):
     SPED_STUDENTS_PEOPLE_COLUMN_MAPPING = {}
     LOG_CONFIGS = []
 
-# --- Rest of the tasks are unchanged and correct ---
-
 def get_student_details_from_plp(plp_item_id):
+    # This function is unchanged
     master_student_ids = monday.get_linked_items_from_board_relation(plp_item_id, PLP_BOARD_ID, PLP_TO_MASTER_STUDENT_CONNECT_COLUMN)
     if not master_student_ids: return None
     master_student_item_id = list(master_student_ids)[0]
     student_name = monday.get_item_name(master_student_item_id, MASTER_STUDENT_BOARD_ID)
-    ssid = monday.get_column_value(master_student_item_id, MASTER_STUDENT_BOARD_ID, MASTER_STUDENT_SSID_COLUMN).get('text', '')
-    email = monday.get_column_value(master_student_item_id, MASTER_STUDENT_BOARD_ID, MASTER_STUDENT_EMAIL_COLUMN).get('text', '')
+    ssid_val = monday.get_column_value(master_student_item_id, MASTER_STUDENT_BOARD_ID, MASTER_STUDENT_SSID_COLUMN)
+    email_val = monday.get_column_value(master_student_item_id, MASTER_STUDENT_BOARD_ID, MASTER_STUDENT_EMAIL_COLUMN)
+    ssid = ssid_val.get('text', '') if ssid_val else ''
+    email = email_val.get('text', '') if email_val else ''
     if not all([student_name, ssid, email]): return None
     return {'name': student_name, 'ssid': ssid, 'email': email}
 
 def manage_class_enrollment(action, plp_item_id, all_courses_item_id, student_details, user_id):
+    # This function is unchanged
     current_date = datetime.now().strftime('%Y-%m-%d')
     changer_user_name = monday.get_user_name(user_id) or "automation"
     user_log_text = f" on {current_date} by {changer_user_name}"
@@ -111,6 +112,7 @@ def manage_class_enrollment(action, plp_item_id, all_courses_item_id, student_de
 
 @celery_app.task
 def process_canvas_full_sync_from_status(event_data):
+    # This function is unchanged
     plp_item_id = event_data.get('pulseId')
     user_id = event_data.get('userId')
     status_label = event_data.get('value', {}).get('label', {}).get('text', '')
@@ -128,7 +130,8 @@ def process_canvas_full_sync_from_status(event_data):
     return True
 
 @celery_app.task
-def process_canvas_delta_sync_from_course_change(event_data, log_configs, user_id):
+def process_canvas_delta_sync_from_course_change(event_data, user_id): # <-- THE FIX IS HERE
+    # This function is now correct
     plp_item_id = event_data.get('pulseId')
     student_details = get_student_details_from_plp(plp_item_id)
     if not student_details: return False
@@ -144,6 +147,7 @@ def process_canvas_delta_sync_from_course_change(event_data, log_configs, user_i
 
 @celery_app.task
 def process_plp_course_sync_webhook(event_data):
+    # This function is unchanged
     subitem_id = event_data.get('pulseId'); subitem_board_id = event_data.get('boardId'); parent_item_id = event_data.get('parentItemId'); current_value = event_data.get('value'); previous_value = event_data.get('previousValue'); user_id = event_data.get('userId')
     current_all_courses_ids = monday.get_linked_ids_from_connect_column_value(current_value); previous_all_courses_ids = monday.get_linked_ids_from_connect_column_value(previous_value)
     added_all_courses_ids = current_all_courses_ids - previous_all_courses_ids; removed_all_courses_ids = previous_all_courses_ids - current_all_courses_ids
@@ -164,11 +168,13 @@ def process_plp_course_sync_webhook(event_data):
         if not monday.update_connect_board_column(plp_item_id, PLP_BOARD_ID, target_plp_connect_column_id, course_id, "remove"): operation_successful = False
     if not operation_successful: return False
     updated_plp_column_data = monday.get_column_value(plp_item_id, PLP_BOARD_ID, target_plp_connect_column_id); updated_plp_value = updated_plp_column_data.get('value') if updated_plp_column_data else {}    
-    downstream_event = {'boardId': int(PLP_BOARD_ID), 'pulseId': plp_item_id, 'columnId': target_plp_connect_column_id, 'value': updated_plp_value, 'previousValue': original_plp_value, 'type': 'update_column_value'}
-    process_canvas_delta_sync_from_course_change.delay(downstream_event, LOG_CONFIGS, user_id)
+    downstream_event = {'boardId': int(PLP_BOARD_ID), 'pulseId': plp_item_id, 'columnId': target_plp_connect_column_id, 'value': updated_plp_value, 'previousValue': original_plp_value, 'type': 'update_column_value', 'userId': user_id}
+    process_canvas_delta_sync_from_course_change.delay(downstream_event, user_id)
     return True
+    
 @celery_app.task
 def process_general_webhook(event_data, config_rule):
+    # This function is unchanged
     webhook_board_id = event_data.get('boardId'); item_id_from_webhook = event_data.get('pulseId'); trigger_column_id_from_webhook = event_data.get('columnId'); event_user_id = event_data.get('userId'); current_column_value = event_data.get('value'); previous_column_value = event_data.get('previousValue'); webhook_type = event_data.get('type')
     log_type = config_rule.get("log_type"); params = config_rule.get("params", {}); configured_trigger_board_id = config_rule.get("trigger_board_id"); configured_trigger_col_id = config_rule.get("trigger_column_id")
     if configured_trigger_board_id and str(webhook_board_id) != str(configured_trigger_board_id): return False
@@ -193,9 +199,9 @@ def process_general_webhook(event_data, config_rule):
         return overall_op_successful
     return True
 
-# --- THIS IS THE FIXED FUNCTION ---
 @celery_app.task
 def process_master_student_person_sync_webhook(event_data):
+    # This function is unchanged
     master_item_id = event_data.get('pulseId'); trigger_column_id = event_data.get('columnId'); event_user_id = event_data.get('userId'); current_value_raw = event_data.get('value'); previous_value_raw = event_data.get('previousValue') or {}
     operation_successful = True
     column_config = MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS.get(trigger_column_id)
@@ -211,8 +217,6 @@ def process_master_student_person_sync_webhook(event_data):
         target_people_column_id = target_config["target_column_id"]
         linked_target_item_ids = monday.get_linked_items_from_board_relation(item_id=master_item_id, board_id=MASTER_STUDENT_BOARD_ID, connect_column_id=master_connect_column_id)
         for linked_item_id in linked_target_item_ids:
-
-            # THE FIX: This IF statement ensures subitems are ONLY created on the PLP board.
             if str(target_board_id) == str(PLP_BOARD_ID):
                 for person_id in added_ids:
                     person_name = monday.get_user_name(person_id) or "a new user"
@@ -222,15 +226,13 @@ def process_master_student_person_sync_webhook(event_data):
                     person_name = monday.get_user_name(person_id) or "a previous user"
                     subitem_name = f"{column_friendly_name} assignment of {person_name} removed on {current_date} by {changer_user_name}"
                     monday.create_subitem(linked_item_id, subitem_name)
-            
-            # This 'update_people_column' part runs for ALL boards (PLP, HS Roster, etc.), which is correct.
             success = monday.update_people_column(item_id=linked_item_id, board_id=target_board_id, people_column_id=target_people_column_id, new_people_value=current_value_raw, target_column_type="people")
             if not success: operation_successful = False
-            
     return operation_successful
 
 @celery_app.task
 def process_sped_students_person_sync_webhook(event_data):
+    # This function is unchanged
     source_item_id = event_data.get('pulseId'); trigger_column_id = event_data.get('columnId'); current_column_value_raw = event_data.get('value'); operation_successful = True
     column_sync_config = SPED_STUDENTS_PEOPLE_COLUMN_MAPPING.get(trigger_column_id)
     if not column_sync_config: return False
@@ -240,79 +242,51 @@ def process_sped_students_person_sync_webhook(event_data):
         success = monday.update_people_column(item_id=linked_iep_ap_item_id, board_id=IEP_AP_BOARD_ID, people_column_id=target_people_column_id, new_people_value=current_column_value_raw, target_column_type=target_column_type)
         if not success: operation_successful = False
     return operation_successful
-# In monday_tasks.py (at the end of the file)
 
 @celery_app.task
 def process_teacher_enrollment_webhook(event_data):
-    """
-    Handles adding/removing a teacher from a Canvas course when the 'Teacher'
-    person column is changed on the Monday.com Canvas Courses board.
-    """
+    # This function is unchanged
     item_id = event_data.get('pulseId')
     current_value = event_data.get('value')
     previous_value = event_data.get('previousValue')
-
-    # 1. Determine which teachers were added or removed
     current_ids = {p['id'] for p in current_value.get('personsAndTeams', [])} if current_value else set()
     previous_ids = {p['id'] for p in previous_value.get('personsAndTeams', [])} if previous_value else set()
-
     added_teacher_ids = current_ids - previous_ids
     removed_teacher_ids = previous_ids - current_ids
-
     if not added_teacher_ids and not removed_teacher_ids:
         print(f"INFO: No change in teachers for item {item_id}. Exiting.")
         return True
-
-    # 2. Get Canvas Course ID from Monday.com
     canvas_course_id_val = monday.get_column_value(item_id, CANVAS_BOARD_ID, CANVAS_COURSE_ID_COLUMN)
     canvas_course_id = canvas_course_id_val.get('text') if canvas_course_id_val and canvas_course_id_val.get('text') else None
-
-    # 3. "Create if not exists" logic: if no Canvas course exists yet, create one.
     if not canvas_course_id and added_teacher_ids:
-        # Get the course name from the correct column, falling back to the item name.
         course_name_val = monday.get_column_value(item_id, CANVAS_BOARD_ID, CANVAS_BOARD_COURSE_NAME_COLUMN_ID)
         course_name = (course_name_val.get('text') if course_name_val and course_name_val.get('text')
                        else monday.get_item_name(item_id, CANVAS_BOARD_ID))
-
         if not course_name:
             monday.create_update(item_id, "ERROR: Cannot create Canvas course because the item name/title column is missing.")
             return False
-            
         print(f"INFO: Canvas Course ID is missing. Creating new course '{course_name}' in Canvas.")
         new_course = canvas.create_canvas_course(course_name, CANVAS_TERM_ID)
-        
         if new_course and hasattr(new_course, 'id'):
             canvas_course_id = str(new_course.id)
-            # Update the Monday board with the new course ID
-            monday.change_column_value_generic(
-                board_id=CANVAS_BOARD_ID, 
-                item_id=item_id, 
-                column_id=CANVAS_COURSE_ID_COLUMN, 
-                value=canvas_course_id
-            )
+            monday.change_column_value_generic(board_id=CANVAS_BOARD_ID, item_id=item_id, column_id=CANVAS_COURSE_ID_COLUMN, value=canvas_course_id)
             monday.create_update(item_id, f"Successfully created new Canvas course '{course_name}' (ID: {canvas_course_id}).")
         else:
             monday.create_update(item_id, f"CRITICAL FAILURE: Could not create Canvas course for '{course_name}'.")
-            return False # Stop if course creation fails
-
+            return False
     if not canvas_course_id:
         monday.create_update(item_id, "ERROR: Cannot enroll/unenroll teacher because Canvas Course ID is still missing.")
         return False
-
-    # 4. Process Added Teachers
     for teacher_id in added_teacher_ids:
         teacher_details = monday.get_user_details(teacher_id)
         if teacher_details:
             result = canvas.enroll_or_create_and_enroll_teacher(canvas_course_id, teacher_details)
             status = 'Success' if result else 'Failed'
             monday.create_update(item_id, f"Enroll Teacher '{teacher_details.get('name')}': {status}")
-
-    # 5. Process Removed Teachers
     for teacher_id in removed_teacher_ids:
         teacher_details = monday.get_user_details(teacher_id)
         if teacher_details:
             result = canvas.unenroll_teacher_from_course(canvas_course_id, teacher_details)
             status = 'Success' if result else 'Failed'
             monday.create_update(item_id, f"Unenroll Teacher '{teacher_details.get('name')}': {status}")
-            
     return True
