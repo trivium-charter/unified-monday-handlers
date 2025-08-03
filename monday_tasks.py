@@ -55,6 +55,11 @@ def get_student_details_from_plp(plp_item_id):
 # (All your other functions and environment variable loading remain the same)
 # ...
 
+# In monday_tasks.py
+
+# (All your other functions and environment variable loading remain the same)
+# ...
+
 def manage_class_enrollment(action, plp_item_id, class_item_id, student_details):
     # CORRECTED: Prioritize the specific text column for the course name
     course_name_column_id = os.environ.get("ALL_COURSES_NAME_COLUMN_ID")
@@ -75,7 +80,7 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details)
 
     linked_canvas_item_ids = monday.get_linked_items_from_board_relation(class_item_id, ALL_COURSES_BOARD_ID, ALL_CLASSES_CANVAS_CONNECT_COLUMN)
     canvas_item_id = list(linked_canvas_item_ids)[0] if linked_canvas_item_ids else None
-
+    
     canvas_course_id = None
     if canvas_item_id:
         canvas_course_id_val = monday.get_column_value(canvas_item_id, CANVAS_BOARD_ID, CANVAS_COURSE_ID_COLUMN)
@@ -86,17 +91,25 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details)
             new_course = canvas.create_canvas_course(class_name, CANVAS_TERM_ID)
             if not new_course: return
             canvas_course_id = new_course.id
+            
+            # Create a new item on the "Canvas" board
             new_canvas_item_name = f"{class_name} - Canvas"
             column_values = {CANVAS_COURSE_ID_COLUMN: str(canvas_course_id)}
             new_canvas_item_id = monday.create_item(CANVAS_BOARD_ID, new_canvas_item_name, column_values)
+            
             if new_canvas_item_id:
+                # Link the new "Canvas" item back to the "All Courses" item
                 monday.update_connect_board_column(class_item_id, ALL_COURSES_BOARD_ID, ALL_CLASSES_CANVAS_CONNECT_COLUMN, new_canvas_item_id, action="add")
+                
+                # CORRECTED: Also update the Canvas Course ID on the "All Courses" board item
+                if ALL_CLASSES_CANVAS_ID_COLUMN:
+                    monday.change_column_value_generic(ALL_COURSES_BOARD_ID, class_item_id, ALL_CLASSES_CANVAS_ID_COLUMN, str(canvas_course_id))
 
         m_series_val = monday.get_column_value(plp_item_id, PLP_BOARD_ID, PLP_M_SERIES_LABELS_COLUMN)
         m_series_text = (m_series_val.get('text') or '') if m_series_val else ''
         ag_grad_val = monday.get_column_value(class_item_id, ALL_COURSES_BOARD_ID, ALL_CLASSES_AG_GRAD_COLUMN)
         ag_grad_text = (ag_grad_val.get('text') or '') if ag_grad_val else ''
-
+        
         sections = set()
         if "AG" in ag_grad_text: sections.add("A-G")
         if "Grad" in ag_grad_text: sections.add("Grad")
@@ -104,7 +117,7 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details)
 
         if not sections:
             sections.add("All")
-
+            
         for section_name in sections:
             section = canvas.create_section_if_not_exists(canvas_course_id, section_name)
             if section:
