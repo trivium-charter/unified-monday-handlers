@@ -30,14 +30,14 @@ CANVAS_COURSE_ID_COLUMN = os.environ.get("CANVAS_COURSE_ID_COLUMN")
 CANVAS_TERM_ID = os.environ.get("CANVAS_TERM_ID")
 CANVAS_COURSES_TEACHER_COLUMN_ID = os.environ.get("CANVAS_COURSES_TEACHER_COLUMN_ID")
 try:
-    ALL_COURSES_NAME_COLUMN_ID = os.environ.get("ALL_COURSES_NAME_COLUMN_ID")
+    CANVAS_BOARD_COURSE_NAME_COLUMN_ID = os.environ.get("CANVAS_BOARD_COURSE_NAME_COLUMN_ID") = os.environ.get("CANVAS_BOARD_COURSE_NAME_COLUMN_ID")
     PLP_CATEGORY_TO_CONNECT_COLUMN_MAP = json.loads(os.environ.get("PLP_CATEGORY_TO_CONNECT_COLUMN_MAP", "{}"))
     MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS = json.loads(os.environ.get("MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS", "{}"))
     SPED_STUDENTS_PEOPLE_COLUMN_MAPPING = json.loads(os.environ.get("SPED_STUDENTS_PEOPLE_COLUMN_MAPPING", "{}"))
     LOG_CONFIGS = json.loads(os.environ.get("MONDAY_LOGGING_CONFIGS", "[]"))
 except json.JSONDecodeError:
     # Default values if JSON parsing fails
-    ALL_COURSES_NAME_COLUMN_ID = None
+    CANVAS_BOARD_COURSE_NAME_COLUMN_ID = os.environ.get("CANVAS_BOARD_COURSE_NAME_COLUMN_ID") = None
     PLP_CATEGORY_TO_CONNECT_COLUMN_MAP = {}
     MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS = {}
     SPED_STUDENTS_PEOPLE_COLUMN_MAPPING = {}
@@ -66,7 +66,7 @@ def manage_class_enrollment(action, plp_item_id, all_courses_item_id, student_de
         monday.create_update(plp_item_id, f"Could not enroll in course (item {all_courses_item_id}): It is not properly linked to the Canvas source board.")
         return
         
-    course_name_val = monday.get_column_value(canvas_source_item_id, CANVAS_BOARD_ID, ALL_COURSES_NAME_COLUMN_ID)
+    course_name_val = monday.get_column_value(canvas_source_item_id, CANVAS_BOARD_ID, CANVAS_BOARD_COURSE_NAME_COLUMN_ID)
     course_name = course_name_val.get('text') if course_name_val and course_name_val.get('text') else monday.get_item_name(all_courses_item_id, ALL_COURSES_BOARD_ID) or ""
     
     if not course_name:
@@ -246,7 +246,14 @@ def process_sped_students_person_sync_webhook(event_data):
 # In monday_tasks.py (at the end of the file)
 
 @celery_app.task
+# Add this new task to the end of monday_tasks.py
+
+@celery_app.task
 def process_teacher_enrollment_webhook(event_data):
+    """
+    Handles adding/removing a teacher from a Canvas course when the 'Teacher'
+    person column is changed on the Monday.com Canvas Courses board.
+    """
     item_id = event_data.get('pulseId')
     current_value = event_data.get('value')
     previous_value = event_data.get('previousValue')
@@ -259,17 +266,22 @@ def process_teacher_enrollment_webhook(event_data):
     removed_teacher_ids = previous_ids - current_ids
 
     if not added_teacher_ids and not removed_teacher_ids:
+        print(f"INFO: No change in teachers for item {item_id}. Exiting.")
         return True
 
-    # 2. Get Canvas Course ID using existing environment variables
+    # 2. Get Canvas Course ID from Monday.com
     canvas_course_id_val = monday.get_column_value(item_id, CANVAS_BOARD_ID, CANVAS_COURSE_ID_COLUMN)
     canvas_course_id = canvas_course_id_val.get('text') if canvas_course_id_val and canvas_course_id_val.get('text') else None
 
-    # "Create if not exists" logic
+    # 3. "Create if not exists" logic: if no Canvas course exists yet, create one.
     if not canvas_course_id and added_teacher_ids:
-        course_name = monday.get_item_name(item_id, CANVAS_BOARD_ID)
+        # Get the course name from the correct column, falling back to the item name.
+        course_name_val = monday.get_column_value(item_id, CANVAS_BOARD_ID, CANVAS_BOARD_COURSE_NAME_COLUMN_ID)
+        course_name = (course_name_val.get('text') if course_name_val and course_name_val.get('text')
+                       else monday.get_item_name(item_id, CANVAS_BOARD_ID))
+
         if not course_name:
-            monday.create_update(item_id, "ERROR: Cannot create Canvas course because the item name is missing.")
+            monday.create_update(item_id, "ERROR: Cannot create Canvas course because the item name/title column is missing.")
             return False
             
         print(f"INFO: Canvas Course ID is missing. Creating new course '{course_name}' in Canvas.")
@@ -277,30 +289,34 @@ def process_teacher_enrollment_webhook(event_data):
         
         if new_course and hasattr(new_course, 'id'):
             canvas_course_id = str(new_course.id)
-            # Update the Monday board with the new ID
+            # Update the Monday board with the new course ID
             monday.change_column_value_generic(
                 board_id=CANVAS_BOARD_ID, 
                 item_id=item_id, 
                 column_id=CANVAS_COURSE_ID_COLUMN, 
                 value=canvas_course_id
             )
-            monday.create_update(item_id, f"Successfully created new Canvas course (ID: {canvas_course_id}).")
+            monday.create_update(item_id, f"Successfully created new Canvas course '{course_name}' (ID: {canvas_course_id}).")
         else:
             monday.create_update(item_id, f"CRITICAL FAILURE: Could not create Canvas course for '{course_name}'.")
-            return False
+            return False # Stop if course creation fails
 
-    # 3. Process Added Teachers
+    if not canvas_course_id:
+        monday.create_update(item_id, "ERROR: Cannot enroll/unenroll teacher because Canvas Course ID is still missing.")
+        return False
+
+    # 4. Process Added Teachers
     for teacher_id in added_teacher_ids:
         teacher_details = monday.get_user_details(teacher_id)
-        if teacher_details and canvas_course_id:
+        if teacher_details:
             result = canvas.enroll_or_create_and_enroll_teacher(canvas_course_id, teacher_details)
             status = 'Success' if result else 'Failed'
             monday.create_update(item_id, f"Enroll Teacher '{teacher_details.get('name')}': {status}")
 
-    # 4. Process Removed Teachers
+    # 5. Process Removed Teachers
     for teacher_id in removed_teacher_ids:
         teacher_details = monday.get_user_details(teacher_id)
-        if teacher_details and canvas_course_id:
+        if teacher_details:
             result = canvas.unenroll_teacher_from_course(canvas_course_id, teacher_details)
             status = 'Success' if result else 'Failed'
             monday.create_update(item_id, f"Unenroll Teacher '{teacher_details.get('name')}': {status}")
