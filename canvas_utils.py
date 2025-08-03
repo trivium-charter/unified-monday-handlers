@@ -58,37 +58,62 @@ def update_user_ssid(user, new_ssid):
 
 # In canvas_utils.py
 
+# In canvas_utils.py
+
 def create_canvas_course(course_name, term_id):
-    """Creates a new course in Canvas, handling conflicts."""
+    """Creates a new course in a specific sub-account and uses a template course."""
     canvas = initialize_canvas_api()
     if not canvas: return None
-    account = canvas.get_account(1)
 
-    # CORRECTED: Create a more unique SIS ID by cleaning the name more carefully
-    # This keeps characters like '+' and numbers, making IDs for similar courses distinct
+    # Get the new environment variables
+    subaccount_id = os.environ.get("CANVAS_SUBACCOUNT_ID")
+    template_course_id = os.environ.get("CANVAS_TEMPLATE_COURSE_ID")
+
+    if not subaccount_id or not template_course_id:
+        print("ERROR: Missing CANVAS_SUBACCOUNT_ID or CANVAS_TEMPLATE_COURSE_ID environment variables.")
+        return None
+
+    try:
+        # Get the specific sub-account object
+        account = canvas.get_account(subaccount_id)
+    except ResourceDoesNotExist:
+        print(f"ERROR: Canvas Sub-Account with ID '{subaccount_id}' not found.")
+        return None
+
+    # This creates a more unique SIS ID to prevent the duplicates you were seeing
     sis_id_name = ''.join(e for e in course_name if e.isalnum() or e in ['+', '-']).replace(' ', '_').lower()
     sis_id = f"{sis_id_name}_{term_id}"
 
     course_data = {
-        'name': course_name, 'course_code': course_name,
-        'enrollment_term_id': f"sis_term_id:{term_id}", 'sis_course_id': sis_id
+        'name': course_name,
+        'course_code': course_name,
+        'enrollment_term_id': f"sis_term_id:{term_id}",
+        'sis_course_id': sis_id,
+        'source_course_id': template_course_id  # This tells Canvas to use your template
     }
+
     try:
-        print(f"INFO: Attempting to create Canvas course '{course_name}' with SIS ID '{sis_id}'.")
-        return account.create_course(course=course_data)
+        print(f"INFO: Attempting to create Canvas course '{course_name}' in sub-account '{subaccount_id}' using template '{template_course_id}'.")
+        # Create the course within the sub-account
+        new_course = account.create_course(course=course_data)
+        
+        # The copy process happens in the background, so we return the new course object immediately
+        return new_course
+
     except Conflict:
-        print(f"INFO: Course with SIS ID '{sis_id}' already exists. Searching for it.")
+        print(f"INFO: A course with SIS ID '{sis_id}' may already exist. Searching for it.")
         try:
-            # When a conflict occurs, we find the existing course to avoid creating duplicates
             courses = account.get_courses(sis_course_id=sis_id)
             for course in courses:
                 if course.sis_course_id == sis_id:
                     print(f"SUCCESS: Found existing course '{course.name}' with ID {course.id}.")
                     return course
         except Exception as e:
-            print(f"ERROR: A conflict occurred but could not find course with SIS ID '{sis_id}'. Error: {e}")
-    except Exception as e:
-        print(f"ERROR: Unexpected API error during course creation for '{course_name}': {e}")
+            print(f"ERROR: A conflict occurred but could not find the course. Error: {e}")
+            
+    except CanvasException as e:
+        print(f"ERROR: An unexpected API error occurred during course creation: {e}")
+
     return None
     
 def create_section_if_not_exists(course_id, section_name):
