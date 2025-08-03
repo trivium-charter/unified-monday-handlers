@@ -164,9 +164,6 @@ def enroll_or_create_and_enroll(course_id, section_id, student_details):
 
 # In canvas_utils.py
 
-# In canvas_utils.py
-
-# In canvas_utils.py
 
 def unenroll_student_from_course(course_id, student_details):
     """Deactivates active enrollments or deletes pending invitations for a student."""
@@ -197,8 +194,8 @@ def unenroll_student_from_course(course_id, student_details):
             print(f"INFO: No enrollments found for '{student_email}' in course {course_id}.")
             return True
 
-        # CORRECTED: Instead of checking the state, we directly conclude the enrollment.
-        # Canvas will correctly handle whether it's an active or invited enrollment.
+        # CORRECTED: Directly use the enrollment object from the list to deactivate it.
+        # This avoids the AttributeError and works for both active and invited enrollments.
         for enrollment in enrollments:
             print(f"INFO: Concluding enrollment for '{student_email}' (Enrollment ID: {enrollment.id}).")
             enrollment.deactivate(task='conclude')
