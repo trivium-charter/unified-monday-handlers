@@ -29,6 +29,7 @@ CANVAS_BOARD_ID = os.environ.get("CANVAS_BOARD_ID")
 CANVAS_COURSE_ID_COLUMN = os.environ.get("CANVAS_COURSE_ID_COLUMN")
 CANVAS_TERM_ID = os.environ.get("CANVAS_TERM_ID")
 CANVAS_COURSES_TEACHER_COLUMN_ID = os.environ.get("CANVAS_COURSES_TEACHER_COLUMN_ID")
+PLP_TO_HS_ROSTER_CONNECT_COLUMN = os.environ.get("PLP_TO_HS_ROSTER_CONNECT_COLUMN")
 
 try:
     CANVAS_BOARD_COURSE_NAME_COLUMN_ID = os.environ.get("CANVAS_BOARD_COURSE_NAME_COLUMN_ID")
@@ -130,19 +131,77 @@ def process_canvas_full_sync_from_status(event_data):
     return True
 
 @celery_app.task
-def process_canvas_delta_sync_from_course_change(event_data, user_id): # <-- THE FIX IS HERE
-    # This function is now correct
+def process_canvas_delta_sync_from_course_change(event_data, user_id):
+    # --- Part 1: Existing Canvas Sync Logic (Unchanged) ---
     plp_item_id = event_data.get('pulseId')
+    trigger_column_id = event_data.get('columnId') # We need this now
+    
     student_details = get_student_details_from_plp(plp_item_id)
-    if not student_details: return False
+    if not student_details: 
+        print(f"INFO: No student details found for PLP item {plp_item_id}. Stopping sync.")
+        return False
+        
     current_ids = monday.get_linked_ids_from_connect_column_value(event_data.get('value'))
     previous_ids = monday.get_linked_ids_from_connect_column_value(event_data.get('previousValue'))
+    
     added_ids = current_ids - previous_ids
     removed_ids = previous_ids - current_ids
+    
+    # Run the standard enrollment logic first
     for class_item_id in added_ids:
         manage_class_enrollment("enroll", plp_item_id, class_item_id, student_details, user_id)
     for class_item_id in removed_ids:
         manage_class_enrollment("unenroll", plp_item_id, class_item_id, student_details, user_id)
+
+    # --- Part 2: New Reverse Sync Logic (PLP -> HS Roster) ---
+    print("INFO: Checking if reverse sync from PLP to HS Roster is needed.")
+
+    # 1. Check if this PLP item is linked to an HS Roster item.
+    hs_roster_linked_ids = monday.get_linked_items_from_board_relation(
+        plp_item_id, PLP_BOARD_ID, PLP_TO_HS_ROSTER_CONNECT_COLUMN
+    )
+
+    if not hs_roster_linked_ids:
+        print("INFO: Not a high school student (no link to HS Roster). Reverse sync not required.")
+        return True # The main Canvas sync task was successful
+
+    hs_roster_parent_item_id = list(hs_roster_linked_ids)[0]
+    print(f"INFO: High school student detected. PLP item {plp_item_id} links to HS Roster item {hs_roster_parent_item_id}.")
+
+    # 2. Figure out which category was changed. We need to reverse the mapping.
+    # PLP_CATEGORY_TO_CONNECT_COLUMN_MAP looks like: {"Math": "col_id_1", "English": "col_id_2"}
+    # We need: {"col_id_1": "Math", "col_id_2": "English"}
+    try:
+        CONNECT_COLUMN_TO_CATEGORY_MAP = {v: k for k, v in PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.items()}
+        category_name = CONNECT_COLUMN_TO_CATEGORY_MAP.get(trigger_column_id)
+    except Exception:
+        category_name = None # Handle potential errors if the map is empty or malformed
+
+    if not category_name:
+        print(f"ERROR: Could not determine course category for column {trigger_column_id}. Cannot reverse sync.")
+        return False
+
+    print(f"INFO: Change occurred in the '{category_name}' category.")
+
+    # 3. Find the correct subitem on the HS Roster (e.g., the "Math" subitem).
+    target_subitem_id = monday.find_subitem_by_column_value(
+        hs_roster_parent_item_id, 
+        HS_ROSTER_SUBITEM_DROPDOWN_COLUMN_ID,
+        category_name
+    )
+
+    if not target_subitem_id:
+        print(f"ERROR: Could not find subitem for category '{category_name}' under HS Roster item {hs_roster_parent_item_id}.")
+        return False
+
+    # 4. Sync the added/removed courses to that subitem.
+    print(f"INFO: Syncing changes to HS Roster subitem {target_subitem_id}.")
+    for course_id in added_ids:
+        monday.update_connect_board_column(target_subitem_id, HS_ROSTER_BOARD_ID, HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID, course_id, "add")
+    for course_id in removed_ids:
+        monday.update_connect_board_column(target_subitem_id, HS_ROSTER_BOARD_ID, HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID, course_id, "remove")
+
+    print("INFO: Reverse sync from PLP to HS Roster complete.")
     return True
 
 @celery_app.task
