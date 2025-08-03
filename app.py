@@ -33,7 +33,6 @@ MASTER_STUDENT_EMAIL_COLUMN = os.environ.get("MASTER_STUDENT_EMAIL_COLUMN")
 
 ALL_COURSES_BOARD_ID = os.environ.get("ALL_COURSES_BOARD_ID")
 ALL_COURSES_NAME_COLUMN_ID = os.environ.get("ALL_COURSES_NAME_COLUMN_ID")
-# --- CORRECTED VARIABLE NAME ---
 ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID = os.environ.get("ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID")
 ALL_CLASSES_CANVAS_ID_COLUMN = os.environ.get("ALL_CLASSES_CANVAS_ID_COLUMN")
 ALL_CLASSES_AG_GRAD_COLUMN = os.environ.get("ALL_CLASSES_AG_GRAD_COLUMN")
@@ -195,21 +194,50 @@ def create_canvas_user(student_details):
         print(f"ERROR: Canvas user creation failed: {e}")
         return None
 
+# --- CORRECTED AND FINAL VERSION of Canvas Course Creation ---
 def create_canvas_course(course_name, term_id):
+    """
+    Creates a new course if it doesn't exist, or finds the existing one
+    if the SIS ID is already in use.
+    """
     canvas_api = initialize_canvas_api()
-    if not all([canvas_api, CANVAS_SUBACCOUNT_ID, CANVAS_TEMPLATE_COURSE_ID]): return None
+    if not all([canvas_api, CANVAS_SUBACCOUNT_ID, CANVAS_TEMPLATE_COURSE_ID]):
+        print("ERROR: Missing Canvas Sub-Account or Template Course ID config.")
+        return None
     try:
         account = canvas_api.get_account(CANVAS_SUBACCOUNT_ID)
+        # Create a standardized SIS ID
         sis_id_name = ''.join(e for e in course_name if e.isalnum()).replace(' ', '_').lower()
         sis_id = f"{sis_id_name}_{term_id}"
-        course_data = {'name': course_name, 'course_code': course_name, 'enrollment_term_id': f"sis_term_id:{term_id}", 'sis_course_id': sis_id, 'source_course_id': CANVAS_TEMPLATE_COURSE_ID}
-        return account.create_course(course=course_data)
-    except Conflict:
-        courses = account.get_courses(sis_course_id=sis_id)
-        return next((c for c in courses if c.sis_course_id == sis_id), None)
+        
+        course_data = {
+            'name': course_name, 'course_code': course_name,
+            'enrollment_term_id': f"sis_term_id:{term_id}",
+            'sis_course_id': sis_id, 'source_course_id': CANVAS_TEMPLATE_COURSE_ID
+        }
+        
+        # Attempt to create the course
+        print(f"INFO: Attempting to create Canvas course '{course_name}' with SIS ID '{sis_id}'.")
+        new_course = account.create_course(course=course_data)
+        return new_course
+
     except CanvasException as e:
-        print(f"ERROR: Canvas course creation failed: {e}")
-        return None
+        # If any API error occurs, check if it's because the SIS ID is already in use
+        error_message = str(e)
+        if "is already in use" in error_message:
+            print(f"INFO: Course with SIS ID '{sis_id}' already exists. Searching for it.")
+            try:
+                # Search for the course by its SIS ID
+                courses = account.get_courses(sis_course_id=sis_id)
+                # Return the first exact match
+                return next((c for c in courses if c.sis_course_id == sis_id), None)
+            except CanvasException as search_e:
+                print(f"ERROR: Failed to search for existing course '{sis_id}'. Error: {search_e}")
+                return None
+        else:
+            # If it's a different kind of error, log it
+            print(f"ERROR: An unexpected API error occurred during course creation: {error_message}")
+            return None
 
 def create_section_if_not_exists(course_id, section_name):
     canvas_api = initialize_canvas_api()
@@ -330,7 +358,6 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details)
     class_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID))
     if not class_name: return
 
-    # --- CORRECTED to use the right environment variable ---
     linked_canvas_item_ids = get_linked_items_from_board_relation(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
     
     canvas_item_id = list(linked_canvas_item_ids)[0] if linked_canvas_item_ids else None
@@ -376,7 +403,6 @@ def process_canvas_full_sync_from_status(event_data):
     for class_item_id in all_class_ids:
         manage_class_enrollment("enroll", plp_item_id, class_item_id, student_details)
 
-# --- CORRECTED to handle both Canvas and non-Canvas courses ---
 @celery_app.task
 def process_canvas_delta_sync_from_course_change(event_data):
     plp_item_id = event_data.get('pulseId')
@@ -398,8 +424,7 @@ def process_canvas_delta_sync_from_course_change(event_data):
             manage_class_enrollment("enroll", plp_item_id, class_id, student_details)
         else:
             class_name = get_item_name(class_id, int(ALL_COURSES_BOARD_ID))
-            if class_name:
-                create_subitem(plp_item_id, f"Added non-Canvas course '{class_name}' on {date} by {changer}")
+            if class_name: create_subitem(plp_item_id, f"Added non-Canvas course '{class_name}' on {date} by {changer}")
 
     for class_id in removed_ids:
         is_canvas_course = get_linked_items_from_board_relation(class_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
@@ -407,8 +432,7 @@ def process_canvas_delta_sync_from_course_change(event_data):
             manage_class_enrollment("unenroll", plp_item_id, class_id, student_details)
         else:
             class_name = get_item_name(class_id, int(ALL_COURSES_BOARD_ID))
-            if class_name:
-                create_subitem(plp_item_id, f"Removed non-Canvas course '{class_name}' on {date} by {changer}")
+            if class_name: create_subitem(plp_item_id, f"Removed non-Canvas course '{class_name}' on {date} by {changer}")
 
 @celery_app.task
 def process_plp_course_sync_webhook(event_data):
@@ -425,13 +449,7 @@ def process_plp_course_sync_webhook(event_data):
     for course_id in (current - previous): update_connect_board_column(plp_item_id, int(PLP_BOARD_ID), target_plp_col_id, course_id, "add")
     for course_id in (previous - current): update_connect_board_column(plp_item_id, int(PLP_BOARD_ID), target_plp_col_id, course_id, "remove")
     updated_val = (get_column_value(plp_item_id, int(PLP_BOARD_ID), target_plp_col_id) or {}).get('value')
-    # Pass the user_id for logging non-Canvas courses
-    downstream_event = {
-        'pulseId': plp_item_id, 
-        'value': updated_val, 
-        'previousValue': original_val,
-        'userId': event_data.get('userId')
-    }
+    downstream_event = {'pulseId': plp_item_id, 'value': updated_val, 'previousValue': original_val, 'userId': event_data.get('userId')}
     process_canvas_delta_sync_from_course_change.delay(downstream_event)
 
 @celery_app.task
