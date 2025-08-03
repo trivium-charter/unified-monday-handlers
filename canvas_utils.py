@@ -235,10 +235,26 @@ def enroll_or_create_and_enroll_teacher(course_id, teacher_details):
         print(f"CRITICAL: Teacher details are missing an email address. Cannot enroll.")
         return None
 
+    # --- THE FIX: ADDED ROBUST LOOKUP LOGIC ---
     try:
+        # First, try to find user by their primary login ID (email)
+        print(f"INFO: Searching for teacher by email (login_id): {teacher_email}")
         user = canvas.get_user(teacher_email, 'login_id')
+        print(f"SUCCESS: Found teacher by login_id with ID: {user.id}")
     except ResourceDoesNotExist:
-        # User doesn't exist, create them
+        print("INFO: Teacher not found by login_id. Trying SIS ID...")
+        try:
+            # If that fails, try to find them by their SIS ID (which we also set to email)
+            print(f"INFO: Searching for teacher by sis_user_id: {teacher_email}")
+            user = canvas.get_user(teacher_email, 'sis_user_id')
+            print(f"SUCCESS: Found teacher by SIS ID with ID: {user.id}")
+        except ResourceDoesNotExist:
+            print("INFO: Teacher not found by SIS ID either. Proceeding to create user.")
+            pass # User not found by either method, so we will create them below.
+    # --- END FIX ---
+
+    if not user:
+        # Only create the user if both lookups fail.
         user = create_canvas_user({'name': teacher_details.get('name'), 'email': teacher_email, 'ssid': teacher_email})
 
     if user:
