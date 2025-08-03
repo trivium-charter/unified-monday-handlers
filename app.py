@@ -218,22 +218,33 @@ def create_canvas_course(course_name, term_id):
     if not all([canvas_api, CANVAS_SUBACCOUNT_ID, CANVAS_TEMPLATE_COURSE_ID]):
         print("ERROR: Missing Canvas Sub-Account or Template Course ID config.")
         return None
+        
     try:
         account = canvas_api.get_account(CANVAS_SUBACCOUNT_ID)
+        # Create a unique, clean SIS ID for the new course
         sis_id_name = ''.join(e for e in course_name if e.isalnum()).replace(' ', '_').lower()
         sis_id = f"{sis_id_name}_{term_id}"
-        
-        print(f"INFO: Searching for existing Canvas course with SIS ID '{sis_id}'.")
-        existing_courses = list(account.get_courses(sis_course_id=sis_id))
-        if existing_courses:
-            print(f"INFO: Found existing course '{existing_courses[0].name}'.")
-            return existing_courses[0]
 
+        # First, try a direct, efficient lookup for an existing course
+        print(f"INFO: Searching for existing Canvas course with SIS ID '{sis_id}'.")
+        try:
+            # Use a direct get_course call, which is much faster than searching
+            existing_course = canvas_api.get_course(f"sis_course_id:{sis_id}")
+            if existing_course:
+                print(f"INFO: Found existing course '{existing_course.name}'.")
+                return existing_course
+        except ResourceDoesNotExist:
+            # This is the expected outcome if the course does not exist.
+            pass
+
+        # If the direct lookup fails, create the new course
         print(f"INFO: No existing course found. Creating new course '{course_name}'.")
         course_data = {
-            'name': course_name, 'course_code': course_name,
+            'name': course_name,
+            'course_code': course_name,
             'enrollment_term_id': f"sis_term_id:{term_id}",
-            'sis_course_id': sis_id, 'source_course_id': CANVAS_TEMPLATE_COURSE_ID
+            'sis_course_id': sis_id,
+            'source_course_id': CANVAS_TEMPLATE_COURSE_ID
         }
         return account.create_course(course=course_data)
 
