@@ -20,7 +20,6 @@ HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID = os.environ.get("HS_ROSTER_CONNECT_ALL_
 MASTER_STUDENT_BOARD_ID = os.environ.get("MASTER_STUDENT_BOARD_ID", "")
 PLP_BOARD_ID = os.environ.get("PLP_BOARD_ID", "")
 SPED_STUDENTS_BOARD_ID = os.environ.get("SPED_STUDENTS_BOARD_ID", "")
-# In app_unified_webhook_handler.py (at the top with other env vars)
 CANVAS_BOARD_ID = os.environ.get("CANVAS_BOARD_ID", "")
 CANVAS_COURSES_TEACHER_COLUMN_ID = os.environ.get("CANVAS_COURSES_TEACHER_COLUMN_ID", "")
 CANVAS_BOARD_COURSE_NAME_COLUMN_ID = os.environ.get("CANVAS_BOARD_COURSE_NAME_COLUMN_ID", "")
@@ -49,7 +48,7 @@ def monday_unified_webhooks():
         
         # --- DISPATCHING LOGIC ---
 
-         # 1. Unified Canvas Sync Check (routes to different tasks based on column)
+        # 1. Unified Canvas Sync Check (routes to different tasks based on column)
         PLP_TRIGGER_COLUMNS_STR = os.environ.get("PLP_ALL_CLASSES_CONNECT_COLUMNS_STR", "")
         PLP_TRIGGER_COLUMN_IDS = [c.strip() for c in PLP_TRIGGER_COLUMNS_STR.split(',') if c.strip()]
         PLP_CANVAS_SYNC_COLUMN_ID = os.environ.get("PLP_CANVAS_SYNC_COLUMN_ID")
@@ -60,17 +59,13 @@ def monday_unified_webhooks():
 
             if trigger_column_id == PLP_CANVAS_SYNC_COLUMN_ID:
                 print("INFO: Dispatching to Canvas FULL Sync task from status change.")
-                # Notice we already have 'event' available here, so we just pass it
                 process_canvas_full_sync_from_status.delay(event) 
                 return jsonify({"status": "success", "message": "Canvas Full Sync task queued."}), 202
             else:
                 print("INFO: Dispatching to Canvas DELTA Sync task from course change.")
-                # --- THE FIX ---
-                # 1. Get the user_id from the event object
                 user_id = event.get('userId')
-                # 2. Pass the user_id to the celery task
-                process_canvas_delta_sync_from_course_change.delay(event, LOG_CONFIGS, user_id)
-                # ---- END FIX ----
+                # ** THE FIX: Removed unnecessary `LOG_CONFIGS` argument **
+                process_canvas_delta_sync_from_course_change.delay(event, user_id)
                 return jsonify({"status": "success", "message": "Canvas Delta Sync task queued."}), 202
 
         # 2. PLP Course Sync Check (HS Roster to PLP)
@@ -97,10 +92,6 @@ def monday_unified_webhooks():
             process_sped_students_person_sync_webhook.delay(event)
             return jsonify({"status": "success", "message": "SpEd Students Person Sync task queued."}), 202
 
-        # In app_unified_webhook_handler.py -> monday_unified_webhooks()
-
-        # ... after the "SpEd Students Person Sync Check" block ...
-
         # 5. Canvas Course Teacher Enrollment Check
         # Triggers when the 'Teacher' person column changes on the Canvas Courses board.
         if (webhook_type == "update_column_value" and CANVAS_BOARD_ID and
@@ -109,8 +100,6 @@ def monday_unified_webhooks():
             print("INFO: Dispatching to Teacher Enrollment task.")
             process_teacher_enrollment_webhook.delay(event)
             return jsonify({"status": "success", "message": "Teacher Enrollment task queued."}), 202
-
-
                 
         # 6. General Logger Check
         for config_rule in LOG_CONFIGS:
