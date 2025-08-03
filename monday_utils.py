@@ -614,3 +614,44 @@ def find_subitem_by_category_and_linked_course(parent_item_id, category_col_id, 
     
     print(f"WARNING: No subitem found matching all criteria.")
     return None
+# In monday_utils.py
+
+# --- Required Environment Variables for this function to work ---
+# ALL_COURSES_BOARD_ID
+# CANVAS_BOARD_ID
+# ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID
+# CANVAS_COURSE_ID_COLUMN_ID  (The column on the Canvas board with the numeric ID)
+
+def get_canvas_api_id_from_all_courses_item(all_courses_item_id):
+    """
+    Performs a 'double-hop' lookup to get the numeric Canvas API ID.
+    1. Starts with an item ID from the 'All Courses' board.
+    2. Follows a connect_boards column to find the linked item on the 'Canvas' board.
+    3. Fetches the numeric ID from the specified column on that 'Canvas' board item.
+    Returns the Canvas API ID string or None.
+    """
+    if not all([ALL_COURSES_BOARD_ID, CANVAS_BOARD_ID, ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID, CANVAS_COURSE_ID_COLUMN_ID]):
+        print("ERROR: Missing config for get_canvas_api_id_from_all_courses_item.")
+        return None
+
+    # Step 1: Find the linked item on the Canvas Board
+    linked_canvas_ids = get_linked_items_from_board_relation(
+        all_courses_item_id, 
+        int(ALL_COURSES_BOARD_ID),
+        ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID
+    )
+
+    if not linked_canvas_ids:
+        print(f"WARN: No linked Canvas item found for All Courses item {all_courses_item_id}")
+        return None
+    
+    canvas_item_id = int(list(linked_canvas_ids)[0])
+
+    # Step 2: Get the Canvas API ID from the text/number column on the Canvas item
+    api_id_value = get_column_value(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_COURSE_ID_COLUMN_ID)
+    
+    if api_id_value and api_id_value.get('text'):
+        return api_id_value['text']
+    else:
+        print(f"WARN: Could not retrieve Canvas API ID from Canvas item {canvas_item_id}")
+        return None
