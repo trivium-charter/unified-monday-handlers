@@ -5,7 +5,7 @@ from celery_app import celery_app
 import monday_utils as monday
 import canvas_utils as canvas
 
-# --- Environment Variable Loading (Unchanged) ---
+# --- Environment Variable Loading ---
 PLP_BOARD_ID = os.environ.get("PLP_BOARD_ID")
 PLP_CANVAS_SYNC_COLUMN_ID = os.environ.get("PLP_CANVAS_SYNC_COLUMN_ID")
 PLP_CANVAS_SYNC_STATUS_VALUE = os.environ.get("PLP_CANVAS_SYNC_STATUS_VALUE", "Done")
@@ -29,15 +29,16 @@ CANVAS_BOARD_ID = os.environ.get("CANVAS_BOARD_ID")
 CANVAS_COURSE_ID_COLUMN = os.environ.get("CANVAS_COURSE_ID_COLUMN")
 CANVAS_TERM_ID = os.environ.get("CANVAS_TERM_ID")
 CANVAS_COURSES_TEACHER_COLUMN_ID = os.environ.get("CANVAS_COURSES_TEACHER_COLUMN_ID")
+
+# ** THE FIX: Correctly loading JSON and env vars with a clean try/except block **
 try:
-    CANVAS_BOARD_COURSE_NAME_COLUMN_ID = os.environ.get("CANVAS_BOARD_COURSE_NAME_COLUMN_ID") = os.environ.get("CANVAS_BOARD_COURSE_NAME_COLUMN_ID")
+    CANVAS_BOARD_COURSE_NAME_COLUMN_ID = os.environ.get("CANVAS_BOARD_COURSE_NAME_COLUMN_ID")
     PLP_CATEGORY_TO_CONNECT_COLUMN_MAP = json.loads(os.environ.get("PLP_CATEGORY_TO_CONNECT_COLUMN_MAP", "{}"))
     MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS = json.loads(os.environ.get("MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS", "{}"))
     SPED_STUDENTS_PEOPLE_COLUMN_MAPPING = json.loads(os.environ.get("SPED_STUDENTS_PEOPLE_COLUMN_MAPPING", "{}"))
     LOG_CONFIGS = json.loads(os.environ.get("MONDAY_LOGGING_CONFIGS", "[]"))
-except json.JSONDecodeError:
-    # Default values if JSON parsing fails
-    CANVAS_BOARD_COURSE_NAME_COLUMN_ID = os.environ.get("CANVAS_BOARD_COURSE_NAME_COLUMN_ID") = None
+except (json.JSONDecodeError, TypeError):
+    CANVAS_BOARD_COURSE_NAME_COLUMN_ID = None
     PLP_CATEGORY_TO_CONNECT_COLUMN_MAP = {}
     MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS = {}
     SPED_STUDENTS_PEOPLE_COLUMN_MAPPING = {}
@@ -194,7 +195,6 @@ def process_general_webhook(event_data, config_rule):
 
 # --- THIS IS THE FIXED FUNCTION ---
 @celery_app.task
-@celery_app.task
 def process_master_student_person_sync_webhook(event_data):
     master_item_id = event_data.get('pulseId'); trigger_column_id = event_data.get('columnId'); event_user_id = event_data.get('userId'); current_value_raw = event_data.get('value'); previous_value_raw = event_data.get('previousValue') or {}
     operation_successful = True
@@ -241,12 +241,6 @@ def process_sped_students_person_sync_webhook(event_data):
         if not success: operation_successful = False
     return operation_successful
 # In monday_tasks.py (at the end of the file)
-
-@celery_app.task
-# In monday_tasks.py (at the end of the file)
-
-@celery_app.task
-# Add this new task to the end of monday_tasks.py
 
 @celery_app.task
 def process_teacher_enrollment_webhook(event_data):
