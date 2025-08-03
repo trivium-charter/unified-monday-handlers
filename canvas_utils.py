@@ -57,21 +57,15 @@ def update_user_ssid(user, new_ssid):
     return False
 
 def create_canvas_course(course_name, term_id):
-    """
-    Creates a new course in Canvas, or retrieves the existing one if it already exists.
-    """
+    """Creates a new course in Canvas, handling conflicts."""
     canvas = initialize_canvas_api()
     if not canvas: return None
     account = canvas.get_account(1)
     sis_id_name = ''.join(e for e in course_name if e.isalnum() or e.isspace()).replace(' ', '_').lower()
     sis_id = f"{sis_id_name}_{term_id}"
-
     course_data = {
-        'name': course_name,
-        'course_code': course_name,
-        # CORRECTED: Properly formats the Term ID to use a SIS ID.
-        'enrollment_term_id': f"sis_term_id:{term_id}",
-        'sis_course_id': sis_id
+        'name': course_name, 'course_code': course_name,
+        'enrollment_term_id': f"sis_term_id:{term_id}", 'sis_course_id': sis_id
     }
     try:
         print(f"INFO: Attempting to create Canvas course '{course_name}' with SIS ID '{sis_id}'.")
@@ -86,10 +80,8 @@ def create_canvas_course(course_name, term_id):
                     return course
         except Exception as e:
             print(f"ERROR: A conflict occurred but could not find course with SIS ID '{sis_id}'. Error: {e}")
-            return None
     except Exception as e:
         print(f"ERROR: Unexpected API error during course creation for '{course_name}': {e}")
-        return None
     return None
 
 def create_section_if_not_exists(course_id, section_name):
@@ -106,8 +98,6 @@ def create_section_if_not_exists(course_id, section_name):
         print(f"ERROR: API error finding/creating section '{section_name}': {e}")
     return None
 
-# In canvas_utils.py
-
 def enroll_student_in_section(course_id, user_id, section_id):
     """Enrolls a student, making them active immediately."""
     canvas = initialize_canvas_api()
@@ -115,18 +105,13 @@ def enroll_student_in_section(course_id, user_id, section_id):
     try:
         course = canvas.get_course(course_id)
         user = canvas.get_user(user_id)
-        
-        # CORRECTED: The enrollment type is the second argument.
-        # The rest of the details go into the 'enrollment' dictionary.
         enrollment_type = 'StudentEnrollment'
         enrollment_details = {
             'enrollment_state': 'active',
             'course_section_id': section_id,
             'notify': False
         }
-        
         enrollment = course.enroll_user(user, enrollment_type, enrollment=enrollment_details)
-        
         return enrollment
     except CanvasException as e:
         if "already" in str(e).lower():
@@ -162,11 +147,6 @@ def enroll_or_create_and_enroll(course_id, section_id, student_details):
     print(f"CRITICAL: User '{student_details['email']}' could not be found or created. Aborting enrollment.")
     return None
 
-# In canvas_utils.py
-
-
-# In canvas_utils.py
-
 def unenroll_student_from_course(course_id, student_details):
     """Deactivates active enrollments or deletes pending invitations for a student."""
     canvas = initialize_canvas_api()
@@ -197,7 +177,6 @@ def unenroll_student_from_course(course_id, student_details):
             return True
 
         # CORRECTED: Directly use the enrollment object from the list to deactivate it.
-        # This avoids the AttributeError and works for both active and invited enrollments.
         for enrollment in enrollments:
             print(f"INFO: Concluding enrollment for '{student_email}' (Enrollment ID: {enrollment.id}).")
             enrollment.deactivate(task='conclude')
