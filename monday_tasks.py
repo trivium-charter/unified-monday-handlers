@@ -109,7 +109,6 @@ def manage_class_enrollment(action, plp_item_id, all_courses_item_id, student_de
             monday.create_subitem(plp_item_id, log_text)
 
 @celery_app.task
-@celery_app.task
 def process_canvas_full_sync_from_status(event_data):
     plp_item_id = event_data.get('pulseId')
     user_id = event_data.get('userId')
@@ -128,16 +127,18 @@ def process_canvas_full_sync_from_status(event_data):
     return True
 
 @celery_app.task
-def process_canvas_delta_sync_from_course_change(event_data, log_configs):
-    plp_item_id = event_data.get('pulseId'); student_details = get_student_details_from_plp(plp_item_id)
+def process_canvas_delta_sync_from_course_change(event_data, log_configs, user_id):
+    plp_item_id = event_data.get('pulseId')
+    student_details = get_student_details_from_plp(plp_item_id)
     if not student_details: return False
     current_ids = monday.get_linked_ids_from_connect_column_value(event_data.get('value'))
     previous_ids = monday.get_linked_ids_from_connect_column_value(event_data.get('previousValue'))
-    added_ids = current_ids - previous_ids; removed_ids = previous_ids - current_ids
+    added_ids = current_ids - previous_ids
+    removed_ids = previous_ids - current_ids
     for class_item_id in added_ids:
-        manage_class_enrollment("enroll", plp_item_id, class_item_id, student_details)
+        manage_class_enrollment("enroll", plp_item_id, class_item_id, student_details, user_id)
     for class_item_id in removed_ids:
-        manage_class_enrollment("unenroll", plp_item_id, class_item_id, student_details)
+        manage_class_enrollment("unenroll", plp_item_id, class_item_id, student_details, user_id)
     return True
 
 @celery_app.task
@@ -162,10 +163,9 @@ def process_plp_course_sync_webhook(event_data):
         if not monday.update_connect_board_column(plp_item_id, PLP_BOARD_ID, target_plp_connect_column_id, course_id, "remove"): operation_successful = False
     if not operation_successful: return False
     updated_plp_column_data = monday.get_column_value(plp_item_id, PLP_BOARD_ID, target_plp_connect_column_id); updated_plp_value = updated_plp_column_data.get('value') if updated_plp_column_data else {}    
-    downstream_event = {'boardId': int(PLP_BOARD_ID), 'pulseId': plp_item_id, 'columnId': target_plp_connect_column_id, 'userId': user_id, 'value': updated_plp_value, 'previousValue': original_plp_value, 'type': 'update_column_value'}
-    process_canvas_delta_sync_from_course_change.delay(downstream_event, LOG_CONFIGS)
+    downstream_event = {'boardId': int(PLP_BOARD_ID), 'pulseId': plp_item_id, 'columnId': target_plp_connect_column_id, 'value': updated_plp_value, 'previousValue': original_plp_value, 'type': 'update_column_value'}
+    process_canvas_delta_sync_from_course_change.delay(downstream_event, LOG_CONFIGS, user_id)
     return True
-
 @celery_app.task
 def process_general_webhook(event_data, config_rule):
     webhook_board_id = event_data.get('boardId'); item_id_from_webhook = event_data.get('pulseId'); trigger_column_id_from_webhook = event_data.get('columnId'); event_user_id = event_data.get('userId'); current_column_value = event_data.get('value'); previous_column_value = event_data.get('previousValue'); webhook_type = event_data.get('type')
@@ -176,17 +176,17 @@ def process_general_webhook(event_data, config_rule):
         current_linked_ids = monday.get_linked_ids_from_connect_column_value(current_column_value); previous_linked_ids = monday.get_linked_ids_from_connect_column_value(previous_column_value)
         added_links = current_linked_ids - previous_linked_ids; removed_links = previous_linked_ids - current_linked_ids
         if not added_links and not removed_links: return True
-        overall_op_successful = True; current_date = datetime.now().strftime('%Y-%m-%d'); changer_user_name = monday.get_user_name(event_user_id) or "automation"; user_log_text = f" by {changer_user_name}"; subject_prefix_text = f"{subitem_name_prefix} " if subitem_name_prefix else ""; additional_subitem_columns = {entry_type_column_id: {"labels": [str(subitem_entry_type)]}} if entry_type_column_id else {}
+        overall_op_successful = True; current_date = datetime.now().strftime('%Y-%m-%d'); changer_user_name = monday.get_user_name(event_user_id) or "automation"; user_log_text = f" on {current_date} by {changer_user_name}"; subject_prefix_text = f"{subitem_name_prefix} " if subitem_name_prefix else ""; additional_subitem_columns = {entry_type_column_id: {"labels": [str(subitem_entry_type)]}} if entry_type_column_id else {}
         for item_id in added_links:
             linked_item_name = monday.get_item_name(item_id, connected_board_id)
             if linked_item_name:
-                subitem_name = f"Added {subject_prefix_text}'{linked_item_name}' on {current_date}{user_log_text}"
+                subitem_name = f"Added {subject_prefix_text}'{linked_item_name}'{user_log_text}"
                 if not monday.create_subitem(main_item_id, subitem_name, additional_subitem_columns): overall_op_successful = False
             else: overall_op_successful = False
         for item_id in removed_links:
             linked_item_name = monday.get_item_name(item_id, connected_board_id)
             if linked_item_name:
-                subitem_name = f"Removed {subject_prefix_text}'{linked_item_name}' on {current_date}{user_log_text}"
+                subitem_name = f"Removed {subject_prefix_text}'{linked_item_name}'{user_log_text}"
                 if not monday.create_subitem(main_item_id, subitem_name, additional_subitem_columns): overall_op_successful = False
             else: overall_op_successful = False
         return overall_op_successful
