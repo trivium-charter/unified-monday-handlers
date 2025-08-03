@@ -344,6 +344,39 @@ def create_subitem(parent_item_id, subitem_name, column_values=None):
             print(f"Monday API Errors: {result['errors']}")
         return None
 
+# In monday_utils.py
+
+def create_item(board_id, item_name, column_values=None):
+    """
+    Creates a new main item on a specified board.
+    """
+    # Prepare column values for the GraphQL mutation
+    column_values_str = json.dumps(column_values) if column_values else "{}"
+
+    mutation = f"""
+    mutation {{
+      create_item (
+        board_id: {board_id},
+        item_name: {json.dumps(item_name)},
+        column_values: {json.dumps(column_values_str)}
+      ) {{
+        id
+      }}
+    }}
+    """
+    print(f"DEBUG: monday_utils: Attempting to create item '{item_name}' on board {board_id}")
+    result = execute_monday_graphql(mutation)
+
+    if result and 'data' in result and result['data'].get('create_item'):
+        new_item_id = result['data']['create_item'].get('id')
+        print(f"Successfully created item '{item_name}' (ID: {new_item_id}) on board {board_id}.")
+        return new_item_id
+    else:
+        print(f"ERROR: monday_utils: Failed to create item '{item_name}' on board {board_id}. Result: {result}")
+        if result and 'errors' in result:
+            print(f"Monday API Errors: {result['errors']}")
+        return None
+        
 def create_update(item_id, update_text):
     """
     Creates an update on a Monday.com item.
