@@ -212,8 +212,7 @@ def update_user_ssid(user, new_ssid):
 
 def create_canvas_course(course_name, term_id):
     """
-    Creates a Canvas course. If the initial SIS ID is already in use, it will
-    append an incrementing number (_1, _2, etc.) and retry until it succeeds.
+    Creates a Canvas course with robust, corrected retry logic for SIS ID conflicts.
     """
     canvas_api = initialize_canvas_api()
     if not all([canvas_api, CANVAS_SUBACCOUNT_ID, CANVAS_TEMPLATE_COURSE_ID]):
@@ -228,36 +227,28 @@ def create_canvas_course(course_name, term_id):
     base_sis_name = ''.join(e for e in course_name if e.isalnum()).replace(' ', '_').lower()
     base_sis_id = f"{base_sis_name}_{term_id}"
 
-    max_attempts = 10  # Safety break to prevent infinite loops
+    max_attempts = 10
     for attempt in range(max_attempts):
         sis_id_to_try = base_sis_id if attempt == 0 else f"{base_sis_id}_{attempt}"
-        
         course_data = {
-            'name': course_name, 'course_code': course_name, 'enrollment_term_id': f"sis_term_id:{term_id}",
-            'sis_course_id': sis_id_to_try, 'source_course_id': CANVAS_TEMPLATE_COURSE_ID
+            'name': course_name, 'course_code': course_name,
+            'enrollment_term_id': f"sis_term_id:{term_id}", 'sis_course_id': sis_id_to_try,
+            'source_course_id': CANVAS_TEMPLATE_COURSE_ID
         }
-        
         try:
             print(f"INFO: [Attempt {attempt + 1}] Trying to create course '{course_name}' with SIS ID '{sis_id_to_try}'.")
             new_course = account.create_course(course=course_data)
             print(f"SUCCESS: Course '{course_name}' created with SIS ID '{sis_id_to_try}'.")
             return new_course
-            
-        except Conflict as e:
-            if 'sis_course_id already in use' in str(e).lower():
-                print(f"WARNING: SIS ID '{sis_id_to_try}' is in use. Retrying with a new ID...")
-                continue  # Go to the next iteration of the loop
-            else:
-                # It was a different kind of conflict, which is a fatal error.
-                print(f"ERROR: A non-SIS ID conflict occurred for course '{course_name}': {e}")
-                return None
-        
         except CanvasException as e:
-            # Any other exception is a fatal error for this attempt.
-            print(f"ERROR: A critical Canvas API error occurred for course '{course_name}': {e}")
-            return None
+            # THIS IS THE CRITICAL FIX: Check for the 400 status code and the specific message.
+            if hasattr(e, 'status_code') and e.status_code == 400 and 'is already in use' in str(e).lower():
+                print(f"WARNING: SIS ID '{sis_id_to_try}' is in use. Retrying with a new ID...")
+                continue
+            else:
+                print(f"ERROR: A critical Canvas API error occurred for course '{course_name}': {e}")
+                return None
 
-    # If the loop finishes after all attempts
     print(f"ERROR: Failed to create course '{course_name}' after {max_attempts} attempts. Aborting.")
     return None
 
