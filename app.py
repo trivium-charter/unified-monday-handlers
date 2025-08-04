@@ -354,14 +354,12 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details,
         
     canvas_item_id = list(linked_canvas_item_ids)[0]
 
-    # THE FIX: Name is sourced ONLY from the specific column. No fallback to item name.
     class_name = ""
     if ALL_COURSES_NAME_COLUMN_ID:
         name_val = get_column_value(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_NAME_COLUMN_ID)
         if name_val and name_val.get('text'):
             class_name = name_val['text']
 
-    # If the specific column is empty, we must fail. No fallbacks.
     if not class_name:
         item_name_for_log = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)) or f"Item ID {class_item_id}"
         print(f"ERROR: Required 'Canvas Course Title' column ({ALL_COURSES_NAME_COLUMN_ID}) is empty for course '{item_name_for_log}'. Cannot create course. Aborting.")
@@ -374,7 +372,6 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details,
 
     if not canvas_course_id and action == "enroll":
         print(f"INFO: No Canvas ID found on linked Monday item {canvas_item_id}. Attempting to create course for '{class_name}'.")
-        # The 'class_name' variable is now guaranteed to be from the correct column.
         new_course = create_canvas_course(class_name, CANVAS_TERM_ID)
         if new_course:
             canvas_course_id = new_course.id
@@ -518,4 +515,40 @@ def process_sped_students_person_sync_webhook(event_data):
 app = Flask(__name__)
 
 @app.route('/monday-webhooks', methods=['POST'])
-def monday_unified_webhooks
+def monday_unified_webhooks():
+    data = request.get_json()
+    if 'challenge' in data: return jsonify({'challenge': data['challenge']})
+    event = data.get('event', {})
+    board_id, col_id, webhook_type = str(event.get('boardId')), event.get('columnId'), event.get('type')
+    parent_board_id = str(event.get('parentItemBoardId')) if event.get('parentItemBoardId') else None
+    if board_id == PLP_BOARD_ID and webhook_type == "update_column_value":
+        if col_id == PLP_CANVAS_SYNC_COLUMN_ID:
+            process_canvas_full_sync_from_status.delay(event)
+            return jsonify({"message": "Canvas Full Sync queued."}), 202
+        if col_id in [c.strip() for c in PLP_ALL_CLASSES_CONNECT_COLUMNS_STR.split(',')]:
+            process_canvas_delta_sync_from_course_change.delay(event)
+            return jsonify({"message": "Canvas Delta Sync queued."}), 202
+    if parent_board_id == HS_ROSTER_BOARD_ID and col_id == HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID:
+        process_plp_course_sync_webhook.delay(event)
+        return jsonify({"message": "PLP Course Sync queued."}), 202
+    if board_id == MASTER_STUDENT_BOARD_ID and col_id in MASTER_STUDENT_PEOPLE_COLUMNS:
+        process_master_student_person_sync_webhook.delay(event)
+        return jsonify({"message": "Master Student Person Sync queued."}), 202
+    if board_id == SPED_STUDENTS_BOARD_ID and col_id in SPED_STUDENTS_PEOPLE_COLUMN_MAPPING:
+        process_sped_students_person_sync_webhook.delay(event)
+        return jsonify({"message": "SpEd Students Person Sync queued."}), 202
+    for rule in LOG_CONFIGS:
+        if str(rule.get("trigger_board_id")) == board_id:
+            if (webhook_type == "update_column_value" and rule.get("trigger_column_id") == col_id) or \
+               (webhook_type == "create_pulse" and not rule.get("trigger_column_id")):
+                 process_general_webhook.delay(event, rule)
+                 return jsonify({"message": f"General task '{rule.get('log_type')}' queued."}), 202
+    return jsonify({"status": "ignored"}), 200
+
+@app.route('/')
+def home():
+    return "Consolidated Webhook Handler is running!", 200
+
+if __name__ == '__main__':
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
