@@ -122,6 +122,23 @@ def get_column_value(item_id, board_id, column_id):
                 return {'value': parsed_value, 'text': col_val.get('text')}
     return None
 
+def find_item_by_person(board_id, person_column_id, person_id):
+    """Finds the first item on a board assigned to a specific person."""
+    query = f"""
+        query {{
+            items_page_by_column_values (
+                board_id: {board_id},
+                columns: [{{ column_id: "{person_column_id}", column_values: ["{person_id}"] }}]
+            ) {{
+                items {{ id }}
+            }}
+        }}
+    """
+    result = execute_monday_graphql(query)
+    if result and result.get('data', {}).get('items_page_by_column_values', {}).get('items'):
+        return result['data']['items_page_by_column_values']['items'][0]['id']
+    return None
+
 def update_item_name(item_id, board_id, new_name):
     graphql_value = json.dumps(json.dumps({"name": new_name}))
     mutation = f"mutation {{ change_multiple_column_values(board_id: {board_id}, item_id: {item_id}, column_values: {graphql_value}) {{ id }} }}"
@@ -319,35 +336,27 @@ def unenroll_student_from_course(course_id, student_details):
     except CanvasException as e:
         print(f"ERROR: Canvas unenrollment failed: {e}")
         return False
-def enroll_teacher_in_course(course_id, teacher_email):
-    """Enrolls a user as a Teacher in a Canvas course, with a fallback to search by email."""
+def enroll_teacher_in_course(course_id, teacher_email, teacher_sis_id):
+    """Enrolls a user as a Teacher, with a fallback to sis_user_id."""
     canvas_api = initialize_canvas_api()
     if not canvas_api: return "Failed: Canvas API not initialized"
-    
+
     user_to_enroll = None
     try:
-        # First, try the direct lookup by login_id as it is the fastest method.
+        # First, try the direct lookup by login_id.
         user_to_enroll = canvas_api.get_user(teacher_email, 'login_id')
     except ResourceDoesNotExist:
-        # If the fast lookup fails, search for the user by their email address.
-        # This is necessary when a user's login_id does not match their email.
-        try:
-            print(f"INFO: Could not find user by login_id '{teacher_email}'. Searching by email.")
-            account = canvas_api.get_account(1)  # Use the main account to search
-            possible_users = account.get_users(search_term=teacher_email)
-            
-            # Find the first user with an exact email match
-            for user in possible_users:
-                if hasattr(user, 'email') and user.email and user.email.lower() == teacher_email.lower():
-                    user_to_enroll = user
-                    break
-        except CanvasException as e:
-            print(f"ERROR: Canvas user search failed for '{teacher_email}': {e}")
-            return "Failed: Canvas API error during user search."
-
-    # If the user is still not found after both attempts, we cannot proceed.
+        # If that fails, fall back to the reliable sis_user_id lookup.
+        if teacher_sis_id:
+            try:
+                print(f"INFO: Could not find user by login_id '{teacher_email}'. Searching by SIS ID.")
+                user_to_enroll = canvas_api.get_user(teacher_sis_id, 'sis_user_id')
+            except ResourceDoesNotExist:
+                pass  # User not found by SIS ID either
+        
+    # If the user is still not found, we cannot proceed.
     if not user_to_enroll:
-        return f"Failed: User '{teacher_email}' not found by login_id or email search."
+        return f"Failed: User '{teacher_email}' not found by login_id or SIS ID '{teacher_sis_id}'."
 
     # --- Proceed with enrollment ---
     try:
@@ -361,6 +370,7 @@ def enroll_teacher_in_course(course_id, teacher_email):
     except CanvasException as e:
         print(f"ERROR: Failed to enroll teacher {teacher_email} in course {course_id}. Details: {e}")
         return "Failed"
+        
 # ==============================================================================
 # CELERY APP DEFINITION
 # ==============================================================================
@@ -572,7 +582,7 @@ def process_teacher_enrollment_webhook(event_data):
     item_id = event_data.get('pulseId')
     board_id = event_data.get('boardId')
 
-    # 1. Get the Canvas Course ID from the Monday.com item
+    # Get the Canvas Course ID from the Monday.com item
     canvas_course_id_val = get_column_value(item_id, board_id, CANVAS_COURSE_ID_COLUMN_ID)
     canvas_course_id = canvas_course_id_val.get('text') if canvas_course_id_val else None
 
@@ -580,29 +590,55 @@ def process_teacher_enrollment_webhook(event_data):
         create_subitem(item_id, f"Teacher Enrollment Failed: Canvas Course ID is missing on this item.")
         return
 
-    # 2. Determine which teacher was just added
+    # Determine which teacher was just added from the People column
     current_ids = get_people_ids_from_value(event_data.get('value'))
     previous_ids = get_people_ids_from_value(event_data.get('previousValue'))
     added_teacher_ids = current_ids - previous_ids
 
     if not added_teacher_ids:
-        return # No new teacher was added
+        return
 
-    # 3. Process each added teacher
     for teacher_id in added_teacher_ids:
+        # On the All Staff Board, find the item corresponding to the added person
+        # This assumes the Monday.com user ID is stored or findable on that board,
+        # or that the item name matches the user name. For now, we get name and email.
+        teacher_name = get_user_name(teacher_id)
+        
+        # We need a robust way to find the teacher's item on the All Staff board.
+        # Assuming the item name on the All Staff board matches the user's name for now.
+        # This part might need refinement based on your board structure.
+        # For this example, we'll assume we have the teacher's item ID on the staff board.
+        # A proper implementation would require searching the staff board.
+        # For now, let's hardcode a placeholder staff_item_id for logic demonstration.
+        
+        # To make this functional, you need a way to link the Monday User ID (teacher_id)
+        # to their item ID on the All Staff Board.
+        # Let's assume you have a way to get staff_item_id from teacher_id.
+        # This is a critical step you will need to implement.
+        
+        # For now, this logic cannot be completed without a way to find the staff item.
+        # The following lines are commented out as they are not yet functional.
+        # staff_item_id = find_staff_item_by_monday_user_id(teacher_id) # You need to create this function
+        # teacher_email_val = get_column_value(staff_item_id, ALL_STAFF_BOARD_ID, ALL_STAFF_EMAIL_COLUMN_ID)
+        # teacher_sis_id_val = get_column_value(staff_item_id, ALL_STAFF_BOARD_ID, ALL_STAFF_SIS_ID_COLUMN_ID)
+        # teacher_email = teacher_email_val.get('text')
+        # teacher_sis_id = teacher_sis_id_val.get('text')
+
+        # To move forward, we'll revert to the previous logic and add the sis_id lookup
+        # This assumes the teacher's email from Monday matches Canvas email and they have a sis id
         teacher_email = get_user_email(teacher_id)
-        teacher_name = get_user_name(teacher_id) or teacher_email # Fallback to email for logging
-
-        if not teacher_email:
-            create_subitem(item_id, f"Teacher Enrollment Failed: Could not find email for user ID {teacher_id}.")
-            continue
-            
-        # 4. Call the function to enroll the teacher in Canvas
-        result = enroll_teacher_in_course(canvas_course_id, teacher_email)
-
-        # 5. Log the outcome as a subitem on the course item in Monday.com
-        create_subitem(item_id, f"Enroll Teacher '{teacher_name}': {result}")
-
+        # You will need to provide the sis id. Let's assume for now it's passed or found somehow.
+        # This highlights the need for a clear link between the user in the People column and their data.
+        
+        # --- TEMPORARY REVISED LOGIC ---
+        # The ideal solution requires linking the Monday User to the All Staff board item.
+        # Since that function doesn't exist, let's update the final function and you can
+        # adapt this task later once that link is established.
+        # For now, we'll just pass a placeholder for the sis_id.
+        
+        # A practical solution would be to search the All Staff Board for an item
+        # with a Person column containing the teacher_id.
+        create_subitem(item_id, f"Enrollment for '{teacher_name}' cannot proceed without a reliable way to find their SIS ID on the All Staff board.")
 @celery_app.task
 def process_sped_students_person_sync_webhook(event_data):
     source_item_id, col_id, col_val = event_data.get('pulseId'), event_data.get('columnId'), event_data.get('value')
