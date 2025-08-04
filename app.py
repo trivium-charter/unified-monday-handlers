@@ -124,19 +124,29 @@ def get_column_value(item_id, board_id, column_id):
 
 def find_item_by_person(board_id, person_column_id, person_id):
     """Finds the first item on a board assigned to a specific person."""
+    # This query format is specifically for searching a Person column by user ID.
+    # It requires the person_id to be inside a JSON-formatted string.
     query = f"""
         query {{
             items_page_by_column_values (
                 board_id: {board_id},
-                columns: [{{ column_id: "{person_column_id}", column_values: ["{person_id}"] }}]
+                columns: [{{
+                    column_id: "{person_column_id}",
+                    column_values: ["{{\\"ids\\":[ {person_id} ]}}"]
+                }}]
             ) {{
-                items {{ id }}
+                items {{
+                    id
+                }}
             }}
         }}
     """
     result = execute_monday_graphql(query)
+    # Check for a valid response and if any items were returned
     if result and result.get('data', {}).get('items_page_by_column_values', {}).get('items'):
-        return result['data']['items_page_by_column_values']['items'][0]['id']
+        items = result['data']['items_page_by_column_values']['items']
+        if items:
+            return items[0]['id']
     return None
 
 def update_item_name(item_id, board_id, new_name):
