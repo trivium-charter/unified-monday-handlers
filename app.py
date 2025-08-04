@@ -224,7 +224,6 @@ def create_canvas_course(course_name, term_id):
 
     sis_id_name = ''.join(e for e in course_name if e.isalnum()).replace(' ', '_').lower()
     sis_id_raw = f"{sis_id_name}_{term_id}"
-    sis_id_for_search = f"sis_course_id:{sis_id_raw}"
     
     course_data = {
         'name': course_name, 'course_code': course_name, 'enrollment_term_id': f"sis_term_id:{term_id}",
@@ -234,20 +233,8 @@ def create_canvas_course(course_name, term_id):
         print(f"INFO: Attempting to create Canvas course '{course_name}' with SIS ID '{sis_id_raw}'.")
         return account.create_course(course=course_data)
     except (Conflict, CanvasException) as e:
-        if "is already in use" in str(e):
-            print(f"INFO: Course with SIS ID '{sis_id_raw}' already exists. Searching for it now.")
-            try:
-                existing_courses = account.get_courses(sis_course_id=[sis_id_for_search])
-                for course in existing_courses:
-                    if f"sis_course_id:{course.sis_course_id}" == sis_id_for_search:
-                        print(f"SUCCESS: Found existing course '{course.name}' (ID: {course.id}).")
-                        return course
-                print(f"ERROR: A SIS ID conflict occurred, but no exact match found for '{sis_id_for_search}'.")
-            except Exception as search_error:
-                print(f"ERROR: Failed to search for conflicting course after error. Details: {search_error}")
-        else:
-            print(f"ERROR: An unexpected API error occurred during course creation: {e}")
-    return None
+        print(f"ERROR: Failed to create Canvas course '{course_name}'. Canvas API Error: {e}")
+        return None
 
 def create_section_if_not_exists(course_id, section_name):
     canvas_api = initialize_canvas_api()
@@ -357,10 +344,8 @@ def get_student_details_from_plp(plp_item_id):
     return {'name': student_name, 'ssid': ssid, 'email': email}
 
 def manage_class_enrollment(action, plp_item_id, class_item_id, student_details, subitem_cols=None):
-    # REWRITTEN to follow the correct, strict rules.
     subitem_cols = subitem_cols or {}
 
-    # Rule 1: The link to the "Canvas Board" is the gatekeeper.
     linked_canvas_item_ids = get_linked_items_from_board_relation(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
     if not linked_canvas_item_ids:
         class_name_for_log = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)) or f"Item {class_item_id}"
@@ -369,48 +354,42 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details,
         
     canvas_item_id = list(linked_canvas_item_ids)[0]
 
-    # Get the official course name, prioritizing the specific name column.
+    # THE FIX: Name is sourced ONLY from the specific column. No fallback to item name.
     class_name = ""
     if ALL_COURSES_NAME_COLUMN_ID:
         name_val = get_column_value(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_NAME_COLUMN_ID)
         if name_val and name_val.get('text'):
             class_name = name_val['text']
-            
+
+    # If the specific column is empty, we must fail. No fallbacks.
     if not class_name:
-        class_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID))
-        
-    if not class_name:
-        print(f"ERROR: Could not determine course name for item ID {class_item_id}. Aborting.")
+        item_name_for_log = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)) or f"Item ID {class_item_id}"
+        print(f"ERROR: Required 'Canvas Course Title' column ({ALL_COURSES_NAME_COLUMN_ID}) is empty for course '{item_name_for_log}'. Cannot create course. Aborting.")
         return
 
-    # Check for the Canvas Course ID on the linked item.
     canvas_course_id = None
     course_id_val = get_column_value(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_COURSE_ID_COLUMN_ID)
     if course_id_val and course_id_val.get('text'):
         canvas_course_id = course_id_val['text']
 
-    # Rule 2: Only create a Canvas course if the link exists but the ID is missing.
     if not canvas_course_id and action == "enroll":
-        print(f"INFO: No Canvas ID found on linked Monday item {canvas_item_id}. Attempting to create/find course for '{class_name}'.")
+        print(f"INFO: No Canvas ID found on linked Monday item {canvas_item_id}. Attempting to create course for '{class_name}'.")
+        # The 'class_name' variable is now guaranteed to be from the correct column.
         new_course = create_canvas_course(class_name, CANVAS_TERM_ID)
         if new_course:
             canvas_course_id = new_course.id
-            print(f"INFO: New/found course has ID: {canvas_course_id}. Updating Monday.com item {canvas_item_id}.")
-            # Update the ID on the *existing* Canvas board item.
+            print(f"INFO: New course created with ID: {canvas_course_id}. Updating Monday.com item {canvas_item_id}.")
             change_column_value_generic(int(CANVAS_BOARD_ID), canvas_item_id, CANVAS_COURSE_ID_COLUMN_ID, str(canvas_course_id))
-            # Also update the helper column on the All Courses board.
             if ALL_CLASSES_CANVAS_ID_COLUMN:
                 change_column_value_generic(int(ALL_COURSES_BOARD_ID), class_item_id, ALL_CLASSES_CANVAS_ID_COLUMN, str(canvas_course_id))
         else:
-            print(f"ERROR: Failed to create or find Canvas course for '{class_name}'. Aborting enrollment.")
+            print(f"ERROR: Failed to create Canvas course for '{class_name}'. Aborting enrollment.")
             return
 
-    # If after all checks we don't have a course ID, we cannot proceed.
     if not canvas_course_id:
         print(f"INFO: No Canvas Course ID available for '{class_name}' to perform action '{action}'. Skipping.")
         return
 
-    # Proceed with the requested action (enroll or unenroll)
     if action == "enroll":
         m_series_val = get_column_value(plp_item_id, int(PLP_BOARD_ID), PLP_M_SERIES_LABELS_COLUMN)
         ag_grad_val = get_column_value(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_CLASSES_AG_GRAD_COLUMN)
@@ -465,12 +444,22 @@ def process_canvas_delta_sync_from_course_change(event_data):
     current_ids, previous_ids = get_linked_ids_from_connect_column_value(event_data.get('value')), get_linked_ids_from_connect_column_value(event_data.get('previousValue'))
     added_ids, removed_ids = current_ids - previous_ids, previous_ids - current_ids
     category_name, date, changer = {v: k for k, v in PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.items()}.get(trigger_column_id, "Course"), datetime.now().strftime('%Y-%m-%d'), get_user_name(user_id) or "automation"
+    
     for class_id in added_ids:
-        # Pass to the master enrollment function, which will handle the gatekeeper logic
-        manage_class_enrollment("enroll", plp_item_id, class_id, student_details, subitem_cols)
+        is_canvas_course = get_linked_items_from_board_relation(class_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
+        if is_canvas_course:
+            manage_class_enrollment("enroll", plp_item_id, class_id, student_details, subitem_cols)
+        else:
+            class_name = get_item_name(class_id, int(ALL_COURSES_BOARD_ID))
+            if class_name: create_subitem(plp_item_id, f"Added {category_name} course '{class_name}' on {date} by {changer}", subitem_cols)
+            
     for class_id in removed_ids:
-        # Pass to the master enrollment function, which will handle the gatekeeper logic
-        manage_class_enrollment("unenroll", plp_item_id, class_id, student_details, subitem_cols)
+        is_canvas_course = get_linked_items_from_board_relation(class_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
+        if is_canvas_course:
+            manage_class_enrollment("unenroll", plp_item_id, class_id, student_details, subitem_cols)
+        else:
+            class_name = get_item_name(class_id, int(ALL_COURSES_BOARD_ID))
+            if class_name: create_subitem(plp_item_id, f"Removed {category_name} course '{class_name}' on {date} by {changer}", subitem_cols)
 
 @celery_app.task
 def process_plp_course_sync_webhook(event_data):
@@ -529,40 +518,4 @@ def process_sped_students_person_sync_webhook(event_data):
 app = Flask(__name__)
 
 @app.route('/monday-webhooks', methods=['POST'])
-def monday_unified_webhooks():
-    data = request.get_json()
-    if 'challenge' in data: return jsonify({'challenge': data['challenge']})
-    event = data.get('event', {})
-    board_id, col_id, webhook_type = str(event.get('boardId')), event.get('columnId'), event.get('type')
-    parent_board_id = str(event.get('parentItemBoardId')) if event.get('parentItemBoardId') else None
-    if board_id == PLP_BOARD_ID and webhook_type == "update_column_value":
-        if col_id == PLP_CANVAS_SYNC_COLUMN_ID:
-            process_canvas_full_sync_from_status.delay(event)
-            return jsonify({"message": "Canvas Full Sync queued."}), 202
-        if col_id in [c.strip() for c in PLP_ALL_CLASSES_CONNECT_COLUMNS_STR.split(',')]:
-            process_canvas_delta_sync_from_course_change.delay(event)
-            return jsonify({"message": "Canvas Delta Sync queued."}), 202
-    if parent_board_id == HS_ROSTER_BOARD_ID and col_id == HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID:
-        process_plp_course_sync_webhook.delay(event)
-        return jsonify({"message": "PLP Course Sync queued."}), 202
-    if board_id == MASTER_STUDENT_BOARD_ID and col_id in MASTER_STUDENT_PEOPLE_COLUMNS:
-        process_master_student_person_sync_webhook.delay(event)
-        return jsonify({"message": "Master Student Person Sync queued."}), 202
-    if board_id == SPED_STUDENTS_BOARD_ID and col_id in SPED_STUDENTS_PEOPLE_COLUMN_MAPPING:
-        process_sped_students_person_sync_webhook.delay(event)
-        return jsonify({"message": "SpEd Students Person Sync queued."}), 202
-    for rule in LOG_CONFIGS:
-        if str(rule.get("trigger_board_id")) == board_id:
-            if (webhook_type == "update_column_value" and rule.get("trigger_column_id") == col_id) or \
-               (webhook_type == "create_pulse" and not rule.get("trigger_column_id")):
-                 process_general_webhook.delay(event, rule)
-                 return jsonify({"message": f"General task '{rule.get('log_type')}' queued."}), 202
-    return jsonify({"status": "ignored"}), 200
-
-@app.route('/')
-def home():
-    return "Consolidated Webhook Handler is running!", 200
-
-if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
+def monday_unified_webhooks
