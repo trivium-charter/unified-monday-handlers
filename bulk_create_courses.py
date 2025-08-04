@@ -2,7 +2,7 @@ import os
 import json
 import requests
 from canvasapi import Canvas
-from canvasapi.exceptions import CanvasException, Conflict, ResourceDoesNotExist
+from canvasapi.exceptions import CanvasException
 
 # ==============================================================================
 # SCRIPT CONFIGURATION (Pulls from your existing environment variables)
@@ -11,10 +11,6 @@ MONDAY_API_KEY = os.environ.get("MONDAY_API_KEY")
 CANVAS_API_KEY = os.environ.get("CANVAS_API_KEY")
 CANVAS_API_URL = os.environ.get("CANVAS_API_URL")
 MONDAY_API_URL = "https://api.monday.com/v2"
-
-ALL_COURSES_BOARD_ID = os.environ.get("ALL_COURSES_BOARD_ID")
-ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID = os.environ.get("ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID")
-ALL_CLASSES_CANVAS_ID_COLUMN = os.environ.get("ALL_CLASSES_CANVAS_ID_COLUMN")
 
 CANVAS_BOARD_ID = os.environ.get("CANVAS_BOARD_ID")
 CANVAS_COURSE_ID_COLUMN_ID = os.environ.get("CANVAS_COURSE_ID_COLUMN_ID")
@@ -26,7 +22,7 @@ CANVAS_TEMPLATE_COURSE_ID = os.environ.get("CANVAS_TEMPLATE_COURSE_ID")
 MONDAY_HEADERS = { "Authorization": MONDAY_API_KEY, "Content-Type": "application/json", "API-Version": "2024-01" }
 
 # ==============================================================================
-# UTILITY FUNCTIONS (Copied from app.py)
+# UTILITY FUNCTIONS
 # ==============================================================================
 def execute_monday_graphql(query, variables=None):
     payload = {'query': query}
@@ -40,19 +36,16 @@ def execute_monday_graphql(query, variables=None):
         print(f"FATAL: Monday.com API Error: {e}")
         return None
 
-def get_item_name(item_id, board_id):
-    query = f"query($boardId: [ID!], $itemId: [ID!]) {{ boards(ids: $boardId) {{ items_page(query_params: {{ids: $itemId}}) {{ items {{ name }} }} }} }}"
-    variables = {"boardId": int(board_id), "itemId": int(item_id)}
-    result = execute_monday_graphql(query, variables)
-    try:
-        return result['data']['boards'][0]['items_page']['items'][0]['name']
-    except (TypeError, KeyError, IndexError):
-        return None
-
 def change_column_value_generic(board_id, item_id, column_id, value):
     query = f'mutation($boardId: ID!, $itemId: ID!, $columnId: String!, $value: JSON!) {{ change_column_value(board_id: $boardId, item_id: $itemId, column_id: $columnId, value: $value) {{ id }} }}'
     variables = {"boardId": int(board_id), "itemId": int(item_id), "columnId": column_id, "value": json.dumps(str(value))}
-    return execute_monday_graphql(query, variables)
+    print(f"  EXECUTING MONDAY UPDATE for item {item_id}...")
+    result = execute_monday_graphql(query, variables)
+    if result and 'errors' not in result:
+        print(f"  MONDAY UPDATE Succeeded for item {item_id}.")
+    else:
+        print(f"  MONDAY UPDATE Failed for item {item_id}. Response: {result}")
+
 
 def get_all_items_from_board(board_id, column_ids):
     """Fetches all items from a board with pagination, including specified column values."""
@@ -71,7 +64,6 @@ def get_all_items_from_board(board_id, column_ids):
                         name
                         column_values(ids: [{column_ids_str}]) {{
                             id
-                            value
                             text
                         }}
                     }}
@@ -119,7 +111,6 @@ def create_canvas_course(course_name, term_id):
             print(f"  SUCCESS: Course created with SIS ID '{sis_id_to_try}'. Canvas ID: {new_course.id}")
             return new_course
         except CanvasException as e:
-            # THIS IS THE CRITICAL FIX: Check for the 400 status code and the specific message.
             if hasattr(e, 'status_code') and e.status_code == 400 and 'is already in use' in str(e).lower():
                 print(f"  WARNING: SIS ID '{sis_id_to_try}' is in use. Retrying...")
                 continue
@@ -132,51 +123,25 @@ def create_canvas_course(course_name, term_id):
 
 def main():
     """Main function to run the bulk creation process."""
-    print("Starting bulk Canvas course creation process...")
-    print(f"Fetching all items from 'All Courses' board ({ALL_COURSES_BOARD_ID})...")
+    print("--- CORRECTED SCRIPT INITIATED ---")
+    print(f"Starting bulk Canvas course creation process by reading the 'Canvas Courses' board ({CANVAS_BOARD_ID}).")
     
-    required_cols = [ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID]
-    all_courses_items = get_all_items_from_board(ALL_COURSES_BOARD_ID, required_cols)
-    print(f"Found {len(all_courses_items)} total items on the 'All Courses' board.")
+    all_canvas_board_items = get_all_items_from_board(CANVAS_BOARD_ID, [CANVAS_COURSE_ID_COLUMN_ID])
+    print(f"Found {len(all_canvas_board_items)} total items on the 'Canvas Courses' board.")
     
     courses_to_create = []
-    for item in all_courses_items:
-        connect_canvas_col = next((c for c in item['column_values'] if c['id'] == ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID), None)
+    for item in all_canvas_board_items:
+        course_id_col = next((c for c in item['column_values'] if c['id'] == CANVAS_COURSE_ID_COLUMN_ID), None)
         
-        if not connect_canvas_col or not connect_canvas_col.get('value'):
-            continue # Skip if not linked to Canvas board at all
-            
-        try:
-            linked_items = json.loads(connect_canvas_col['value']).get('linkedPulseIds', [])
-            if not linked_items:
-                continue
-            
-            canvas_item_id = linked_items[0]['linkedPulseId']
-            
-            # Now we need to check the 'Course ID' column on THIS item
-            query = f'query($itemId: [ID!]) {{ items(ids: $itemId) {{ column_values(ids: ["{CANVAS_COURSE_ID_COLUMN_ID}"]) {{ text }} }} }}'
-            variables = {"itemId": canvas_item_id}
-            result = execute_monday_graphql(query, variables)
-            canvas_course_id_text = result['data']['items'][0]['column_values'][0].get('text')
-            
-            if not canvas_course_id_text:
-                course_title = get_item_name(canvas_item_id, CANVAS_BOARD_ID)
-                if not course_title:
-                   print(f"WARNING: Skipping item {item['id']} because its linked Canvas item {canvas_item_id} has no name.")
-                   continue
-                
-                courses_to_create.append({
-                    "all_courses_item_id": item['id'],
-                    "canvas_item_id": canvas_item_id,
-                    "title": course_title
-                })
-                
-        except (json.JSONDecodeError, KeyError, IndexError) as e:
-            print(f"WARNING: Skipping item {item['id']} due to malformed data: {e}")
-            continue
+        # Check if the column is missing or its text value is empty/null
+        if not course_id_col or not course_id_col.get('text'):
+            courses_to_create.append({
+                "monday_item_id": item['id'],
+                "title": item['name']
+            })
             
     if not courses_to_create:
-        print("\nAll found Canvas courses already have a Course ID. Nothing to do. Exiting.")
+        print("\nAll items on the 'Canvas Courses' board already have a Course ID. Nothing to do. Exiting.")
         return
 
     print(f"\nFound {len(courses_to_create)} courses that need to be created in Canvas. Starting process...")
@@ -184,14 +149,16 @@ def main():
     success_count = 0
     fail_count = 0
     for course_data in courses_to_create:
-        print(f"\nProcessing '{course_data['title']}' (Monday Canvas Item ID: {course_data['canvas_item_id']})")
+        print(f"\nProcessing '{course_data['title']}' (Monday Item ID: {course_data['monday_item_id']})")
         new_course = create_canvas_course(course_data['title'], CANVAS_TERM_ID)
         
         if new_course:
-            print(f"  UPDATING MONDAY: Setting Canvas ID '{new_course.id}' on item '{course_data['canvas_item_id']}'...")
-            change_column_value_generic(CANVAS_BOARD_ID, course_data['canvas_item_id'], CANVAS_COURSE_ID_COLUMN_ID, new_course.id)
-            if ALL_CLASSES_CANVAS_ID_COLUMN:
-                change_column_value_generic(ALL_COURSES_BOARD_ID, course_data['all_courses_item_id'], ALL_CLASSES_CANVAS_ID_COLUMN, new_course.id)
+            change_column_value_generic(
+                CANVAS_BOARD_ID, 
+                course_data['monday_item_id'], 
+                CANVAS_COURSE_ID_COLUMN_ID, 
+                new_course.id
+            )
             success_count += 1
         else:
             print(f"  SKIPPING UPDATE: Course creation failed for '{course_data['title']}'.")
