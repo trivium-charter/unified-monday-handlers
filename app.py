@@ -203,15 +203,46 @@ def initialize_canvas_api():
     return Canvas(CANVAS_API_URL, CANVAS_API_KEY) if CANVAS_API_URL and CANVAS_API_KEY else None
 
 def create_canvas_user(student_details):
+    # FIXED: This function is restored from the old, working version.
+    # It now correctly sets the 'login_id' in the pseudonym.
     canvas_api = initialize_canvas_api()
     if not canvas_api: return None
     try:
         account = canvas_api.get_account(1)
-        user_payload = {'user': {'name': student_details['name'], 'terms_of_use': True}, 'pseudonym': {'unique_id': student_details['email'], 'sis_user_id': student_details['ssid']}, 'communication_channel': {'type': 'email', 'address': student_details['email'], 'skip_confirmation': True}}
-        return account.create_user(**user_payload)
+        print(f"INFO: Attempting to create new Canvas user for email: {student_details['email']}")
+        user_payload = {
+            'user': {'name': student_details['name'], 'terms_of_use': True},
+            'pseudonym': {
+                'unique_id': student_details['email'],
+                'sis_user_id': student_details['ssid'],
+                'login_id': student_details['email'],
+                'authentication_provider_id': '112' # Restored from old version
+            },
+            'communication_channel': {
+                'type': 'email',
+                'address': student_details['email'],
+                'skip_confirmation': True
+            }
+        }
+        new_user = account.create_user(**user_payload)
+        print(f"SUCCESS: Created new user '{student_details['name']}' with ID: {new_user.id}")
+        return new_user
     except CanvasException as e:
         print(f"ERROR: Canvas user creation failed: {e}")
         return None
+
+def update_user_ssid(user, new_ssid):
+    # ADDED: This helper function was missing from the new version.
+    """Updates the SIS User ID for an existing Canvas user."""
+    try:
+        logins = user.get_logins()
+        if logins:
+            login_to_update = logins[0]
+            login_to_update.edit(login={'sis_user_id': new_ssid})
+            return True
+    except CanvasException as e:
+        print(f"ERROR: API error updating SSID for user '{user.name}': {e}")
+    return False
 
 def create_canvas_course(course_name, term_id):
     """
@@ -279,16 +310,30 @@ def enroll_student_in_section(course_id, user_id, section_id):
         return "Failed"
 
 def enroll_or_create_and_enroll(course_id, section_id, student_details):
+    # FIXED: Restored logic to handle SIS ID mismatches.
     canvas_api = initialize_canvas_api()
     if not canvas_api: return "Failed: Canvas API not initialized"
     user = None
-    try: user = canvas_api.get_user(student_details['email'], 'login_id')
+    try: 
+        user = canvas_api.get_user(student_details['email'], 'login_id')
     except ResourceDoesNotExist:
         if student_details.get('ssid'):
-            try: user = canvas_api.get_user(student_details['ssid'], 'sis_user_id')
-            except ResourceDoesNotExist: pass
-    if not user: user = create_canvas_user(student_details)
-    return enroll_student_in_section(course_id, user.id, section_id) if user else "Failed: User not found/created"
+            try: 
+                user = canvas_api.get_user(student_details['ssid'], 'sis_user_id')
+            except ResourceDoesNotExist: 
+                pass # User not found by email or SIS ID, will be created next.
+    
+    if not user: 
+        user = create_canvas_user(student_details)
+    
+    if user:
+        # This block ensures data consistency, same as in the old working version.
+        if student_details.get('ssid') and hasattr(user, 'sis_user_id') and user.sis_user_id != student_details['ssid']:
+            print(f"INFO: Updating mismatched SIS ID for user {user.id}. Old: '{user.sis_user_id}', New: '{student_details['ssid']}'")
+            update_user_ssid(user, student_details['ssid'])
+        return enroll_student_in_section(course_id, user.id, section_id)
+    
+    return "Failed: User not found/created"
 
 def unenroll_student_from_course(course_id, student_details):
     canvas_api = initialize_canvas_api()
@@ -367,8 +412,10 @@ def get_student_details_from_plp(plp_item_id):
     if not master_student_ids: return None
     master_student_id = list(master_student_ids)[0]
     student_name = get_item_name(master_student_id, int(MASTER_STUDENT_BOARD_ID))
-    ssid = (get_column_value(master_student_id, int(MASTER_STUDENT_BOARD_ID), MASTER_STUDENT_SSID_COLUMN) or {}).get('text', '')
-    email = (get_column_value(master_student_id, int(MASTER_STUDENT_BOARD_ID), MASTER_STUDENT_EMAIL_COLUMN) or {}).get('text', '')
+    ssid_val = get_column_value(master_student_id, int(MASTER_STUDENT_BOARD_ID), MASTER_STUDENT_SSID_COLUMN)
+    email_val = get_column_value(master_student_id, int(MASTER_STUDENT_BOARD_ID), MASTER_STUDENT_EMAIL_COLUMN)
+    ssid = ssid_val.get('text', '') if ssid_val else ''
+    email = email_val.get('text', '') if email_val else ''
     if not all([student_name, email]): return None
     return {'name': student_name, 'ssid': ssid, 'email': email}
 
@@ -495,7 +542,8 @@ def process_plp_course_sync_webhook(event_data):
     subitem_id, parent_item_id = event_data.get('pulseId'), event_data.get('parentItemId')
     current, previous = (get_linked_ids_from_connect_column_value(event_data.get(k)) for k in ['value', 'previousValue'])
     if not (current - previous) and not (previous - current): return
-    dropdown_label = (get_column_value(subitem_id, int(event_data.get('boardId')), HS_ROSTER_SUBITEM_DROPDOWN_COLUMN_ID) or {}).get('text')
+    dropdown_label_val = get_column_value(subitem_id, int(event_data.get('boardId')), HS_ROSTER_SUBITEM_DROPDOWN_COLUMN_ID)
+    dropdown_label = dropdown_label_val.get('text') if dropdown_label_val else None
     target_plp_col_id = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get(dropdown_label)
     if not target_plp_col_id: return
     plp_linked_ids = get_linked_items_from_board_relation(parent_item_id, int(HS_ROSTER_BOARD_ID), HS_ROSTER_MAIN_ITEM_to_PLP_CONNECT_COLUMN_ID)
