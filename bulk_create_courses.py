@@ -5,7 +5,7 @@ from canvasapi import Canvas
 from canvasapi.exceptions import CanvasException
 
 # ==============================================================================
-# SCRIPT CONFIGURATION (Pulls from your existing environment variables)
+# SCRIPT CONFIGURATION
 # ==============================================================================
 MONDAY_API_KEY = os.environ.get("MONDAY_API_KEY")
 CANVAS_API_KEY = os.environ.get("CANVAS_API_KEY")
@@ -46,9 +46,7 @@ def change_column_value_generic(board_id, item_id, column_id, value):
     else:
         print(f"  MONDAY UPDATE Failed for item {item_id}. Response: {result}")
 
-
 def get_all_items_from_board(board_id, column_ids):
-    """Fetches all items from a board with pagination, including specified column values."""
     all_items = []
     cursor = None
     limit = 100
@@ -74,7 +72,6 @@ def get_all_items_from_board(board_id, column_ids):
         
         result = execute_monday_graphql(query, variables)
         if not result or 'data' not in result or not result['data'].get('boards'):
-            print("Error fetching board data or board is empty.")
             break
         
         page_info = result['data']['boards'][0]['items_page']
@@ -89,7 +86,7 @@ def get_all_items_from_board(board_id, column_ids):
 
 def create_canvas_course(course_name, term_id):
     """
-    Creates a Canvas course with robust, corrected retry logic for SIS ID conflicts.
+    Creates a Canvas course with a fortified, two-layer retry logic for SIS ID conflicts.
     """
     canvas_api = Canvas(CANVAS_API_URL, CANVAS_API_KEY)
     account = canvas_api.get_account(CANVAS_SUBACCOUNT_ID)
@@ -111,7 +108,28 @@ def create_canvas_course(course_name, term_id):
             print(f"  SUCCESS: Course created with SIS ID '{sis_id_to_try}'. Canvas ID: {new_course.id}")
             return new_course
         except CanvasException as e:
-            if hasattr(e, 'status_code') and e.status_code == 400 and 'is already in use' in str(e).lower():
+            # THIS IS THE FORTIFIED, TWO-LAYER CHECK.
+            is_sis_conflict = False
+            
+            # Layer 1: Try to parse the structured JSON error. This is most reliable.
+            try:
+                # The error message from the library is often a JSON string.
+                error_payload = json.loads(str(e))
+                if 'errors' in error_payload and 'sis_source_id' in error_payload['errors']:
+                    for error_detail in error_payload['errors']['sis_source_id']:
+                        if 'message' in error_detail and 'is already in use' in error_detail['message'].lower():
+                            is_sis_conflict = True
+                            break
+            except (json.JSONDecodeError, TypeError, KeyError):
+                # If parsing fails, proceed to the fallback check.
+                pass
+
+            # Layer 2: If the structured parse failed, fall back to a simple text check.
+            if not is_sis_conflict and 'is already in use' in str(e).lower():
+                is_sis_conflict = True
+
+            # Now, make the decision based on the combined check.
+            if is_sis_conflict:
                 print(f"  WARNING: SIS ID '{sis_id_to_try}' is in use. Retrying...")
                 continue
             else:
@@ -122,8 +140,7 @@ def create_canvas_course(course_name, term_id):
     return None
 
 def main():
-    """Main function to run the bulk creation process."""
-    print("--- CORRECTED SCRIPT INITIATED ---")
+    print("--- FORTIFIED SCRIPT (FINAL VERSION 2.0) INITIATED ---")
     print(f"Starting bulk Canvas course creation process by reading the 'Canvas Courses' board ({CANVAS_BOARD_ID}).")
     
     all_canvas_board_items = get_all_items_from_board(CANVAS_BOARD_ID, [CANVAS_COURSE_ID_COLUMN_ID])
@@ -133,12 +150,8 @@ def main():
     for item in all_canvas_board_items:
         course_id_col = next((c for c in item['column_values'] if c['id'] == CANVAS_COURSE_ID_COLUMN_ID), None)
         
-        # Check if the column is missing or its text value is empty/null
         if not course_id_col or not course_id_col.get('text'):
-            courses_to_create.append({
-                "monday_item_id": item['id'],
-                "title": item['name']
-            })
+            courses_to_create.append({ "monday_item_id": item['id'], "title": item['name'] })
             
     if not courses_to_create:
         print("\nAll items on the 'Canvas Courses' board already have a Course ID. Nothing to do. Exiting.")
@@ -153,12 +166,7 @@ def main():
         new_course = create_canvas_course(course_data['title'], CANVAS_TERM_ID)
         
         if new_course:
-            change_column_value_generic(
-                CANVAS_BOARD_ID, 
-                course_data['monday_item_id'], 
-                CANVAS_COURSE_ID_COLUMN_ID, 
-                new_course.id
-            )
+            change_column_value_generic(CANVAS_BOARD_ID, course_data['monday_item_id'], CANVAS_COURSE_ID_COLUMN_ID, new_course.id)
             success_count += 1
         else:
             print(f"  SKIPPING UPDATE: Course creation failed for '{course_data['title']}'.")
