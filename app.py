@@ -372,55 +372,53 @@ def get_student_details_from_plp(plp_item_id):
     if not all([student_name, email]): return None
     return {'name': student_name, 'ssid': ssid, 'email': email}
 
-def manage_class_enrollment(action, plp_item_id, class_item_id, student_details):
-    class_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID))
-    if not class_name:
+def manage_class_enrollment(action, plp_item_id, class_item_id, student_details, subitem_cols=None):
+    subitem_cols = subitem_cols or {}
+
+    linked_canvas_item_ids = get_linked_items_from_board_relation(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
+    if not linked_canvas_item_ids:
+        all_courses_item_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)) or f"Item {class_item_id}"
+        print(f"INFO: Course '{all_courses_item_name}' is not linked to the Canvas Board. Skipping Canvas sync.")
         return
-
-    # Get the Monday.com item that represents the Canvas course
-    linked_canvas_item_ids = get_linked_items_from_board_relation(
-        class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID
-    )
-    
-    canvas_item_id = list(linked_canvas_item_ids)[0] if linked_canvas_item_ids else None
-    if not canvas_item_id:
-        # If the course in "All Courses" isn't linked to the Canvas board, do nothing.
-        return
-
-    canvas_course_id = ''
-    if action == "enroll":
-        # Check the Monday.com item for an existing Canvas Course ID
-        course_id_val = get_column_value(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_COURSE_ID_COLUMN_ID)
-        canvas_course_id = course_id_val.get('text', '') if course_id_val else ''
-
-        # --- THIS IS THE CORE LOGIC YOU REQUESTED ---
-        if not canvas_course_id:
-            print(f"INFO: No Canvas ID found on Monday item {canvas_item_id}. Creating new course for '{class_name}'.")
-            # 1. Create the course in Canvas
-            new_course = create_canvas_course(class_name, CANVAS_TERM_ID)
-            
-            if new_course:
-                # 2. Get the new ID from Canvas
-                canvas_course_id = new_course.id
-                print(f"INFO: New course created with ID: {canvas_course_id}. Updating Monday.com.")
-                
-                # 3. PUT the new ID back into the Monday.com item
-                change_column_value_generic(
-                    int(CANVAS_BOARD_ID), 
-                    canvas_item_id, 
-                    CANVAS_COURSE_ID_COLUMN_ID, 
-                    str(canvas_course_id)
-                )
-            else:
-                print(f"ERROR: Failed to create Canvas course for '{class_name}'. Aborting enrollment.")
-                return # Stop if course creation failed
-
-        # --- Proceed with enrollment using the (now guaranteed) canvas_course_id ---
-        m_series_val = get_column_value(plp_item_id, int(PLP_BOARD_ID), PLP_M_SERIES_LABELS_COLUMN)
-        m_series_text = m_series_val.get('text') if m_series_val and m_series_val.get('text') is not None else ""
         
+    canvas_item_id = list(linked_canvas_item_ids)[0]
+
+    # THE FIX: The name for the course is the NAME of the linked item on the CANVAS_BOARD.
+    class_name = get_item_name(canvas_item_id, int(CANVAS_BOARD_ID))
+        
+    if not class_name:
+        print(f"ERROR: Linked item {canvas_item_id} on Canvas Board {CANVAS_BOARD_ID} has no name. Cannot create course. Aborting.")
+        return
+
+    canvas_course_id = None
+    course_id_val = get_column_value(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_COURSE_ID_COLUMN_ID)
+    if course_id_val and course_id_val.get('text'):
+        canvas_course_id = course_id_val['text']
+
+    if not canvas_course_id and action == "enroll":
+        print(f"INFO: No Canvas ID found on linked Monday item {canvas_item_id}. Attempting to create course for '{class_name}'.")
+        new_course = create_canvas_course(class_name, CANVAS_TERM_ID)
+        if new_course:
+            canvas_course_id = new_course.id
+            print(f"INFO: New course created with ID: {canvas_course_id}. Updating Monday.com item {canvas_item_id} on board {CANVAS_BOARD_ID}.")
+            # Write the new ID to the linked Canvas board item.
+            change_column_value_generic(int(CANVAS_BOARD_ID), canvas_item_id, CANVAS_COURSE_ID_COLUMN_ID, str(canvas_course_id))
+            # Also write it to the All Courses board item for reference, if configured.
+            if ALL_CLASSES_CANVAS_ID_COLUMN:
+                change_column_value_generic(int(ALL_COURSES_BOARD_ID), class_item_id, ALL_CLASSES_CANVAS_ID_COLUMN, str(canvas_course_id))
+        else:
+            print(f"ERROR: Failed to create Canvas course for '{class_name}'. Aborting enrollment.")
+            return
+
+    if not canvas_course_id:
+        print(f"INFO: No Canvas Course ID available for '{class_name}' to perform action '{action}'. Skipping.")
+        return
+
+    if action == "enroll":
+        m_series_val = get_column_value(plp_item_id, int(PLP_BOARD_ID), PLP_M_SERIES_LABELS_COLUMN)
         ag_grad_val = get_column_value(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_CLASSES_AG_GRAD_COLUMN)
-        ag_grad_text = ag_grad_val.get('text') if ag_grad_val and ag_grad_val.get('text') is not None else ""
+        m_series_text = (m_series_val.get('text') or "") if m_series_val else ""
+        ag_grad_text = (ag_grad_val.get('text') or "") if ag_grad_val else ""
         
         sections = {"A-G" for s in ["AG"] if s in ag_grad_text} | {"Grad" for s in ["Grad"] if s in ag_grad_text} | {"M-Series" for s in ["M-series"] if s in m_series_text}
         if not sections: sections.add("All")
@@ -429,15 +427,11 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details)
             section = create_section_if_not_exists(canvas_course_id, section_name)
             if section:
                 result = enroll_or_create_and_enroll(canvas_course_id, section.id, student_details)
-                create_subitem(plp_item_id, f"Enrolled in {class_name} ({section_name}): {result}")
+                create_subitem(plp_item_id, f"Enrolled in {class_name} ({section_name}): {result}", subitem_cols)
 
     elif action == "unenroll":
-        # Unenroll logic doesn't need to create, just read the ID
-        course_id_val = get_column_value(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_COURSE_ID_COLUMN_ID)
-        canvas_course_id = course_id_val.get('text', '') if course_id_val else ''
-        if canvas_course_id:
-            result = unenroll_student_from_course(canvas_course_id, student_details)
-            create_subitem(plp_item_id, f"Unenrolled from {class_name}: {'Success' if result else 'Failed'}")
+        result = unenroll_student_from_course(canvas_course_id, student_details)
+        create_subitem(plp_item_id, f"Unenrolled from {class_name}: {'Success' if result else 'Failed'}", subitem_cols)
 
 @celery_app.task
 def process_canvas_full_sync_from_status(event_data):
