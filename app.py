@@ -310,7 +310,25 @@ def unenroll_student_from_course(course_id, student_details):
     except CanvasException as e:
         print(f"ERROR: Canvas unenrollment failed: {e}")
         return False
-
+def enroll_teacher_in_course(course_id, teacher_email):
+    """Enrolls a user as a Teacher in a Canvas course using their email."""
+    canvas_api = initialize_canvas_api()
+    if not canvas_api: return "Failed: Canvas API not initialized"
+    try:
+        course = canvas_api.get_course(course_id)
+        # Find the user in Canvas by their login_id, which is their email
+        user_to_enroll = canvas_api.get_user(teacher_email, 'login_id')
+        
+        # Enroll the user with the "TeacherEnrollment" role type
+        enrollment = course.enroll_user(user_to_enroll, 'TeacherEnrollment', enrollment_state='active', notify=False)
+        return "Success" if enrollment else "Failed"
+    except ResourceDoesNotExist:
+        return f"Failed: User with email '{teacher_email}' or Course with ID '{course_id}' not found in Canvas."
+    except Conflict:
+        return "Already Enrolled"
+    except CanvasException as e:
+        print(f"ERROR: Failed to enroll teacher {teacher_email} in course {course_id}. Details: {e}")
+        return "Failed"
 # ==============================================================================
 # CELERY APP DEFINITION
 # ==============================================================================
@@ -517,6 +535,43 @@ def process_master_student_person_sync_webhook(event_data):
         if name: create_subitem(plp_item_id, f"Removed {name} from {col_name} on {date} by {changer}")
 
 @celery_app.task
+def process_teacher_enrollment_webhook(event_data):
+    """Processes a webhook to enroll a teacher in a Canvas course."""
+    item_id = event_data.get('pulseId')
+    board_id = event_data.get('boardId')
+
+    # 1. Get the Canvas Course ID from the Monday.com item
+    canvas_course_id_val = get_column_value(item_id, board_id, CANVAS_COURSE_ID_COLUMN_ID)
+    canvas_course_id = canvas_course_id_val.get('text') if canvas_course_id_val else None
+
+    if not canvas_course_id:
+        create_subitem(item_id, f"Teacher Enrollment Failed: Canvas Course ID is missing on this item.")
+        return
+
+    # 2. Determine which teacher was just added
+    current_ids = get_people_ids_from_value(event_data.get('value'))
+    previous_ids = get_people_ids_from_value(event_data.get('previousValue'))
+    added_teacher_ids = current_ids - previous_ids
+
+    if not added_teacher_ids:
+        return # No new teacher was added
+
+    # 3. Process each added teacher
+    for teacher_id in added_teacher_ids:
+        teacher_email = get_user_email(teacher_id)
+        teacher_name = get_user_name(teacher_id) or teacher_email # Fallback to email for logging
+
+        if not teacher_email:
+            create_subitem(item_id, f"Teacher Enrollment Failed: Could not find email for user ID {teacher_id}.")
+            continue
+            
+        # 4. Call the function to enroll the teacher in Canvas
+        result = enroll_teacher_in_course(canvas_course_id, teacher_email)
+
+        # 5. Log the outcome as a subitem on the course item in Monday.com
+        create_subitem(item_id, f"Enroll Teacher '{teacher_name}': {result}")
+
+@celery_app.task
 def process_sped_students_person_sync_webhook(event_data):
     source_item_id, col_id, col_val = event_data.get('pulseId'), event_data.get('columnId'), event_data.get('value')
     config = SPED_STUDENTS_PEOPLE_COLUMN_MAPPING.get(col_id)
@@ -553,6 +608,15 @@ def monday_unified_webhooks():
     if board_id == SPED_STUDENTS_BOARD_ID and col_id in SPED_STUDENTS_PEOPLE_COLUMN_MAPPING:
         process_sped_students_person_sync_webhook.delay(event)
         return jsonify({"message": "SpEd Students Person Sync queued."}), 202
+    if board_id == CANVAS_BOARD_ID and col_id == CANVAS_COURSES_TEACHER_COLUMN_ID:
+        process_teacher_enrollment_webhook.delay(event)
+        return jsonify({"message": "Canvas Teacher Enrollment queued."}), 202
+    for rule in LOG_CONFIGS:
+        if str(rule.get("trigger_board_id")) == board_id:
+            if (webhook_type == "update_column_value" and rule.get("trigger_column_id") == col_id) or \
+               (webhook_type == "create_pulse" and not rule.get("trigger_column_id")):
+                 process_general_webhook.delay(event, rule)
+                 return jsonify({"message": f"General task '{rule.get('log_type')}' queued."}), 202    
     for rule in LOG_CONFIGS:
         if str(rule.get("trigger_board_id")) == board_id:
             if (webhook_type == "update_column_value" and rule.get("trigger_column_id") == col_id) or \
