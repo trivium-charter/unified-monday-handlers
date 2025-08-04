@@ -71,6 +71,14 @@ except json.JSONDecodeError:
 # ==============================================================================
 MONDAY_HEADERS = { "Authorization": MONDAY_API_KEY, "Content-Type": "application/json", "API-Version": "2023-10" }
 
+def get_user_email(user_id):
+    if user_id is None: return None
+    query = f"query {{ users(ids: [{user_id}]) {{ email }} }}"
+    result = execute_monday_graphql(query)
+    if result and 'data' in result and result['data'].get('users'):
+        return result['data']['users'][0].get('email')
+    return None
+    
 def execute_monday_graphql(query):
     try:
         response = requests.post(MONDAY_API_URL, json={"query": query}, headers=MONDAY_HEADERS)
