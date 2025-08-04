@@ -1,4 +1,4 @@
-# ==============================================================================
+ g# ==============================================================================
 # FINAL CONSOLIDATED APPLICATION (All Original Logic Restored and Bugs Fixed)
 # ==============================================================================
 import os
@@ -321,6 +321,11 @@ if broker_use_ssl_config:
     celery_app.conf.redis_backend_use_ssl = broker_use_ssl_config
 celery_app.conf.timezone = 'America/Los_Angeles'
 
+# --- THE FIX ---
+# Keep the connection alive by sending a heartbeat every 60 seconds (well below the 5-minute timeout).
+celery_app.conf.broker_transport_options = {'health_check_interval': 60}
+# As recommended by the logs, enable connection retries on startup for more resilience.
+celery_app.conf.broker_connection_retry_on_startup = True
 # ==============================================================================
 # CELERY TASKS
 # ==============================================================================
