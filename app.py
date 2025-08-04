@@ -320,19 +320,42 @@ def unenroll_student_from_course(course_id, student_details):
         print(f"ERROR: Canvas unenrollment failed: {e}")
         return False
 def enroll_teacher_in_course(course_id, teacher_email):
-    """Enrolls a user as a Teacher in a Canvas course using their email."""
+    """Enrolls a user as a Teacher in a Canvas course, with a fallback to search by email."""
     canvas_api = initialize_canvas_api()
     if not canvas_api: return "Failed: Canvas API not initialized"
+    
+    user_to_enroll = None
+    try:
+        # First, try the direct lookup by login_id as it is the fastest method.
+        user_to_enroll = canvas_api.get_user(teacher_email, 'login_id')
+    except ResourceDoesNotExist:
+        # If the fast lookup fails, search for the user by their email address.
+        # This is necessary when a user's login_id does not match their email.
+        try:
+            print(f"INFO: Could not find user by login_id '{teacher_email}'. Searching by email.")
+            account = canvas_api.get_account(1)  # Use the main account to search
+            possible_users = account.get_users(search_term=teacher_email)
+            
+            # Find the first user with an exact email match
+            for user in possible_users:
+                if hasattr(user, 'email') and user.email and user.email.lower() == teacher_email.lower():
+                    user_to_enroll = user
+                    break
+        except CanvasException as e:
+            print(f"ERROR: Canvas user search failed for '{teacher_email}': {e}")
+            return "Failed: Canvas API error during user search."
+
+    # If the user is still not found after both attempts, we cannot proceed.
+    if not user_to_enroll:
+        return f"Failed: User '{teacher_email}' not found by login_id or email search."
+
+    # --- Proceed with enrollment ---
     try:
         course = canvas_api.get_course(course_id)
-        # Find the user in Canvas by their login_id, which is their email
-        user_to_enroll = canvas_api.get_user(teacher_email, 'login_id')
-        
-        # Enroll the user with the "TeacherEnrollment" role type
         enrollment = course.enroll_user(user_to_enroll, 'TeacherEnrollment', enrollment_state='active', notify=False)
-        return "Success" if enrollment else "Failed"
+        return "Success"
     except ResourceDoesNotExist:
-        return f"Failed: User with email '{teacher_email}' or Course with ID '{course_id}' not found in Canvas."
+        return f"Failed: Course with ID '{course_id}' not found in Canvas."
     except Conflict:
         return "Already Enrolled"
     except CanvasException as e:
