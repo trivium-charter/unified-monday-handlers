@@ -222,6 +222,41 @@ def update_people_column(item_id, board_id, people_column_id, new_people_value, 
     mutation = f"mutation {{ change_column_value(board_id: {board_id}, item_id: {item_id}, column_id: \"{people_column_id}\", value: {graphql_value}) {{ id }} }}"
     return execute_monday_graphql(mutation) is not None
 
+def get_all_staff_data(board_id, person_col_id, email_col_id, sis_id_col_id):
+    """Fetches all items from the staff board and returns a list of staff details."""
+    staff_data = []
+    query = f"""
+        query {{
+            boards(ids: [{board_id}]) {{
+                items_page {{
+                    items {{
+                        id
+                        column_values(ids: ["{person_col_id}", "{email_col_id}", "{sis_id_col_id}"]) {{
+                            id
+                            value
+                            text
+                        }}
+                    }}
+                }}
+            }}
+        }}
+    """
+    result = execute_monday_graphql(query)
+    if result and result.get('data', {}).get('boards'):
+        items = result['data']['boards'][0]['items_page']['items']
+        for item in items:
+            details = {'item_id': item['id']}
+            for cv in item['column_values']:
+                if cv['id'] == person_col_id:
+                    person_ids = get_people_ids_from_value(cv.get('value'))
+                    details['person_ids'] = person_ids
+                elif cv['id'] == email_col_id:
+                    details['email'] = cv.get('text')
+                elif cv['id'] == sis_id_col_id:
+                    details['sis_id'] = cv.get('text')
+            staff_data.append(details)
+    return staff_data
+
 def create_monday_update(item_id, update_text):
     """Posts an update (a comment) to a Monday.com item."""
     # The text body must be a JSON-encoded string for the GraphQL mutation
@@ -412,28 +447,6 @@ celery_app.conf.broker_connection_retry_on_startup = True
 # ==============================================================================
 # CELERY TASKS
 # ==============================================================================
-
-@celery_app.task
-def final_permission_test():
-    """A final test to compare API access between two boards."""
-    # --- IMPORTANT: REPLACE THE TWO PLACEHOLDER IDs BELOW ---
-    canvas_course_item_id = 9716103428
-    all_staff_item_id = 4344163981
-    # -----------------------------------------------------------
-
-    print("\n--- RUNNING FINAL PERMISSION TEST ---")
-    
-    # Test 1: Read from the "Canvas Courses" board (we know this works)
-    print(f"--> Reading Item {canvas_course_item_id} from the Canvas Courses board...")
-    course_item_name = get_item_name(canvas_course_item_id, CANVAS_BOARD_ID)
-    print(f"    RESULT: Found item name '{course_item_name}'")
-
-    # Test 2: Read from the "All Staff" board (we suspect this fails)
-    print(f"--> Reading Item {all_staff_item_id} from the All Staff board...")
-    staff_item_name = get_item_name(all_staff_item_id, ALL_STAFF_BOARD_ID)
-    print(f"    RESULT: Found item name '{staff_item_name}'")
-
-    print("--- TEST COMPLETE ---\n")
     
 @celery_app.task
 def process_general_webhook(event_data, config_rule):
@@ -624,61 +637,52 @@ def process_master_student_person_sync_webhook(event_data):
 
 @celery_app.task
 def process_teacher_enrollment_webhook(event_data):
-    """Processes a webhook to enroll a teacher in a Canvas course with detailed logging."""
+    """Processes a webhook to enroll a teacher in a Canvas course using a full staff list."""
     item_id = event_data.get('pulseId')
     board_id = event_data.get('boardId')
 
-    # Get the Canvas Course ID from the Monday.com item
     canvas_course_id_val = get_column_value(item_id, board_id, CANVAS_COURSE_ID_COLUMN_ID)
     canvas_course_id = canvas_course_id_val.get('text') if canvas_course_id_val else None
-
     if not canvas_course_id:
-        create_monday_update(item_id, "Enrollment Failed: Canvas Course ID is missing on this item.")
+        create_monday_update(item_id, "Enrollment Failed: Canvas Course ID is missing.")
         return
 
-    # Determine which teacher was just added from the People column
     current_ids = get_people_ids_from_value(event_data.get('value'))
     previous_ids = get_people_ids_from_value(event_data.get('previousValue'))
     added_teacher_ids = current_ids - previous_ids
-
     if not added_teacher_ids:
-        # This is a normal exit, no log needed.
+        return
+
+    # Fetch all data from the staff board at once
+    all_staff = get_all_staff_data(
+        ALL_STAFF_BOARD_ID,
+        ALL_STAFF_PERSON_COLUMN_ID,
+        ALL_STAFF_EMAIL_COLUMN_ID,
+        ALL_STAFF_SIS_ID_COLUMN_ID
+    )
+
+    if not all_staff:
+        create_monday_update(item_id, "Enrollment Failed: Could not fetch data from the All Staff board.")
         return
 
     for teacher_id in added_teacher_ids:
-        # --- START DIAGNOSTIC LOGGING ---
-        print(f"INFO: Starting enrollment process for teacher_id: {teacher_id}")
-        print(f"INFO: Searching All Staff Board ({ALL_STAFF_BOARD_ID}) in Person Column ({ALL_STAFF_PERSON_COLUMN_ID})...")
-        # --- END DIAGNOSTIC LOGGING ---
-
         teacher_name = get_user_name(teacher_id) or f"User ID {teacher_id}"
+        
+        # Search for the teacher in the fetched data
+        staff_info = next((s for s in all_staff if teacher_id in s.get('person_ids', [])), None)
 
-        # Find the teacher's info item on the All Staff board
-        staff_item_id = find_item_by_person(ALL_STAFF_BOARD_ID, ALL_STAFF_PERSON_COLUMN_ID, teacher_id)
-
-        # --- MORE DIAGNOSTIC LOGGING ---
-        print(f"INFO: Search complete. Found Staff Item ID: {staff_item_id}")
-        # --- END DIAGNOSTIC LOGGING ---
-
-        if not staff_item_id:
-            create_monday_update(item_id, f"Enrollment for '{teacher_name}' Failed: Could not find this user's row in the All Staff board.")
+        if not staff_info:
+            create_monday_update(item_id, f"Enrollment for '{teacher_name}' Failed: Could not find user in the All Staff board.")
             continue
 
-        # Get the email and SIS ID from the All Staff board
-        email_val = get_column_value(staff_item_id, ALL_STAFF_BOARD_ID, ALL_STAFF_EMAIL_COLUMN_ID)
-        sis_id_val = get_column_value(staff_item_id, ALL_STAFF_BOARD_ID, ALL_STAFF_SIS_ID_COLUMN_ID)
-        
-        teacher_email = email_val.get('text') if email_val else None
-        teacher_sis_id = sis_id_val.get('text') if sis_id_val else None
+        teacher_email = staff_info.get('email')
+        teacher_sis_id = staff_info.get('sis_id')
 
         if not teacher_email or not teacher_sis_id:
-            create_monday_update(item_id, f"Enrollment for '{teacher_name}' Failed: The user was found on the All Staff board, but their Email or SIS ID column is empty.")
+            create_monday_update(item_id, f"Enrollment for '{teacher_name}' Failed: Email or SIS ID is missing from the All Staff board.")
             continue
 
-        # Call the function to enroll the teacher in Canvas
         result = enroll_teacher_in_course(canvas_course_id, teacher_email, teacher_sis_id)
-
-        # Log the final outcome
         create_monday_update(item_id, f"Enrollment attempt for '{teacher_name}': {result}")
         
 @celery_app.task
@@ -718,9 +722,6 @@ def monday_unified_webhooks():
     if board_id == SPED_STUDENTS_BOARD_ID and col_id in SPED_STUDENTS_PEOPLE_COLUMN_MAPPING:
         process_sped_students_person_sync_webhook.delay(event)
         return jsonify({"message": "SpEd Students Person Sync queued."}), 202
-    if board_id == CANVAS_BOARD_ID and col_id == CANVAS_COURSES_TEACHER_COLUMN_ID:
-        final_permission_test.delay() # Run our final test function
-        return jsonify({"message": "Final permission test queued."}), 202
     for rule in LOG_CONFIGS:
         if str(rule.get("trigger_board_id")) == board_id:
             if (webhook_type == "update_column_value" and rule.get("trigger_column_id") == col_id) or \
