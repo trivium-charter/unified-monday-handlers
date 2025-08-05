@@ -477,7 +477,6 @@ celery_app.conf.broker_connection_retry_on_startup = True
 # CELERY TASKS
 # ==============================================================================
 @celery_app.task
-@celery_app.task
 def sync_monday_titles_to_canvas():
     """
     Goes through ALL items on the Monday.com Canvas board, handling multiple pages,
@@ -838,13 +837,7 @@ def monday_unified_webhooks():
     if board_id == CANVAS_BOARD_ID and col_id == CANVAS_COURSES_TEACHER_COLUMN_ID:
         sync_monday_titles_to_canvas.delay() # Run our new sync function
         return jsonify({"message": "Monday -> Canvas title sync queued."}), 202
-    for rule in LOG_CONFIGS:
-        
-        if str(rule.get("trigger_board_id")) == board_id:
-            if (webhook_type == "update_column_value" and rule.get("trigger_column_id") == col_id) or \
-               (webhook_type == "create_pulse" and not rule.get("trigger_column_id")):
-                 process_general_webhook.delay(event, rule)
-                 return jsonify({"message": f"General task '{rule.get('log_type')}' queued."}), 202    
+    
     for rule in LOG_CONFIGS:
         if str(rule.get("trigger_board_id")) == board_id:
             if (webhook_type == "update_column_value" and rule.get("trigger_column_id") == col_id) or \
