@@ -623,10 +623,19 @@ def process_teacher_enrollment_webhook(event_data):
         return
 
     for teacher_id in added_teacher_ids:
+        # --- START DIAGNOSTIC LOGGING ---
+        print(f"INFO: Starting enrollment process for teacher_id: {teacher_id}")
+        print(f"INFO: Searching All Staff Board ({ALL_STAFF_BOARD_ID}) in Person Column ({ALL_STAFF_PERSON_COLUMN_ID})...")
+        # --- END DIAGNOSTIC LOGGING ---
+
         teacher_name = get_user_name(teacher_id) or f"User ID {teacher_id}"
 
         # Find the teacher's info item on the All Staff board
         staff_item_id = find_item_by_person(ALL_STAFF_BOARD_ID, ALL_STAFF_PERSON_COLUMN_ID, teacher_id)
+
+        # --- MORE DIAGNOSTIC LOGGING ---
+        print(f"INFO: Search complete. Found Staff Item ID: {staff_item_id}")
+        # --- END DIAGNOSTIC LOGGING ---
 
         if not staff_item_id:
             create_monday_update(item_id, f"Enrollment for '{teacher_name}' Failed: Could not find this user's row in the All Staff board.")
