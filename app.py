@@ -172,17 +172,11 @@ def change_column_value_generic(board_id, item_id, column_id, value):
 
 def get_people_ids_from_value(value_data):
     if not value_data: return set()
-    
-    # --- START FIX ---
-    # The API can return the value as a string or a dict.
-    # This ensures it's always treated as a dict.
     if isinstance(value_data, str):
         try:
             value_data = json.loads(value_data)
         except json.JSONDecodeError:
-            return set() # Return empty if the string is not valid JSON
-    # --- END FIX ---
-    
+            return set()
     persons_and_teams = value_data.get('personsAndTeams', [])
     return {person['id'] for person in persons_and_teams if 'id' in person}
 
@@ -477,6 +471,7 @@ celery_app.conf.broker_connection_retry_on_startup = True
 # CELERY TASKS
 # ==============================================================================
 @celery_app.task
+@celery_app.task
 def sync_monday_titles_to_canvas():
     """
     Goes through ALL items on the Monday.com Canvas board, handling multiple pages,
@@ -485,10 +480,9 @@ def sync_monday_titles_to_canvas():
     print("\n--- STARTING MONDAY.COM -> CANVAS TITLE SYNC (PAGINATED) ---")
     
     all_items = []
-    cursor = None # Start with no cursor to get the first page
+    cursor = None 
 
     while True:
-        # This query is designed to fetch one page of items at a time
         query = f"""
             query ($cursor: String) {{
                 boards(ids: [{CANVAS_BOARD_ID}]) {{
@@ -505,27 +499,21 @@ def sync_monday_titles_to_canvas():
                 }}
             }}
         """
-        
-        # For GraphQL queries with variables, we send them in a separate dict
         variables = {'cursor': cursor}
-        
-        # We need to post the query and variables together
-        response = requests.post(
-            MONDAY_API_URL,
-            json={"query": query, "variables": variables},
-            headers=MONDAY_HEADERS
-        )
-        result = response.json()
+        result = execute_monday_graphql(query, variables=variables)
 
         if not (result and result.get('data', {}).get('boards')):
-            print("ERROR: Could not fetch items from the Canvas Courses board.")
-            return
+            print("ERROR: Could not fetch page of items from the Canvas Courses board.")
+            break 
 
         items_page = result['data']['boards'][0]['items_page']
-        all_items.extend(items_page.get('items', []))
+        items_on_page = items_page.get('items', [])
+        if not items_on_page:
+            break
+
+        all_items.extend(items_on_page)
         cursor = items_page.get('cursor')
 
-        # If the cursor is null, we have reached the last page
         if not cursor:
             break
             
@@ -555,11 +543,11 @@ def sync_monday_titles_to_canvas():
             course = canvas_api.get_course(canvas_course_id)
             print(f"  - UPDATING Course {canvas_course_id}: Setting name to '{new_course_title}'")
             course.update(course={'name': new_course_title})
-
         except Exception as e:
             print(f"  - FAILED for Item {item_id} (Canvas ID: {canvas_course_id}): {e}")
 
     print("--- SYNC COMPLETE ---")
+    
 @celery_app.task
 def process_general_webhook(event_data, config_rule):
     log_type, params = config_rule.get("log_type"), config_rule.get("params", {})
