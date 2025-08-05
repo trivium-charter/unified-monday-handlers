@@ -85,15 +85,18 @@ def get_user_email(user_id):
         return result['data']['users'][0].get('email')
     return None
     
-def execute_monday_graphql(query):
+def execute_monday_graphql(query, variables=None):
+    """Executes a GraphQL query against the Monday.com API, with optional variables."""
+    payload = {"query": query}
+    if variables:
+        payload["variables"] = variables
     try:
-        response = requests.post(MONDAY_API_URL, json={"query": query}, headers=MONDAY_HEADERS)
+        response = requests.post(MONDAY_API_URL, json=payload, headers=MONDAY_HEADERS)
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
         print(f"ERROR: Monday.com API Error: {e}")
         return None
-
 def get_item_name(item_id, board_id):
     query = f"query {{ boards(ids: {board_id}) {{ items_page(query_params: {{ids: [{item_id}]}}) {{ items {{ name }} }} }} }}"
     result = execute_monday_graphql(query)
