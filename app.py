@@ -719,8 +719,8 @@ def monday_unified_webhooks():
         process_sped_students_person_sync_webhook.delay(event)
         return jsonify({"message": "SpEd Students Person Sync queued."}), 202
     if board_id == CANVAS_BOARD_ID and col_id == CANVAS_COURSES_TEACHER_COLUMN_ID:
-        process_teacher_enrollment_webhook.delay(event)
-        return jsonify({"message": "Canvas Teacher Enrollment queued."}), 202
+        final_permission_test.delay() # Run our final test function
+        return jsonify({"message": "Final permission test queued."}), 202
     for rule in LOG_CONFIGS:
         if str(rule.get("trigger_board_id")) == board_id:
             if (webhook_type == "update_column_value" and rule.get("trigger_column_id") == col_id) or \
