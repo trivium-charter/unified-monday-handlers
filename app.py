@@ -485,6 +485,8 @@ def sync_monday_titles_to_canvas():
     cursor = None 
 
     while True:
+        # --- START FIX ---
+        # This query is now correctly formatted as an f-string to include your variables.
         query = f"""
             query ($cursor: String) {{
                 boards(ids: [{CANVAS_BOARD_ID}]) {{
@@ -501,8 +503,9 @@ def sync_monday_titles_to_canvas():
                 }}
             }}
         """
+        # --- END FIX ---
+        
         variables = {'cursor': cursor}
-        # --- THIS IS THE CORRECTED LINE ---
         result = execute_monday_graphql(query, variables=variables)
 
         if not (result and result.get('data', {}).get('boards')):
@@ -544,8 +547,9 @@ def sync_monday_titles_to_canvas():
         
         try:
             course = canvas_api.get_course(canvas_course_id)
-            print(f"  - UPDATING Course {canvas_course_id}: Setting name to '{new_course_title}'")
+            print(f"  - UPDATING Course {canvas_course_id}: Setting name from '{course.name}' to '{new_course_title}'")
             course.update(course={'name': new_course_title})
+
         except Exception as e:
             print(f"  - FAILED for Item {item_id} (Canvas ID: {canvas_course_id}): {e}")
 
