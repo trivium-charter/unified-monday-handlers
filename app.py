@@ -234,19 +234,20 @@ def update_people_column(item_id, board_id, people_column_id, new_people_value, 
     return execute_monday_graphql(mutation) is not None
 
 def get_all_staff_data(board_id, person_col_id, email_col_id, sis_id_col_id):
-    """Fetches all items from the staff board and returns a list of staff details."""
+    """
+    Fetches all items and their relevant columns from the staff board using a robust, direct query.
+    """
     staff_data = []
+    # This more direct query fetches all items on a board, which has proven to be more reliable.
     query = f"""
         query {{
             boards(ids: [{board_id}]) {{
-                items_page {{
-                    items {{
+                items {{
+                    id
+                    column_values(ids: ["{person_col_id}", "{email_col_id}", "{sis_id_col_id}"]) {{
                         id
-                        column_values(ids: ["{person_col_id}", "{email_col_id}", "{sis_id_col_id}"]) {{
-                            id
-                            value
-                            text
-                        }}
+                        value
+                        text
                     }}
                 }}
             }}
@@ -254,7 +255,7 @@ def get_all_staff_data(board_id, person_col_id, email_col_id, sis_id_col_id):
     """
     result = execute_monday_graphql(query)
     if result and result.get('data', {}).get('boards'):
-        items = result['data']['boards'][0]['items_page']['items']
+        items = result['data']['boards'][0].get('items', [])
         for item in items:
             details = {'item_id': item['id']}
             for cv in item['column_values']:
