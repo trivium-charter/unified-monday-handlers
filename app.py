@@ -53,7 +53,6 @@ SPED_TO_IEPAP_CONNECT_COLUMN_ID = os.environ.get("SPED_TO_IEPAP_CONNECT_COLUMN_I
 CANVAS_BOARD_ID = os.environ.get("CANVAS_BOARD_ID")
 CANVAS_COURSES_TEACHER_COLUMN_ID = os.environ.get("CANVAS_COURSES_TEACHER_COLUMN_ID")
 CANVAS_COURSE_ID_COLUMN_ID = os.environ.get("CANVAS_COURSE_ID_COLUMN_ID")
-CANVAS_BOARD_TITLE_COLUMN_ID = os.environ.get("CANVAS_BOARD_TITLE_COLUMN_ID")
 
 CANVAS_TERM_ID = os.environ.get("CANVAS_TERM_ID")
 CANVAS_SUBACCOUNT_ID = os.environ.get("CANVAS_SUBACCOUNT_ID")
@@ -85,18 +84,15 @@ def get_user_email(user_id):
         return result['data']['users'][0].get('email')
     return None
     
-def execute_monday_graphql(query, variables=None):
-    """Executes a GraphQL query against the Monday.com API, with optional variables."""
-    payload = {"query": query}
-    if variables:
-        payload["variables"] = variables
+def execute_monday_graphql(query):
     try:
-        response = requests.post(MONDAY_API_URL, json=payload, headers=MONDAY_HEADERS)
+        response = requests.post(MONDAY_API_URL, json={"query": query}, headers=MONDAY_HEADERS)
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
         print(f"ERROR: Monday.com API Error: {e}")
         return None
+
 def get_item_name(item_id, board_id):
     query = f"query {{ boards(ids: {board_id}) {{ items_page(query_params: {{ids: [{item_id}]}}) {{ items {{ name }} }} }} }}"
     result = execute_monday_graphql(query)
@@ -175,11 +171,17 @@ def change_column_value_generic(board_id, item_id, column_id, value):
 
 def get_people_ids_from_value(value_data):
     if not value_data: return set()
+    
+    # --- START FIX ---
+    # The API can return the value as a string or a dict.
+    # This ensures it's always treated as a dict.
     if isinstance(value_data, str):
         try:
             value_data = json.loads(value_data)
         except json.JSONDecodeError:
-            return set()
+            return set() # Return empty if the string is not valid JSON
+    # --- END FIX ---
+    
     persons_and_teams = value_data.get('personsAndTeams', [])
     return {person['id'] for person in persons_and_teams if 'id' in person}
 
@@ -473,87 +475,6 @@ celery_app.conf.broker_connection_retry_on_startup = True
 # ==============================================================================
 # CELERY TASKS
 # ==============================================================================
-@celery_app.task
-def sync_monday_titles_to_canvas():
-    """
-    Goes through ALL items on the Monday.com Canvas board, handling multiple pages,
-    and pushes the title to the Canvas API, overwriting the course name in Canvas.
-    """
-    print("\n--- STARTING MONDAY.COM -> CANVAS TITLE SYNC (PAGINATED) ---")
-    
-    all_items = []
-    cursor = None 
-
-    while True:
-        # --- START FIX ---
-        # This query is now correctly formatted as an f-string to include your variables.
-        query = f"""
-            query ($cursor: String) {{
-                boards(ids: [{CANVAS_BOARD_ID}]) {{
-                    items_page (cursor: $cursor, limit: 100) {{
-                        cursor
-                        items {{
-                            id
-                            column_values(ids: ["{CANVAS_COURSE_ID_COLUMN_ID}", "{CANVAS_BOARD_TITLE_COLUMN_ID}"]) {{
-                                id
-                                text
-                            }}
-                        }}
-                    }}
-                }}
-            }}
-        """
-        # --- END FIX ---
-        
-        variables = {'cursor': cursor}
-        result = execute_monday_graphql(query, variables=variables)
-
-        if not (result and result.get('data', {}).get('boards')):
-            print("ERROR: Could not fetch items from the Canvas Courses board.")
-            break 
-
-        items_page = result['data']['boards'][0]['items_page']
-        items_on_page = items_page.get('items', [])
-        if not items_on_page:
-            break
-
-        all_items.extend(items_on_page)
-        cursor = items_page.get('cursor')
-
-        if not cursor:
-            break
-            
-    canvas_api = initialize_canvas_api()
-    if not canvas_api:
-        print("ERROR: Canvas API not initialized.")
-        return
-
-    print(f"Found {len(all_items)} total items to process...")
-
-    for item in all_items:
-        item_id = item['id']
-        canvas_course_id = None
-        new_course_title = None
-
-        for cv in item['column_values']:
-            if cv['id'] == CANVAS_COURSE_ID_COLUMN_ID:
-                canvas_course_id = cv.get('text')
-            elif cv['id'] == CANVAS_BOARD_TITLE_COLUMN_ID:
-                new_course_title = cv.get('text')
-        
-        if not (canvas_course_id and new_course_title):
-            print(f"  - SKIPPING Item {item_id}: Missing Canvas Course ID or Title.")
-            continue
-        
-        try:
-            course = canvas_api.get_course(canvas_course_id)
-            print(f"  - UPDATING Course {canvas_course_id}: Setting name from '{course.name}' to '{new_course_title}'")
-            course.update(course={'name': new_course_title})
-
-        except Exception as e:
-            print(f"  - FAILED for Item {item_id} (Canvas ID: {canvas_course_id}): {e}")
-
-    print("--- SYNC COMPLETE ---")
     
 @celery_app.task
 def process_general_webhook(event_data, config_rule):
@@ -832,7 +753,12 @@ def monday_unified_webhooks():
     if board_id == CANVAS_BOARD_ID and col_id == CANVAS_COURSES_TEACHER_COLUMN_ID:
         process_teacher_enrollment_webhook.delay(event)
         return jsonify({"message": "Canvas Teacher Enrollment queued."}), 202
-    
+    for rule in LOG_CONFIGS:
+        if str(rule.get("trigger_board_id")) == board_id:
+            if (webhook_type == "update_column_value" and rule.get("trigger_column_id") == col_id) or \
+               (webhook_type == "create_pulse" and not rule.get("trigger_column_id")):
+                 process_general_webhook.delay(event, rule)
+                 return jsonify({"message": f"General task '{rule.get('log_type')}' queued."}), 202    
     for rule in LOG_CONFIGS:
         if str(rule.get("trigger_board_id")) == board_id:
             if (webhook_type == "update_column_value" and rule.get("trigger_column_id") == col_id) or \
