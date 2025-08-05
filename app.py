@@ -474,7 +474,6 @@ celery_app.conf.broker_connection_retry_on_startup = True
 # CELERY TASKS
 # ==============================================================================
 @celery_app.task
-@celery_app.task
 def sync_monday_titles_to_canvas():
     """
     Goes through ALL items on the Monday.com Canvas board, handling multiple pages,
@@ -503,10 +502,11 @@ def sync_monday_titles_to_canvas():
             }}
         """
         variables = {'cursor': cursor}
+        # --- THIS IS THE CORRECTED LINE ---
         result = execute_monday_graphql(query, variables=variables)
 
         if not (result and result.get('data', {}).get('boards')):
-            print("ERROR: Could not fetch page of items from the Canvas Courses board.")
+            print("ERROR: Could not fetch items from the Canvas Courses board.")
             break 
 
         items_page = result['data']['boards'][0]['items_page']
