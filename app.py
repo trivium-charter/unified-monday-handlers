@@ -234,54 +234,38 @@ def update_people_column(item_id, board_id, people_column_id, new_people_value, 
     return execute_monday_graphql(mutation) is not None
 
 def get_all_staff_data(board_id, person_col_id, email_col_id, sis_id_col_id):
-    """
-    Fetches all items and their relevant columns from the staff board using a robust, direct query.
-    """
-    print("--- Fetching staff data with simplified, direct query... ---")
+    """Fetches all items from the staff board and returns a list of staff details."""
     staff_data = []
-    
-    # A simpler query to get all items and their column values directly.
     query = f"""
         query {{
             boards(ids: [{board_id}]) {{
-                items {{
-                    id
-                    column_values(ids: ["{person_col_id}", "{email_col_id}", "{sis_id_col_id}"]) {{
+                items_page {{
+                    items {{
                         id
-                        value
-                        text
+                        column_values(ids: ["{person_col_id}", "{email_col_id}", "{sis_id_col_id}"]) {{
+                            id
+                            value
+                            text
+                        }}
                     }}
                 }}
             }}
         }}
     """
     result = execute_monday_graphql(query)
-    if not (result and result.get('data', {}).get('boards')):
-        print("ERROR: Initial fetch from the new teacher sync board failed.")
-        return []
-
-    items = result['data']['boards'][0].get('items', [])
-    print(f"Found {len(items)} total staff items to process.")
-
-    for item in items:
-        details = {'item_id': item['id']}
-        person_ids = set()
-
-        for cv in item['column_values']:
-            if cv['id'] == person_col_id:
-                person_ids = get_people_ids_from_value(cv.get('value'))
-            elif cv['id'] == email_col_id:
-                details['email'] = cv.get('text')
-            elif cv['id'] == sis_id_col_id:
-                details['sis_id'] = cv.get('text')
-        
-        if not person_ids:
-            continue
-
-        details['person_ids'] = person_ids
-        staff_data.append(details)
-        
-    print(f"Successfully processed details for {len(staff_data)} staff members.")
+    if result and result.get('data', {}).get('boards'):
+        items = result['data']['boards'][0]['items_page']['items']
+        for item in items:
+            details = {'item_id': item['id']}
+            for cv in item['column_values']:
+                if cv['id'] == person_col_id:
+                    person_ids = get_people_ids_from_value(cv.get('value'))
+                    details['person_ids'] = person_ids
+                elif cv['id'] == email_col_id:
+                    details['email'] = cv.get('text')
+                elif cv['id'] == sis_id_col_id:
+                    details['sis_id'] = cv.get('text')
+            staff_data.append(details)
     return staff_data
 
 def create_monday_update(item_id, update_text):
