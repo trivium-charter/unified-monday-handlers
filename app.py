@@ -759,12 +759,7 @@ def monday_unified_webhooks():
                (webhook_type == "create_pulse" and not rule.get("trigger_column_id")):
                  process_general_webhook.delay(event, rule)
                  return jsonify({"message": f"General task '{rule.get('log_type')}' queued."}), 202    
-    for rule in LOG_CONFIGS:
-        if str(rule.get("trigger_board_id")) == board_id:
-            if (webhook_type == "update_column_value" and rule.get("trigger_column_id") == col_id) or \
-               (webhook_type == "create_pulse" and not rule.get("trigger_column_id")):
-                 process_general_webhook.delay(event, rule)
-                 return jsonify({"message": f"General task '{rule.get('log_type')}' queued."}), 202
+    
     return jsonify({"status": "ignored"}), 200
 
 @app.route('/')
