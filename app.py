@@ -412,6 +412,29 @@ celery_app.conf.broker_connection_retry_on_startup = True
 # ==============================================================================
 # CELERY TASKS
 # ==============================================================================
+
+@celery_app.task
+def final_permission_test():
+    """A final test to compare API access between two boards."""
+    # --- IMPORTANT: REPLACE THE TWO PLACEHOLDER IDs BELOW ---
+    canvas_course_item_id = 9716103428
+    all_staff_item_id = 4344163981
+    # -----------------------------------------------------------
+
+    print("\n--- RUNNING FINAL PERMISSION TEST ---")
+    
+    # Test 1: Read from the "Canvas Courses" board (we know this works)
+    print(f"--> Reading Item {canvas_course_item_id} from the Canvas Courses board...")
+    course_item_name = get_item_name(canvas_course_item_id, CANVAS_BOARD_ID)
+    print(f"    RESULT: Found item name '{course_item_name}'")
+
+    # Test 2: Read from the "All Staff" board (we suspect this fails)
+    print(f"--> Reading Item {all_staff_item_id} from the All Staff board...")
+    staff_item_name = get_item_name(all_staff_item_id, ALL_STAFF_BOARD_ID)
+    print(f"    RESULT: Found item name '{staff_item_name}'")
+
+    print("--- TEST COMPLETE ---\n")
+    
 @celery_app.task
 def process_general_webhook(event_data, config_rule):
     log_type, params = config_rule.get("log_type"), config_rule.get("params", {})
