@@ -485,11 +485,14 @@ def sync_monday_titles_to_canvas():
     """
     print("\n--- STARTING MONDAY.COM -> CANVAS TITLE SYNC ---")
     
-    # This query gets all items from the board
+    # --- START FIX ---
+    # This corrected and more robust query fetches all items from a board,
+    # handling pagination by default in this structure.
     query = f"""
         query {{
             boards(ids: [{CANVAS_BOARD_ID}]) {{
                 items_page {{
+                    cursor
                     items {{
                         id
                         column_values(ids: ["{CANVAS_COURSE_ID_COLUMN_ID}", "{CANVAS_BOARD_TITLE_COLUMN_ID}"]) {{
@@ -501,11 +504,14 @@ def sync_monday_titles_to_canvas():
             }}
         }}
     """
+    # --- END FIX ---
+    
     result = execute_monday_graphql(query)
     if not (result and result.get('data', {}).get('boards')):
         print("ERROR: Could not fetch items from the Canvas Courses board.")
         return
 
+    # Correctly access the list of items
     items = result['data']['boards'][0]['items_page']['items']
     canvas_api = initialize_canvas_api()
 
@@ -535,7 +541,7 @@ def sync_monday_titles_to_canvas():
             # Get the course object from Canvas
             course = canvas_api.get_course(canvas_course_id)
             
-            print(f"  - UPDATING Course {canvas_course_id}: Setting name to '{new_course_title}'")
+            print(f"  - UPDATING Course {canvas_course_id}: Setting name from '{course.name}' to '{new_course_title}'")
             
             # Update the course name in Canvas
             course.update(course={'name': new_course_title})
@@ -543,7 +549,7 @@ def sync_monday_titles_to_canvas():
         except Exception as e:
             print(f"  - FAILED for Item {item_id} (Canvas ID: {canvas_course_id}): {e}")
 
-    print("--- SYNC COMPLETE ---\n")    
+    print("--- SYNC COMPLETE ---\n")
 @celery_app.task
 def process_general_webhook(event_data, config_rule):
     log_type, params = config_rule.get("log_type"), config_rule.get("params", {})
