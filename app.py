@@ -171,6 +171,17 @@ def change_column_value_generic(board_id, item_id, column_id, value):
 
 def get_people_ids_from_value(value_data):
     if not value_data: return set()
+    
+    # --- START FIX ---
+    # The API can return the value as a string or a dict.
+    # This ensures it's always treated as a dict.
+    if isinstance(value_data, str):
+        try:
+            value_data = json.loads(value_data)
+        except json.JSONDecodeError:
+            return set() # Return empty if the string is not valid JSON
+    # --- END FIX ---
+    
     persons_and_teams = value_data.get('personsAndTeams', [])
     return {person['id'] for person in persons_and_teams if 'id' in person}
 
