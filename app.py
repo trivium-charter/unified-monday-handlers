@@ -395,39 +395,56 @@ def unenroll_student_from_course(course_id, student_details):
         print(f"ERROR: Canvas unenrollment failed: {e}")
         return False
 def enroll_teacher_in_course(course_id, teacher_email, teacher_sis_id):
-    """Enrolls a user as a Teacher, with a fallback to sis_user_id."""
+    """Enrolls a user as a Teacher, with a fallback to sis_user_id and detailed logging."""
     canvas_api = initialize_canvas_api()
-    if not canvas_api: return "Failed: Canvas API not initialized"
+    if not canvas_api:
+        print("--- ENROLLMENT FAILED: Canvas API not initialized.")
+        return "Failed: Canvas API not initialized"
 
     user_to_enroll = None
+    print(f"\n--- Starting Enrollment Process for {teacher_email} in Course {course_id} ---")
+    
     try:
         # First, try the direct lookup by login_id.
+        print(f"--> Attempting to find user by login_id: {teacher_email}")
         user_to_enroll = canvas_api.get_user(teacher_email, 'login_id')
+        print(f"    SUCCESS: Found user '{user_to_enroll.name}' (ID: {user_to_enroll.id}) by login_id.")
     except ResourceDoesNotExist:
+        print(f"    INFO: User not found by login_id.")
         # If that fails, fall back to the reliable sis_user_id lookup.
         if teacher_sis_id:
             try:
-                print(f"INFO: Could not find user by login_id '{teacher_email}'. Searching by SIS ID.")
+                print(f"--> Attempting to find user by sis_user_id: {teacher_sis_id}")
                 user_to_enroll = canvas_api.get_user(teacher_sis_id, 'sis_user_id')
+                print(f"    SUCCESS: Found user '{user_to_enroll.name}' (ID: {user_to_enroll.id}) by sis_user_id.")
             except ResourceDoesNotExist:
+                print(f"    INFO: User not found by sis_user_id.")
                 pass  # User not found by SIS ID either
-        
-    # If the user is still not found, we cannot proceed.
+    
     if not user_to_enroll:
+        print("--- ENROLLMENT FAILED: Could not find user in Canvas. ---")
         return f"Failed: User '{teacher_email}' not found by login_id or SIS ID '{teacher_sis_id}'."
 
     # --- Proceed with enrollment ---
     try:
+        print(f"--> Attempting to get Course ID: {course_id}")
         course = canvas_api.get_course(course_id)
+        print(f"    SUCCESS: Found course '{course.name}'.")
+        
+        print(f"--> Sending enrollment request for user {user_to_enroll.id} into course {course.id} with role 'TeacherEnrollment'.")
         enrollment = course.enroll_user(user_to_enroll, 'TeacherEnrollment', enrollment_state='active', notify=False)
+        print(f"    SUCCESS: Enrollment API call successful.")
+        print("--- ENROLLMENT COMPLETE ---")
         return "Success"
     except ResourceDoesNotExist:
+        print(f"--- ENROLLMENT FAILED: Course with ID '{course_id}' not found in Canvas. ---")
         return f"Failed: Course with ID '{course_id}' not found in Canvas."
     except Conflict:
+        print("--- ENROLLMENT FAILED: User is already enrolled. ---")
         return "Already Enrolled"
     except CanvasException as e:
-        print(f"ERROR: Failed to enroll teacher {teacher_email} in course {course_id}. Details: {e}")
-        return "Failed"
+        print(f"--- ENROLLMENT FAILED: A Canvas API error occurred: {e} ---")
+        return f"Failed: {e}"
         
 # ==============================================================================
 # CELERY APP DEFINITION
