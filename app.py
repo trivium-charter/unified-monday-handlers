@@ -235,21 +235,21 @@ def update_people_column(item_id, board_id, people_column_id, new_people_value, 
 
 def get_all_staff_data(board_id, person_col_id, email_col_id, sis_id_col_id):
     """
-    Fetches all items from the staff board using a simpler, more direct query
-    to avoid potential API bugs with complex queries.
+    Fetches all items and their relevant columns from the staff board using a robust, direct query.
     """
     print("--- Fetching staff data with simplified, direct query... ---")
     staff_data = []
     
-    # A simpler query to get all items and just the person column first.
+    # A simpler query to get all items and their column values directly.
     query = f"""
         query {{
             boards(ids: [{board_id}]) {{
                 items {{
                     id
-                    column_values(ids: ["{person_col_id}"]) {{
+                    column_values(ids: ["{person_col_id}", "{email_col_id}", "{sis_id_col_id}"]) {{
                         id
                         value
+                        text
                     }}
                 }}
             }}
@@ -257,33 +257,28 @@ def get_all_staff_data(board_id, person_col_id, email_col_id, sis_id_col_id):
     """
     result = execute_monday_graphql(query)
     if not (result and result.get('data', {}).get('boards')):
-        print("ERROR: Initial fetch from All Staff board failed.")
+        print("ERROR: Initial fetch from the new teacher sync board failed.")
         return []
 
     items = result['data']['boards'][0].get('items', [])
-    print(f"Found {len(items)} total staff items to process individually.")
+    print(f"Found {len(items)} total staff items to process.")
 
     for item in items:
         details = {'item_id': item['id']}
         person_ids = set()
 
-        # Get person IDs from the first query
-        if item.get('column_values'):
-            person_value = item['column_values'][0].get('value')
-            person_ids = get_people_ids_from_value(person_value)
+        for cv in item['column_values']:
+            if cv['id'] == person_col_id:
+                person_ids = get_people_ids_from_value(cv.get('value'))
+            elif cv['id'] == email_col_id:
+                details['email'] = cv.get('text')
+            elif cv['id'] == sis_id_col_id:
+                details['sis_id'] = cv.get('text')
         
         if not person_ids:
             continue
 
         details['person_ids'] = person_ids
-        
-        # Now, get the other two columns for this specific item
-        email_val = get_column_value(item['id'], board_id, email_col_id)
-        sis_id_val = get_column_value(item['id'], board_id, sis_id_col_id)
-        
-        details['email'] = email_val.get('text') if email_val else None
-        details['sis_id'] = sis_id_val.get('text') if sis_id_val else None
-        
         staff_data.append(details)
         
     print(f"Successfully processed details for {len(staff_data)} staff members.")
