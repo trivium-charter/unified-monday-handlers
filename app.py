@@ -477,56 +477,71 @@ celery_app.conf.broker_connection_retry_on_startup = True
 # CELERY TASKS
 # ==============================================================================
 @celery_app.task
+@celery_app.task
 def sync_monday_titles_to_canvas():
     """
-    Goes through all items on the Monday.com Canvas board and pushes the
-    title from the 'CANVAS_BOARD_TITLE_COLUMN_ID' to the Canvas API,
-    overwriting the course name in Canvas.
+    Goes through ALL items on the Monday.com Canvas board, handling multiple pages,
+    and pushes the title to the Canvas API, overwriting the course name in Canvas.
     """
-    print("\n--- STARTING MONDAY.COM -> CANVAS TITLE SYNC ---")
+    print("\n--- STARTING MONDAY.COM -> CANVAS TITLE SYNC (PAGINATED) ---")
     
-    # --- START FIX ---
-    # This corrected and more robust query fetches all items from a board,
-    # handling pagination by default in this structure.
-    query = f"""
-        query {{
-            boards(ids: [{CANVAS_BOARD_ID}]) {{
-                items_page {{
-                    cursor
-                    items {{
-                        id
-                        column_values(ids: ["{CANVAS_COURSE_ID_COLUMN_ID}", "{CANVAS_BOARD_TITLE_COLUMN_ID}"]) {{
+    all_items = []
+    cursor = None # Start with no cursor to get the first page
+
+    while True:
+        # This query is designed to fetch one page of items at a time
+        query = f"""
+            query ($cursor: String) {{
+                boards(ids: [{CANVAS_BOARD_ID}]) {{
+                    items_page (cursor: $cursor, limit: 100) {{
+                        cursor
+                        items {{
                             id
-                            text
+                            column_values(ids: ["{CANVAS_COURSE_ID_COLUMN_ID}", "{CANVAS_BOARD_TITLE_COLUMN_ID}"]) {{
+                                id
+                                text
+                            }}
                         }}
                     }}
                 }}
             }}
-        }}
-    """
-    # --- END FIX ---
-    
-    result = execute_monday_graphql(query)
-    if not (result and result.get('data', {}).get('boards')):
-        print("ERROR: Could not fetch items from the Canvas Courses board.")
-        return
+        """
+        
+        # For GraphQL queries with variables, we send them in a separate dict
+        variables = {'cursor': cursor}
+        
+        # We need to post the query and variables together
+        response = requests.post(
+            MONDAY_API_URL,
+            json={"query": query, "variables": variables},
+            headers=MONDAY_HEADERS
+        )
+        result = response.json()
 
-    # Correctly access the list of items
-    items = result['data']['boards'][0]['items_page']['items']
+        if not (result and result.get('data', {}).get('boards')):
+            print("ERROR: Could not fetch items from the Canvas Courses board.")
+            return
+
+        items_page = result['data']['boards'][0]['items_page']
+        all_items.extend(items_page.get('items', []))
+        cursor = items_page.get('cursor')
+
+        # If the cursor is null, we have reached the last page
+        if not cursor:
+            break
+            
     canvas_api = initialize_canvas_api()
-
     if not canvas_api:
         print("ERROR: Canvas API not initialized.")
         return
 
-    print(f"Found {len(items)} items to process...")
+    print(f"Found {len(all_items)} total items to process...")
 
-    for item in items:
+    for item in all_items:
         item_id = item['id']
         canvas_course_id = None
         new_course_title = None
 
-        # Extract the course ID and the new title from the column values
         for cv in item['column_values']:
             if cv['id'] == CANVAS_COURSE_ID_COLUMN_ID:
                 canvas_course_id = cv.get('text')
@@ -538,18 +553,14 @@ def sync_monday_titles_to_canvas():
             continue
         
         try:
-            # Get the course object from Canvas
             course = canvas_api.get_course(canvas_course_id)
-            
-            print(f"  - UPDATING Course {canvas_course_id}: Setting name from '{course.name}' to '{new_course_title}'")
-            
-            # Update the course name in Canvas
+            print(f"  - UPDATING Course {canvas_course_id}: Setting name to '{new_course_title}'")
             course.update(course={'name': new_course_title})
 
         except Exception as e:
             print(f"  - FAILED for Item {item_id} (Canvas ID: {canvas_course_id}): {e}")
 
-    print("--- SYNC COMPLETE ---\n")
+    print("--- SYNC COMPLETE ---")
 @celery_app.task
 def process_general_webhook(event_data, config_rule):
     log_type, params = config_rule.get("log_type"), config_rule.get("params", {})
