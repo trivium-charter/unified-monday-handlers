@@ -30,6 +30,9 @@ PLP_M_SERIES_LABELS_COLUMN = os.environ.get("PLP_M_SERIES_LABELS_COLUMN")
 MASTER_STUDENT_BOARD_ID = os.environ.get("MASTER_STUDENT_BOARD_ID")
 MASTER_STUDENT_SSID_COLUMN = os.environ.get("MASTER_STUDENT_SSID_COLUMN")
 MASTER_STUDENT_EMAIL_COLUMN = os.environ.get("MASTER_STUDENT_EMAIL_COLUMN")
+# ================== START MODIFICATION ==================
+MASTER_STUDENT_CANVAS_ID_COLUMN = "text_mktgs1ax" # The student's custom Canvas ID
+# =================== END MODIFICATION ===================
 
 ALL_COURSES_BOARD_ID = os.environ.get("ALL_COURSES_BOARD_ID")
 ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID = os.environ.get("ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID")
@@ -45,6 +48,10 @@ ALL_STAFF_BOARD_ID = os.environ.get("ALL_STAFF_BOARD_ID")
 ALL_STAFF_EMAIL_COLUMN_ID = os.environ.get("ALL_STAFF_EMAIL_COLUMN_ID")
 ALL_STAFF_SIS_ID_COLUMN_ID = os.environ.get("ALL_STAFF_SIS_ID_COLUMN_ID")
 ALL_STAFF_PERSON_COLUMN_ID = os.environ.get("ALL_STAFF_PERSON_COLUMN_ID")
+# ================== START MODIFICATION ==================
+ALL_STAFF_CANVAS_ID_COLUMN = "text_mktg7h6"       # The teacher's custom Canvas ID
+ALL_STAFF_INTERNAL_ID_COLUMN = "text_mkthjxht"  # The teacher's internal Canvas ID
+# =================== END MODIFICATION ===================
 
 IEP_AP_BOARD_ID = os.environ.get("IEP_AP_BOARD_ID")
 SPED_STUDENTS_BOARD_ID = os.environ.get("SPED_STUDENTS_BOARD_ID")
@@ -129,8 +136,6 @@ def get_column_value(item_id, board_id, column_id):
 
 def find_item_by_person(board_id, person_column_id, person_id):
     """Finds the first item on a board assigned to a specific person."""
-    # This query format is specifically for searching a Person column by user ID.
-    # It requires the person_id to be inside a JSON-formatted string.
     query = f"""
         query {{
             items_page_by_column_values (
@@ -147,7 +152,6 @@ def find_item_by_person(board_id, person_column_id, person_id):
         }}
     """
     result = execute_monday_graphql(query)
-    # Check for a valid response and if any items were returned
     if result and result.get('data', {}).get('items_page_by_column_values', {}).get('items'):
         items = result['data']['items_page_by_column_values']['items']
         if items:
@@ -171,17 +175,11 @@ def change_column_value_generic(board_id, item_id, column_id, value):
 
 def get_people_ids_from_value(value_data):
     if not value_data: return set()
-    
-    # --- START FIX ---
-    # The API can return the value as a string or a dict.
-    # This ensures it's always treated as a dict.
     if isinstance(value_data, str):
         try:
             value_data = json.loads(value_data)
         except json.JSONDecodeError:
-            return set() # Return empty if the string is not valid JSON
-    # --- END FIX ---
-    
+            return set()
     persons_and_teams = value_data.get('personsAndTeams', [])
     return {person['id'] for person in persons_and_teams if 'id' in person}
 
@@ -233,46 +231,8 @@ def update_people_column(item_id, board_id, people_column_id, new_people_value, 
     mutation = f"mutation {{ change_column_value(board_id: {board_id}, item_id: {item_id}, column_id: \"{people_column_id}\", value: {graphql_value}) {{ id }} }}"
     return execute_monday_graphql(mutation) is not None
 
-def get_all_staff_data(board_id, person_col_id, email_col_id, sis_id_col_id):
-    """Fetches all items from the staff board and returns a list of staff details."""
-    staff_data = []
-    query = f"""
-        query {{
-            boards(ids: [{board_id}]) {{
-                items_page {{
-                    items {{
-                        id
-                        column_values(ids: ["{person_col_id}", "{email_col_id}", "{sis_id_col_id}"]) {{
-                            id
-                            value
-                            text
-                        }}
-                    }}
-                }}
-            }}
-        }}
-    """
-    result = execute_monday_graphql(query)
-    if result and result.get('data', {}).get('boards'):
-        items = result['data']['boards'][0]['items_page']['items']
-        for item in items:
-            details = {'item_id': item['id']}
-            for cv in item['column_values']:
-                if cv['id'] == person_col_id:
-                    person_ids = get_people_ids_from_value(cv.get('value'))
-                    details['person_ids'] = person_ids
-                elif cv['id'] == email_col_id:
-                    details['email'] = cv.get('text')
-                elif cv['id'] == sis_id_col_id:
-                    details['sis_id'] = cv.get('text')
-            staff_data.append(details)
-    return staff_data
-
 def create_monday_update(item_id, update_text):
-    """Posts an update (a comment) to a Monday.com item."""
-    # The text body must be a JSON-encoded string for the GraphQL mutation
     formatted_text = json.dumps(update_text)
-    
     mutation = f"mutation {{ create_update (item_id: {item_id}, body: {formatted_text}) {{ id }} }}"
     return execute_monday_graphql(mutation)
 
@@ -281,6 +241,85 @@ def create_monday_update(item_id, update_text):
 # ==============================================================================
 def initialize_canvas_api():
     return Canvas(CANVAS_API_URL, CANVAS_API_KEY) if CANVAS_API_URL and CANVAS_API_KEY else None
+
+# ================== START MODIFICATION ==================
+def find_canvas_user(student_details):
+    """
+    Finds a Canvas user by a series of identifiers in a specific order.
+    1. Custom-provided Canvas ID
+    2. Email as Login ID
+    3. SSID as SIS User ID
+    4. A broad search using the email address.
+    """
+    canvas_api = initialize_canvas_api()
+    if not canvas_api: return None
+
+    # 1. Search by custom Canvas ID from Monday board
+    if student_details.get('canvas_id'):
+        try:
+            return canvas_api.get_user(student_details['canvas_id'])
+        except ResourceDoesNotExist:
+            pass # Continue to next method if not found
+
+    # 2. Search by Email as Login ID
+    if student_details.get('email'):
+        try:
+            return canvas_api.get_user(student_details['email'], 'login_id')
+        except ResourceDoesNotExist:
+            pass
+
+    # 3. Search by SSID as SIS User ID
+    if student_details.get('ssid'):
+        try:
+            return canvas_api.get_user(student_details['ssid'], 'sis_user_id')
+        except ResourceDoesNotExist:
+            pass
+            
+    # 4. Broad search by email term (for cases where email is not the login_id)
+    if student_details.get('email'):
+        try:
+            # This search can return multiple users, but we assume the first is correct
+            # if the email is truly unique.
+            search_results = canvas_api.get_account(1).get_users(search_term=student_details['email'])
+            users = [u for u in search_results]
+            if len(users) == 1:
+                return users[0]
+        except (ResourceDoesNotExist, CanvasException):
+             pass # Ignore errors and proceed to user creation if needed
+
+    return None
+
+def find_canvas_teacher(teacher_details):
+    """Finds a Canvas teacher by a series of identifiers."""
+    canvas_api = initialize_canvas_api()
+    if not canvas_api: return None
+
+    # Search order: Custom Canvas ID -> Internal Canvas ID -> Email -> SIS ID -> Broad Email Search
+    if teacher_details.get('canvas_id'):
+        try: return canvas_api.get_user(teacher_details['canvas_id'])
+        except ResourceDoesNotExist: pass
+        
+    if teacher_details.get('internal_id'):
+        try: return canvas_api.get_user(teacher_details['internal_id'])
+        except ResourceDoesNotExist: pass
+        
+    if teacher_details.get('email'):
+        try: return canvas_api.get_user(teacher_details['email'], 'login_id')
+        except ResourceDoesNotExist: pass
+
+    if teacher_details.get('sis_id'):
+        try: return canvas_api.get_user(teacher_details['sis_id'], 'sis_user_id')
+        except ResourceDoesNotExist: pass
+
+    if teacher_details.get('email'):
+        try:
+            users = [u for u in canvas_api.get_account(1).get_users(search_term=teacher_details['email'])]
+            if len(users) == 1:
+                return users[0]
+        except (ResourceDoesNotExist, CanvasException): pass
+
+    return None
+# =================== END MODIFICATION ===================
 
 def create_canvas_user(student_details):
     canvas_api = initialize_canvas_api()
@@ -306,9 +345,6 @@ def update_user_ssid(user, new_ssid):
     return False
 
 def create_canvas_course(course_name, term_id):
-    """
-    Creates a Canvas course with robust, corrected retry logic for SIS ID conflicts.
-    """
     canvas_api = initialize_canvas_api()
     if not all([canvas_api, CANVAS_SUBACCOUNT_ID, CANVAS_TEMPLATE_COURSE_ID]):
         print("ERROR: Missing Canvas Sub-Account or Template Course ID config.")
@@ -336,7 +372,6 @@ def create_canvas_course(course_name, term_id):
             print(f"SUCCESS: Course '{course_name}' created with SIS ID '{sis_id_to_try}'.")
             return new_course
         except CanvasException as e:
-            # THIS IS THE CRITICAL FIX: Check for the 400 status code and the specific message.
             if hasattr(e, 'status_code') and e.status_code == 400 and 'is already in use' in str(e).lower():
                 print(f"WARNING: SIS ID '{sis_id_to_try}' is in use. Retrying with a new ID...")
                 continue
@@ -371,32 +406,39 @@ def enroll_student_in_section(course_id, user_id, section_id):
         print(f"ERROR: Failed to enroll user {user_id} in section {section_id}. Details: {e}")
         return "Failed"
 
+# ================== START MODIFICATION ==================
 def enroll_or_create_and_enroll(course_id, section_id, student_details):
+    """
+    Finds a student using an expanded search logic. If not found, creates a new user.
+    Then, enrolls the student in the specified course section.
+    """
     canvas_api = initialize_canvas_api()
-    if not canvas_api: return "Failed: Canvas API not initialized"
-    user = None
-    try: user = canvas_api.get_user(student_details['email'], 'login_id')
-    except ResourceDoesNotExist:
-        if student_details.get('ssid'):
-            try: user = canvas_api.get_user(student_details['ssid'], 'sis_user_id')
-            except ResourceDoesNotExist: pass
-    if not user: user = create_canvas_user(student_details)
+    if not canvas_api:
+        return "Failed: Canvas API not initialized"
+
+    user = find_canvas_user(student_details)
+
+    if not user:
+        user = create_canvas_user(student_details)
+
     if user:
+        # Ensure SSID is up-to-date for existing users if provided
         if student_details.get('ssid') and hasattr(user, 'sis_user_id') and user.sis_user_id != student_details['ssid']:
             update_user_ssid(user, student_details['ssid'])
         return enroll_student_in_section(course_id, user.id, section_id)
+
     return "Failed: User not found/created"
+# =================== END MODIFICATION ===================
 
 def unenroll_student_from_course(course_id, student_details):
     canvas_api = initialize_canvas_api()
     if not canvas_api: return False
-    user = None
-    try: user = canvas_api.get_user(student_details.get('email'), 'login_id')
-    except ResourceDoesNotExist:
-        if student_details.get('ssid'):
-            try: user = canvas_api.get_user(student_details['ssid'], 'sis_user_id')
-            except ResourceDoesNotExist: pass
-    if not user: return True
+    
+    # Use the same robust find_canvas_user logic for unenrollment
+    user = find_canvas_user(student_details)
+    if not user:
+        # If user can't be found, we can consider the unenrollment successful
+        return True
     try:
         course = canvas_api.get_course(course_id)
         for enrollment in course.get_enrollments(user_id=user.id):
@@ -405,57 +447,35 @@ def unenroll_student_from_course(course_id, student_details):
     except CanvasException as e:
         print(f"ERROR: Canvas unenrollment failed: {e}")
         return False
-def enroll_teacher_in_course(course_id, teacher_email, teacher_sis_id):
-    """Enrolls a user as a Teacher, with a fallback to sis_user_id and detailed logging."""
+
+# ================== START MODIFICATION ==================
+def enroll_teacher_in_course(course_id, teacher_details):
+    """
+    Enrolls a user as a Teacher using an expanded lookup logic.
+    Does not create a new user if the teacher is not found.
+    """
     canvas_api = initialize_canvas_api()
     if not canvas_api:
-        print("--- ENROLLMENT FAILED: Canvas API not initialized.")
         return "Failed: Canvas API not initialized"
+    
+    teacher_name = teacher_details.get('name', teacher_details.get('email', 'Unknown'))
+    user_to_enroll = find_canvas_teacher(teacher_details)
 
-    user_to_enroll = None
-    print(f"\n--- Starting Enrollment Process for {teacher_email} in Course {course_id} ---")
-    
-    try:
-        # First, try the direct lookup by login_id.
-        print(f"--> Attempting to find user by login_id: {teacher_email}")
-        user_to_enroll = canvas_api.get_user(teacher_email, 'login_id')
-        print(f"    SUCCESS: Found user '{user_to_enroll.name}' (ID: {user_to_enroll.id}) by login_id.")
-    except ResourceDoesNotExist:
-        print(f"    INFO: User not found by login_id.")
-        # If that fails, fall back to the reliable sis_user_id lookup.
-        if teacher_sis_id:
-            try:
-                print(f"--> Attempting to find user by sis_user_id: {teacher_sis_id}")
-                user_to_enroll = canvas_api.get_user(teacher_sis_id, 'sis_user_id')
-                print(f"    SUCCESS: Found user '{user_to_enroll.name}' (ID: {user_to_enroll.id}) by sis_user_id.")
-            except ResourceDoesNotExist:
-                print(f"    INFO: User not found by sis_user_id.")
-                pass  # User not found by SIS ID either
-    
     if not user_to_enroll:
-        print("--- ENROLLMENT FAILED: Could not find user in Canvas. ---")
-        return f"Failed: User '{teacher_email}' not found by login_id or SIS ID '{teacher_sis_id}'."
+        return f"Failed: User '{teacher_name}' not found in Canvas with provided IDs."
 
-    # --- Proceed with enrollment ---
     try:
-        print(f"--> Attempting to get Course ID: {course_id}")
         course = canvas_api.get_course(course_id)
-        print(f"    SUCCESS: Found course '{course.name}'.")
-        
-        print(f"--> Sending enrollment request for user {user_to_enroll.id} into course {course.id} with role 'TeacherEnrollment'.")
-        enrollment = course.enroll_user(user_to_enroll, 'TeacherEnrollment', enrollment_state='active', notify=False)
-        print(f"    SUCCESS: Enrollment API call successful.")
-        print("--- ENROLLMENT COMPLETE ---")
+        # Enroll at the course level, providing access to all sections
+        course.enroll_user(user_to_enroll, 'TeacherEnrollment', enrollment_state='active', notify=False)
         return "Success"
     except ResourceDoesNotExist:
-        print(f"--- ENROLLMENT FAILED: Course with ID '{course_id}' not found in Canvas. ---")
         return f"Failed: Course with ID '{course_id}' not found in Canvas."
     except Conflict:
-        print("--- ENROLLMENT FAILED: User is already enrolled. ---")
         return "Already Enrolled"
     except CanvasException as e:
-        print(f"--- ENROLLMENT FAILED: A Canvas API error occurred: {e} ---")
         return f"Failed: {e}"
+# =================== END MODIFICATION ===================
         
 # ==============================================================================
 # CELERY APP DEFINITION
@@ -466,11 +486,7 @@ if broker_use_ssl_config:
     celery_app.conf.broker_use_ssl = broker_use_ssl_config
     celery_app.conf.redis_backend_use_ssl = broker_use_ssl_config
 celery_app.conf.timezone = 'America/Los_Angeles'
-
-# --- THE FIX ---
-# Keep the connection alive by sending a heartbeat every 60 seconds (well below the 5-minute timeout).
 celery_app.conf.broker_transport_options = {'health_check_interval': 60}
-# As recommended by the logs, enable connection retries on startup for more resilience.
 celery_app.conf.broker_connection_retry_on_startup = True
 # ==============================================================================
 # CELERY TASKS
@@ -505,11 +521,22 @@ def get_student_details_from_plp(plp_item_id):
     master_student_ids = get_linked_items_from_board_relation(plp_item_id, int(PLP_BOARD_ID), PLP_TO_MASTER_STUDENT_CONNECT_COLUMN)
     if not master_student_ids: return None
     master_student_id = list(master_student_ids)[0]
+    
     student_name = get_item_name(master_student_id, int(MASTER_STUDENT_BOARD_ID))
     ssid = (get_column_value(master_student_id, int(MASTER_STUDENT_BOARD_ID), MASTER_STUDENT_SSID_COLUMN) or {}).get('text', '')
     email = (get_column_value(master_student_id, int(MASTER_STUDENT_BOARD_ID), MASTER_STUDENT_EMAIL_COLUMN) or {}).get('text', '')
+    
+    # ================== START MODIFICATION ==================
+    # Fetch the custom Canvas ID for the student
+    canvas_id = (get_column_value(master_student_id, int(MASTER_STUDENT_BOARD_ID), MASTER_STUDENT_CANVAS_ID_COLUMN) or {}).get('text', '')
+    # =================== END MODIFICATION ===================
+
     if not all([student_name, email]): return None
-    return {'name': student_name, 'ssid': ssid, 'email': email}
+    
+    # ================== START MODIFICATION ==================
+    return {'name': student_name, 'ssid': ssid, 'email': email, 'canvas_id': canvas_id}
+    # =================== END MODIFICATION ===================
+
 
 def manage_class_enrollment(action, plp_item_id, class_item_id, student_details, subitem_cols=None):
     subitem_cols = subitem_cols or {}
@@ -663,55 +690,50 @@ def process_master_student_person_sync_webhook(event_data):
         name = get_user_name(p_id)
         if name: create_subitem(plp_item_id, f"Removed {name} from {col_name} on {date} by {changer}")
 
+# ================== START MODIFICATION ==================
 @celery_app.task
 def process_teacher_enrollment_webhook(event_data):
-    """Processes a webhook to enroll a teacher in a Canvas course using a full staff list."""
+    """Processes a webhook to enroll a teacher in a Canvas course with improved user lookup."""
     item_id = event_data.get('pulseId')
     board_id = event_data.get('boardId')
 
     canvas_course_id_val = get_column_value(item_id, board_id, CANVAS_COURSE_ID_COLUMN_ID)
     canvas_course_id = canvas_course_id_val.get('text') if canvas_course_id_val else None
     if not canvas_course_id:
-        create_monday_update(item_id, "Enrollment Failed: Canvas Course ID is missing.")
+        create_monday_update(item_id, "Enrollment Failed: Canvas Course ID is missing on the course item.")
         return
 
-    current_ids = get_people_ids_from_value(event_data.get('value'))
-    previous_ids = get_people_ids_from_value(event_data.get('previousValue'))
-    added_teacher_ids = current_ids - previous_ids
+    added_teacher_ids = get_people_ids_from_value(event_data.get('value')) - get_people_ids_from_value(event_data.get('previousValue'))
     if not added_teacher_ids:
         return
 
-    # Fetch all data from the staff board at once
-    all_staff = get_all_staff_data(
-        ALL_STAFF_BOARD_ID,
-        ALL_STAFF_PERSON_COLUMN_ID,
-        ALL_STAFF_EMAIL_COLUMN_ID,
-        ALL_STAFF_SIS_ID_COLUMN_ID
-    )
-
-    if not all_staff:
-        create_monday_update(item_id, "Enrollment Failed: Could not fetch data from the All Staff board.")
-        return
-
     for teacher_id in added_teacher_ids:
+        # Find the corresponding item for the teacher on the All Staff board
+        staff_item_id = find_item_by_person(int(ALL_STAFF_BOARD_ID), ALL_STAFF_PERSON_COLUMN_ID, teacher_id)
         teacher_name = get_user_name(teacher_id) or f"User ID {teacher_id}"
-        
-        # Search for the teacher in the fetched data
-        staff_info = next((s for s in all_staff if teacher_id in s.get('person_ids', [])), None)
 
-        if not staff_info:
+        if not staff_item_id:
             create_monday_update(item_id, f"Enrollment for '{teacher_name}' Failed: Could not find user in the All Staff board.")
             continue
 
-        teacher_email = staff_info.get('email')
-        teacher_sis_id = staff_info.get('sis_id')
-
-        if not teacher_email or not teacher_sis_id:
-            create_monday_update(item_id, f"Enrollment for '{teacher_name}' Failed: Email or SIS ID is missing from the All Staff board.")
-            continue
-
-        result = enroll_teacher_in_course(canvas_course_id, teacher_email, teacher_sis_id)
+        # Gather all known identifiers for the teacher from the All Staff board
+        email_val = get_column_value(staff_item_id, int(ALL_STAFF_BOARD_ID), ALL_STAFF_EMAIL_COLUMN_ID)
+        sis_id_val = get_column_value(staff_item_id, int(ALL_STAFF_BOARD_ID), ALL_STAFF_SIS_ID_COLUMN_ID)
+        canvas_id_val = get_column_value(staff_item_id, int(ALL_STAFF_BOARD_ID), ALL_STAFF_CANVAS_ID_COLUMN)
+        internal_id_val = get_column_value(staff_item_id, int(ALL_STAFF_BOARD_ID), ALL_STAFF_INTERNAL_ID_COLUMN)
+        
+        teacher_details = {
+            'name': teacher_name,
+            'email': email_val.get('text') if email_val else None,
+            'sis_id': sis_id_val.get('text') if sis_id_val else None,
+            'canvas_id': canvas_id_val.get('text') if canvas_id_val else None,
+            'internal_id': internal_id_val.get('text') if internal_id_val else None,
+        }
+        
+        # Pass all details to the enrollment function
+        result = enroll_teacher_in_course(canvas_course_id, teacher_details)
         create_monday_update(item_id, f"Enrollment attempt for '{teacher_name}': {result}")
+# =================== END MODIFICATION ===================
         
 @celery_app.task
 def process_sped_students_person_sync_webhook(event_data):
