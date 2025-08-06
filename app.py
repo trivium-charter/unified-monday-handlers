@@ -30,9 +30,7 @@ PLP_M_SERIES_LABELS_COLUMN = os.environ.get("PLP_M_SERIES_LABELS_COLUMN")
 MASTER_STUDENT_BOARD_ID = os.environ.get("MASTER_STUDENT_BOARD_ID")
 MASTER_STUDENT_SSID_COLUMN = os.environ.get("MASTER_STUDENT_SSID_COLUMN")
 MASTER_STUDENT_EMAIL_COLUMN = os.environ.get("MASTER_STUDENT_EMAIL_COLUMN")
-# ================== START MODIFICATION ==================
 MASTER_STUDENT_CANVAS_ID_COLUMN = "text_mktgs1ax" # The student's custom Canvas ID
-# =================== END MODIFICATION ===================
 
 ALL_COURSES_BOARD_ID = os.environ.get("ALL_COURSES_BOARD_ID")
 ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID = os.environ.get("ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID")
@@ -48,18 +46,20 @@ ALL_STAFF_BOARD_ID = os.environ.get("ALL_STAFF_BOARD_ID")
 ALL_STAFF_EMAIL_COLUMN_ID = os.environ.get("ALL_STAFF_EMAIL_COLUMN_ID")
 ALL_STAFF_SIS_ID_COLUMN_ID = os.environ.get("ALL_STAFF_SIS_ID_COLUMN_ID")
 ALL_STAFF_PERSON_COLUMN_ID = os.environ.get("ALL_STAFF_PERSON_COLUMN_ID")
-# ================== START MODIFICATION ==================
 ALL_STAFF_CANVAS_ID_COLUMN = "text_mktg7h6"       # The teacher's custom Canvas ID
 ALL_STAFF_INTERNAL_ID_COLUMN = "text_mkthjxht"  # The teacher's internal Canvas ID
-# =================== END MODIFICATION ===================
 
 IEP_AP_BOARD_ID = os.environ.get("IEP_AP_BOARD_ID")
 SPED_STUDENTS_BOARD_ID = os.environ.get("SPED_STUDENTS_BOARD_ID")
 SPED_TO_IEPAP_CONNECT_COLUMN_ID = os.environ.get("SPED_TO_IEPAP_CONNECT_COLUMN_ID")
 
 CANVAS_BOARD_ID = os.environ.get("CANVAS_BOARD_ID")
-CANVAS_COURSES_TEACHER_COLUMN_ID = os.environ.get("CANVAS_COURSES_TEACHER_COLUMN_ID")
 CANVAS_COURSE_ID_COLUMN_ID = os.environ.get("CANVAS_COURSE_ID_COLUMN_ID")
+# ================== START MODIFICATION ==================
+# This is the new environment variable for the Connect Boards column that triggers the webhook.
+CANVAS_TO_STAFF_CONNECT_COLUMN_ID = os.environ.get("CANVAS_TO_STAFF_CONNECT_COLUMN_ID") # Should be board_relation_mkthbzgr
+# =================== END MODIFICATION ===================
+
 
 CANVAS_TERM_ID = os.environ.get("CANVAS_TERM_ID")
 CANVAS_SUBACCOUNT_ID = os.environ.get("CANVAS_SUBACCOUNT_ID")
@@ -135,7 +135,6 @@ def get_column_value(item_id, board_id, column_id):
     return None
 
 def find_item_by_person(board_id, person_column_id, person_id):
-    """Finds the first item on a board assigned to a specific person."""
     query = f"""
         query {{
             items_page_by_column_values (
@@ -242,66 +241,50 @@ def create_monday_update(item_id, update_text):
 def initialize_canvas_api():
     return Canvas(CANVAS_API_URL, CANVAS_API_KEY) if CANVAS_API_URL and CANVAS_API_KEY else None
 
-# ================== START MODIFICATION ==================
 def find_canvas_user(student_details):
-    """
-    Finds a Canvas user by a series of identifiers in a specific order.
-    1. Custom-provided Canvas ID
-    2. Email as Login ID
-    3. SSID as SIS User ID
-    4. A broad search using the email address.
-    """
     canvas_api = initialize_canvas_api()
     if not canvas_api: return None
 
-    # 1. Search by custom Canvas ID from Monday board
     if student_details.get('canvas_id'):
         try:
             return canvas_api.get_user(student_details['canvas_id'])
-        except ResourceDoesNotExist:
-            pass # Continue to next method if not found
+        except (ResourceDoesNotExist, ValueError):
+            pass 
 
-    # 2. Search by Email as Login ID
     if student_details.get('email'):
         try:
             return canvas_api.get_user(student_details['email'], 'login_id')
         except ResourceDoesNotExist:
             pass
 
-    # 3. Search by SSID as SIS User ID
     if student_details.get('ssid'):
         try:
             return canvas_api.get_user(student_details['ssid'], 'sis_user_id')
         except ResourceDoesNotExist:
             pass
             
-    # 4. Broad search by email term (for cases where email is not the login_id)
     if student_details.get('email'):
         try:
-            # This search can return multiple users, but we assume the first is correct
-            # if the email is truly unique.
             search_results = canvas_api.get_account(1).get_users(search_term=student_details['email'])
             users = [u for u in search_results]
             if len(users) == 1:
                 return users[0]
         except (ResourceDoesNotExist, CanvasException):
-             pass # Ignore errors and proceed to user creation if needed
+             pass
 
     return None
 
 def find_canvas_teacher(teacher_details):
-    """Finds a Canvas teacher by a series of identifiers."""
     canvas_api = initialize_canvas_api()
     if not canvas_api: return None
 
-    # Search order: Custom Canvas ID -> Internal Canvas ID -> Email -> SIS ID -> Broad Email Search
     if teacher_details.get('canvas_id'):
         try: return canvas_api.get_user(teacher_details['canvas_id'])
-        except ResourceDoesNotExist: pass
+        except (ResourceDoesNotExist, ValueError): pass
         
     if teacher_details.get('internal_id'):
         try: return canvas_api.get_user(teacher_details['internal_id'])
-        except ResourceDoesNotExist: pass
+        except (ResourceDoesNotExist, ValueError): pass
         
     if teacher_details.get('email'):
         try: return canvas_api.get_user(teacher_details['email'], 'login_id')
@@ -319,7 +302,6 @@ def find_canvas_teacher(teacher_details):
         except (ResourceDoesNotExist, CanvasException): pass
 
     return None
-# =================== END MODIFICATION ===================
 
 def create_canvas_user(student_details):
     canvas_api = initialize_canvas_api()
@@ -406,12 +388,7 @@ def enroll_student_in_section(course_id, user_id, section_id):
         print(f"ERROR: Failed to enroll user {user_id} in section {section_id}. Details: {e}")
         return "Failed"
 
-# ================== START MODIFICATION ==================
 def enroll_or_create_and_enroll(course_id, section_id, student_details):
-    """
-    Finds a student using an expanded search logic. If not found, creates a new user.
-    Then, enrolls the student in the specified course section.
-    """
     canvas_api = initialize_canvas_api()
     if not canvas_api:
         return "Failed: Canvas API not initialized"
@@ -422,22 +399,18 @@ def enroll_or_create_and_enroll(course_id, section_id, student_details):
         user = create_canvas_user(student_details)
 
     if user:
-        # Ensure SSID is up-to-date for existing users if provided
         if student_details.get('ssid') and hasattr(user, 'sis_user_id') and user.sis_user_id != student_details['ssid']:
             update_user_ssid(user, student_details['ssid'])
         return enroll_student_in_section(course_id, user.id, section_id)
 
     return "Failed: User not found/created"
-# =================== END MODIFICATION ===================
 
 def unenroll_student_from_course(course_id, student_details):
     canvas_api = initialize_canvas_api()
     if not canvas_api: return False
     
-    # Use the same robust find_canvas_user logic for unenrollment
     user = find_canvas_user(student_details)
     if not user:
-        # If user can't be found, we can consider the unenrollment successful
         return True
     try:
         course = canvas_api.get_course(course_id)
@@ -448,12 +421,7 @@ def unenroll_student_from_course(course_id, student_details):
         print(f"ERROR: Canvas unenrollment failed: {e}")
         return False
 
-# ================== START MODIFICATION ==================
 def enroll_teacher_in_course(course_id, teacher_details):
-    """
-    Enrolls a user as a Teacher using an expanded lookup logic.
-    Does not create a new user if the teacher is not found.
-    """
     canvas_api = initialize_canvas_api()
     if not canvas_api:
         return "Failed: Canvas API not initialized"
@@ -466,7 +434,6 @@ def enroll_teacher_in_course(course_id, teacher_details):
 
     try:
         course = canvas_api.get_course(course_id)
-        # Enroll at the course level, providing access to all sections
         course.enroll_user(user_to_enroll, 'TeacherEnrollment', enrollment_state='active', notify=False)
         return "Success"
     except ResourceDoesNotExist:
@@ -475,7 +442,6 @@ def enroll_teacher_in_course(course_id, teacher_details):
         return "Already Enrolled"
     except CanvasException as e:
         return f"Failed: {e}"
-# =================== END MODIFICATION ===================
         
 # ==============================================================================
 # CELERY APP DEFINITION
@@ -525,18 +491,11 @@ def get_student_details_from_plp(plp_item_id):
     student_name = get_item_name(master_student_id, int(MASTER_STUDENT_BOARD_ID))
     ssid = (get_column_value(master_student_id, int(MASTER_STUDENT_BOARD_ID), MASTER_STUDENT_SSID_COLUMN) or {}).get('text', '')
     email = (get_column_value(master_student_id, int(MASTER_STUDENT_BOARD_ID), MASTER_STUDENT_EMAIL_COLUMN) or {}).get('text', '')
-    
-    # ================== START MODIFICATION ==================
-    # Fetch the custom Canvas ID for the student
     canvas_id = (get_column_value(master_student_id, int(MASTER_STUDENT_BOARD_ID), MASTER_STUDENT_CANVAS_ID_COLUMN) or {}).get('text', '')
-    # =================== END MODIFICATION ===================
 
     if not all([student_name, email]): return None
     
-    # ================== START MODIFICATION ==================
     return {'name': student_name, 'ssid': ssid, 'email': email, 'canvas_id': canvas_id}
-    # =================== END MODIFICATION ===================
-
 
 def manage_class_enrollment(action, plp_item_id, class_item_id, student_details, subitem_cols=None):
     subitem_cols = subitem_cols or {}
@@ -586,11 +545,19 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details,
         sections = {"A-G" for s in ["AG"] if s in ag_grad_text} | {"Grad" for s in ["Grad"] if s in ag_grad_text} | {"M-Series" for s in ["M-series"] if s in m_series_text}
         if not sections: sections.add("All")
         
+        enrollment_results = []
         for section_name in sections:
             section = create_section_if_not_exists(canvas_course_id, section_name)
             if section:
                 result = enroll_or_create_and_enroll(canvas_course_id, section.id, student_details)
-                create_subitem(plp_item_id, f"Enrolled in {class_name} ({section_name}): {result}", subitem_cols)
+                enrollment_results.append({'section': section_name, 'status': result})
+
+        if enrollment_results:
+            section_names = ", ".join([res['section'] for res in enrollment_results])
+            all_statuses = {res['status'] for res in enrollment_results}
+            final_status = "Failed" if "Failed" in all_statuses else "Success"
+            subitem_title = f"Enrolled in {class_name} (Sections: {section_names}): {final_status}"
+            create_subitem(plp_item_id, subitem_title, subitem_cols)
 
     elif action == "unenroll":
         result = unenroll_student_from_course(canvas_course_id, student_details)
@@ -693,30 +660,29 @@ def process_master_student_person_sync_webhook(event_data):
 # ================== START MODIFICATION ==================
 @celery_app.task
 def process_teacher_enrollment_webhook(event_data):
-    """Processes a webhook to enroll a teacher in a Canvas course with improved user lookup."""
-    item_id = event_data.get('pulseId')
+    """
+    Processes a webhook from a Connect Boards column to enroll a teacher.
+    """
+    course_item_id = event_data.get('pulseId')
     board_id = event_data.get('boardId')
 
-    canvas_course_id_val = get_column_value(item_id, board_id, CANVAS_COURSE_ID_COLUMN_ID)
+    canvas_course_id_val = get_column_value(course_item_id, board_id, CANVAS_COURSE_ID_COLUMN_ID)
     canvas_course_id = canvas_course_id_val.get('text') if canvas_course_id_val else None
     if not canvas_course_id:
-        create_monday_update(item_id, "Enrollment Failed: Canvas Course ID is missing on the course item.")
+        create_monday_update(course_item_id, "Enrollment Failed: Canvas Course ID is missing on the course item.")
         return
 
-    added_teacher_ids = get_people_ids_from_value(event_data.get('value')) - get_people_ids_from_value(event_data.get('previousValue'))
-    if not added_teacher_ids:
+    # Get the newly linked teacher item IDs from the 'Connect Boards' column data
+    added_staff_item_ids = get_linked_ids_from_connect_column_value(event_data.get('value')) - \
+                           get_linked_ids_from_connect_column_value(event_data.get('previousValue'))
+    
+    if not added_staff_item_ids:
         return
 
-    for teacher_id in added_teacher_ids:
-        # Find the corresponding item for the teacher on the All Staff board
-        staff_item_id = find_item_by_person(int(ALL_STAFF_BOARD_ID), ALL_STAFF_PERSON_COLUMN_ID, teacher_id)
-        teacher_name = get_user_name(teacher_id) or f"User ID {teacher_id}"
+    for staff_item_id in added_staff_item_ids:
+        teacher_name = get_item_name(staff_item_id, int(ALL_STAFF_BOARD_ID)) or f"Staff Item {staff_item_id}"
 
-        if not staff_item_id:
-            create_monday_update(item_id, f"Enrollment for '{teacher_name}' Failed: Could not find user in the All Staff board.")
-            continue
-
-        # Gather all known identifiers for the teacher from the All Staff board
+        # Gather all known identifiers for the teacher from their item on the All Staff board
         email_val = get_column_value(staff_item_id, int(ALL_STAFF_BOARD_ID), ALL_STAFF_EMAIL_COLUMN_ID)
         sis_id_val = get_column_value(staff_item_id, int(ALL_STAFF_BOARD_ID), ALL_STAFF_SIS_ID_COLUMN_ID)
         canvas_id_val = get_column_value(staff_item_id, int(ALL_STAFF_BOARD_ID), ALL_STAFF_CANVAS_ID_COLUMN)
@@ -730,9 +696,9 @@ def process_teacher_enrollment_webhook(event_data):
             'internal_id': internal_id_val.get('text') if internal_id_val else None,
         }
         
-        # Pass all details to the enrollment function
+        # Pass all details to the robust enrollment function
         result = enroll_teacher_in_course(canvas_course_id, teacher_details)
-        create_monday_update(item_id, f"Enrollment attempt for '{teacher_name}': {result}")
+        create_monday_update(course_item_id, f"Enrollment attempt for '{teacher_name}': {result}")
 # =================== END MODIFICATION ===================
         
 @celery_app.task
@@ -756,6 +722,7 @@ def monday_unified_webhooks():
     event = data.get('event', {})
     board_id, col_id, webhook_type = str(event.get('boardId')), event.get('columnId'), event.get('type')
     parent_board_id = str(event.get('parentItemBoardId')) if event.get('parentItemBoardId') else None
+    
     if board_id == PLP_BOARD_ID and webhook_type == "update_column_value":
         if col_id == PLP_CANVAS_SYNC_COLUMN_ID:
             process_canvas_full_sync_from_status.delay(event)
@@ -763,18 +730,26 @@ def monday_unified_webhooks():
         if col_id in [c.strip() for c in PLP_ALL_CLASSES_CONNECT_COLUMNS_STR.split(',')]:
             process_canvas_delta_sync_from_course_change.delay(event)
             return jsonify({"message": "Canvas Delta Sync queued."}), 202
+            
     if parent_board_id == HS_ROSTER_BOARD_ID and col_id == HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID:
         process_plp_course_sync_webhook.delay(event)
         return jsonify({"message": "PLP Course Sync queued."}), 202
+        
     if board_id == MASTER_STUDENT_BOARD_ID and col_id in MASTER_STUDENT_PEOPLE_COLUMNS:
         process_master_student_person_sync_webhook.delay(event)
         return jsonify({"message": "Master Student Person Sync queued."}), 202
+        
     if board_id == SPED_STUDENTS_BOARD_ID and col_id in SPED_STUDENTS_PEOPLE_COLUMN_MAPPING:
         process_sped_students_person_sync_webhook.delay(event)
         return jsonify({"message": "SpEd Students Person Sync queued."}), 202
-    if board_id == CANVAS_BOARD_ID and col_id == CANVAS_COURSES_TEACHER_COLUMN_ID:
+    
+    # ================== START MODIFICATION ==================
+    # This is the new, correct trigger for teacher enrollment
+    if board_id == CANVAS_BOARD_ID and col_id == CANVAS_TO_STAFF_CONNECT_COLUMN_ID:
         process_teacher_enrollment_webhook.delay(event)
         return jsonify({"message": "Canvas Teacher Enrollment queued."}), 202
+    # =================== END MODIFICATION ===================
+
     for rule in LOG_CONFIGS:
         if str(rule.get("trigger_board_id")) == board_id:
             if (webhook_type == "update_column_value" and rule.get("trigger_column_id") == col_id) or \
