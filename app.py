@@ -484,18 +484,62 @@ def process_general_webhook(event_data, config_rule):
             if name: create_subitem(item_id, f"Removed {prefix} '{name}' on {date} by {changer}", subitem_cols)
 
 def get_student_details_from_plp(plp_item_id):
-    master_student_ids = get_linked_items_from_board_relation(plp_item_id, int(PLP_BOARD_ID), PLP_TO_MASTER_STUDENT_CONNECT_COLUMN)
-    if not master_student_ids: return None
-    master_student_id = list(master_student_ids)[0]
+    """
+    Efficiently fetches all required student details from the linked Master Student
+    item in a single GraphQL query to prevent rate-limiting.
+    """
+    # This single, complex query gets the linked student item and all necessary column values at once.
+    query = f"""
+    query {{
+        items (ids: [{plp_item_id}]) {{
+            column_values (ids: ["{PLP_TO_MASTER_STUDENT_CONNECT_COLUMN}"]) {{
+                value
+            }}
+        }}
+    }}
+    """
     
-    student_name = get_item_name(master_student_id, int(MASTER_STUDENT_BOARD_ID))
-    ssid = (get_column_value(master_student_id, int(MASTER_STUDENT_BOARD_ID), MASTER_STUDENT_SSID_COLUMN) or {}).get('text', '')
-    email = (get_column_value(master_student_id, int(MASTER_STUDENT_BOARD_ID), MASTER_STUDENT_EMAIL_COLUMN) or {}).get('text', '')
-    canvas_id = (get_column_value(master_student_id, int(MASTER_STUDENT_BOARD_ID), MASTER_STUDENT_CANVAS_ID_COLUMN) or {}).get('text', '')
+    result = execute_monday_graphql(query)
+    
+    try:
+        # Extract the ID of the linked master student item
+        connect_column_value = json.loads(result['data']['items'][0]['column_values'][0]['value'])
+        linked_ids = [item['linkedPulseId'] for item in connect_column_value.get('linkedPulseIds', [])]
+        if not linked_ids:
+            return None
+        master_student_id = linked_ids[0]
 
-    if not all([student_name, email]): return None
-    
-    return {'name': student_name, 'ssid': ssid, 'email': email, 'canvas_id': canvas_id}
+        # Now, fetch all details for that specific master student item in one go
+        details_query = f"""
+        query {{
+            items (ids: [{master_student_id}]) {{
+                name
+                column_values(ids: ["{MASTER_STUDENT_SSID_COLUMN}", "{MASTER_STUDENT_EMAIL_COLUMN}", "{MASTER_STUDENT_CANVAS_ID_COLUMN}"]) {{
+                    id
+                    text
+                }}
+            }}
+        }}
+        """
+        details_result = execute_monday_graphql(details_query)
+        item_details = details_result['data']['items'][0]
+        student_name = item_details['name']
+        
+        # Create a mapping of column IDs to their text values for easy lookup
+        column_map = {{cv['id']: cv['text'] for cv in item_details['column_values']}}
+        
+        ssid = column_map.get(MASTER_STUDENT_SSID_COLUMN, '')
+        email = column_map.get(MASTER_STUDENT_EMAIL_COLUMN, '')
+        canvas_id = column_map.get(MASTER_STUDENT_CANVAS_ID_COLUMN, '')
+
+        if not all([student_name, email]):
+            return None
+
+        return {{'name': student_name, 'ssid': ssid, 'email': email, 'canvas_id': canvas_id}}
+
+    except (TypeError, KeyError, IndexError, json.JSONDecodeError) as e:
+        print(f"ERROR: Could not parse student details from Monday.com response: {e}")
+        return None
 
 def manage_class_enrollment(action, plp_item_id, class_item_id, student_details, subitem_cols=None):
     subitem_cols = subitem_cols or {}
