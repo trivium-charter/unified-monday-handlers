@@ -6,11 +6,10 @@ from canvasapi import Canvas
 from canvasapi.exceptions import CanvasException, Conflict, ResourceDoesNotExist
 
 # ==============================================================================
-# COMPREHENSIVE BULK PLP SYNC SCRIPT (V5.1 - Bug Fixes)
+# COMPREHENSIVE BULK PLP SYNC SCRIPT (V5.2 - Bug Fixes)
 # ==============================================================================
 # This script performs a full, two-phase sync for all students:
-# 1. Reconciles the High School Roster subitem courses to the PLP board based on
-#    new curriculum and subject logic.
+# 1. Reconciles the High School Roster subitem courses to the PLP board.
 # 2. Syncs the now-updated PLP courses to Canvas for enrollment and syncs
 #    teachers back to the Master Student List.
 # ==============================================================================
@@ -84,15 +83,21 @@ def execute_monday_graphql(query):
         print(f"  -> API Error: {e}")
         return None
 
-def get_all_items_from_board(board_id, with_subitems=False):
+def get_all_items_from_board(board_id, with_subitems=False, item_ids=None):
     all_items = []
     cursor = None
     subitem_query_part = "subitems { id name column_values { id text value } }" if with_subitems else ""
+    
+    # ================== START MODIFICATION ==================
+    # Build the query_params string only if item_ids are provided
+    query_params = f'query_params: {{ ids: {json.dumps(item_ids)} }}' if item_ids else ''
+    # =================== END MODIFICATION ===================
+    
     while True:
         query = f"""
         query {{
             boards(ids: [{board_id}]) {{
-                items_page (limit: 50{', cursor: "' + cursor + '"' if cursor else ''}) {{
+                items_page (limit: 50{', cursor: "' + cursor + '"' if cursor else ''}, {query_params}) {{
                     cursor
                     items {{
                         id
@@ -112,32 +117,9 @@ def get_all_items_from_board(board_id, with_subitems=False):
         items = items_page.get('items', [])
         all_items.extend(items)
         cursor = items_page.get('cursor')
-        if not cursor:
+        if not cursor or (item_ids and len(all_items) >= len(item_ids)):
             break
     return all_items
-    
-def get_items_by_ids(board_id, item_ids, column_ids):
-    """Fetches specific items by their IDs."""
-    if not item_ids:
-        return []
-    query = f"""
-    query {{
-        items (ids: {json.dumps(item_ids)}) {{
-            id
-            name
-            column_values(ids: {json.dumps(column_ids)}) {{
-                id
-                value
-                text
-            }}
-        }}
-    }}
-    """
-    result = execute_monday_graphql(query)
-    if result and result.get('data', {}).get('items'):
-        return result['data']['items']
-    return []
-
 
 def get_column_value(item_id, board_id, column_id):
     if not column_id: return None
