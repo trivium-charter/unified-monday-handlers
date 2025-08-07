@@ -91,6 +91,7 @@ def get_all_items_from_board(board_id, with_subitems=False, item_ids=None):
     ids_filter = f'ids: {json.dumps(item_ids)}' if item_ids else ''
     
     while True:
+        # Adjusted limit to 50 to be safer with complex queries
         query = f"""
         query {{
             boards(ids: [{board_id}]) {{
@@ -278,14 +279,18 @@ def get_student_details_from_plp(plp_item_id):
     except (TypeError, KeyError, IndexError, json.JSONDecodeError):
         return None
 
-def manage_class_enrollment(class_item_id, student_details):
+def manage_class_enrollment(plp_item_id, class_item_id, student_details):
     linked_canvas_items_data = get_column_value(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
-    if not linked_canvas_items_data or not linked_canvas_items_data.get('value'):
-        return {"course_name": get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)), "status": "Skipped (Not a Canvas Course)"}
+    class_name_for_log = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)) or f"Item {class_item_id}"
     
+    if not linked_canvas_items_data or not linked_canvas_items_data.get('value'):
+        create_subitem(plp_item_id, f"Skipped {class_name_for_log} (Not a Canvas Course)")
+        return
+
     linked_ids = {int(item['linkedPulseId']) for item in linked_canvas_items_data['value'].get('linkedPulseIds', [])}
     if not linked_ids:
-        return {"course_name": get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)), "status": "Skipped (Not a Canvas Course)"}
+        create_subitem(plp_item_id, f"Skipped {class_name_for_log} (Not a Canvas Course)")
+        return
     
     canvas_item_id = list(linked_ids)[0]
     class_name = get_item_name(canvas_item_id, int(CANVAS_BOARD_ID))
@@ -293,7 +298,8 @@ def manage_class_enrollment(class_item_id, student_details):
     canvas_course_id = course_id_val.get('text') if course_id_val else None
 
     if not canvas_course_id:
-        return {"course_name": class_name, "status": "Failed (No Canvas Course ID)"}
+        create_subitem(plp_item_id, f"Failed to enroll in {class_name} (No Canvas Course ID)")
+        return
 
     m_series_val = get_column_value(student_details['plp_id'], int(PLP_BOARD_ID), PLP_M_SERIES_LABELS_COLUMN)
     ag_grad_val = get_column_value(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_CLASSES_AG_GRAD_COLUMN)
@@ -304,8 +310,15 @@ def manage_class_enrollment(class_item_id, student_details):
     if not sections: sections.add("All")
     
     results = [enroll_or_create_and_enroll(canvas_course_id, create_section_if_not_exists(canvas_course_id, s_name).id, student_details) for s_name in sections]
-    status = "Failed" if "Failed" in results else "Success"
-    return {"course_name": class_name, "status": status}
+    
+    final_status = "Failed" if "Failed" in results else "Success"
+    if "Already Enrolled" in results and "Success" not in results:
+        final_status = "Already Enrolled"
+
+    if final_status != "Already Enrolled":
+        section_names = ", ".join(sections)
+        subitem_title = f"Enrolled in {class_name} (Sections: {section_names}): {final_status}"
+        create_subitem(plp_item_id, subitem_title)
 
 def get_linked_item_ids_from_single_course(course_item_id):
     query = f'query {{ items (ids: [{course_item_id}]) {{ id column_values(ids: ["{ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID}"]) {{ value }} }} }}'
@@ -322,7 +335,7 @@ def get_canvas_item_details(canvas_item_ids):
         for item in result['data']['items']:
             course_type = get_column_value_from_item_data(item, CANVAS_COURSE_TYPE_COLUMN_ID)
             people_value_str = get_column_value_from_item_data(item, CANVAS_COURSES_TEACHER_COLUMN_ID)
-            people_value = json.loads(people_value_str) if people_value_str else {}
+            people_value = json.loads(people_value_str) if people_value_str and isinstance(people_value_str, str) else {}
             teacher_id = None
             if people_value:
                 persons = people_value.get('personsAndTeams', [])
@@ -367,30 +380,24 @@ def bulk_plp_sync():
             curriculum_text = get_column_value_from_item_data(subitem, HS_ROSTER_SUBITEM_CURRICULUM_COLUMN_ID) or ""
             subject_text = get_column_value_from_item_data(subitem, HS_ROSTER_SUBITEM_SUBJECT_COLUMN_ID) or ""
             
-            # ================== START MODIFICATION ==================
-            # Determine all categories a course belongs to
             categories = set()
             if "ACE" in curriculum_text:
                 categories.add("ACE")
             
-            # Check subjects independently
             if "Math" in subject_text:
                 categories.add("Math")
             if "ELA" in subject_text:
                 categories.add("ELA")
             
-            # If no specific category was found, assign to "Other"
             if not categories:
                 categories.add("Other")
             
-            # Map categories to PLP columns
             for category in categories:
                 target_plp_col = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get(category)
                 if target_plp_col:
                     if target_plp_col not in courses_to_sync:
                         courses_to_sync[target_plp_col] = set()
                     courses_to_sync[target_plp_col].update(course_ids_in_subitem)
-            # =================== END MODIFICATION ===================
 
         if courses_to_sync:
             print("  -> Reconciling courses from HS Roster to PLP...")
@@ -400,7 +407,6 @@ def bulk_plp_sync():
                 time.sleep(0.2)
         else:
             print("  -> No courses found in subitems to sync for Phase 1.")
-
 
         # PHASE 2: Sync PLP to Canvas and Master Student
         print("  -> Starting PLP to Canvas and Master Student sync...")
@@ -429,11 +435,9 @@ def bulk_plp_sync():
         if not all_plp_courses:
             print("  -> No courses found on PLP to process for Canvas/Teacher sync.")
         else:
-            all_enrollment_results = []
             ace_teacher_ids, connect_teacher_ids = set(), set()
             for course_item_id in all_plp_courses:
-                enrollment_result = manage_class_enrollment(course_item_id, student_details_raw)
-                if enrollment_result: all_enrollment_results.append(enrollment_result)
+                manage_class_enrollment(plp_item_id, course_item_id, student_details_raw)
                 canvas_item_ids = get_linked_item_ids_from_single_course(course_item_id)
                 if canvas_item_ids:
                     canvas_item_details = get_canvas_item_details(canvas_item_ids)
@@ -442,16 +446,6 @@ def bulk_plp_sync():
                             if detail['course_type'] == "ACE": ace_teacher_ids.add(detail['teacher_id'])
                             elif detail['course_type'] == "Connect": connect_teacher_ids.add(detail['teacher_id'])
             
-            # ================== START MODIFICATION ==================
-            # Create detailed subitems instead of a generic summary
-            if all_enrollment_results:
-                print(f"  -> Creating {len(all_enrollment_results)} enrollment log subitems...")
-                for res in all_enrollment_results:
-                    if res: # Ensure result is not None
-                        create_subitem(plp_item_id, f"Enrolled in {res['course_name']}: {res['status']}")
-                        time.sleep(0.2) # Small delay between creating subitems
-            # =================== END MODIFICATION ===================
-
             if ace_teacher_ids:
                 update_people_column_with_ids(master_student_id, int(MASTER_STUDENT_BOARD_ID), MASTER_STUDENT_ACE_PEOPLE_COLUMN_ID, ace_teacher_ids)
             if connect_teacher_ids:
@@ -461,7 +455,6 @@ def bulk_plp_sync():
         time.sleep(DELAY_BETWEEN_ITEMS)
 
     print("\nComprehensive bulk sync complete!")
-
 
 # ==============================================================================
 # SCRIPT EXECUTION
