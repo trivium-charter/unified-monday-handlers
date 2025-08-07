@@ -6,7 +6,7 @@ from canvasapi import Canvas
 from canvasapi.exceptions import CanvasException, Conflict, ResourceDoesNotExist
 
 # ==============================================================================
-# COMPREHENSIVE BULK PLP SYNC SCRIPT (V5.6 - Final with Subitem Check)
+# COMPREHENSIVE BULK PLP SYNC SCRIPT (V5.7 - Final with Bug Fixes)
 # ==============================================================================
 # This script performs a full, two-phase sync for all students:
 # 1. Reconciles the High School Roster subitem courses to the PLP board.
@@ -343,7 +343,17 @@ def get_canvas_item_details(canvas_item_ids):
         for item in result['data']['items']:
             course_type = get_column_value_from_item_data(item, CANVAS_COURSE_TYPE_COLUMN_ID)
             people_value_str = get_column_value_from_item_data(item, CANVAS_COURSES_TEACHER_COLUMN_ID)
-            people_value = json.loads(people_value_str) if people_value_str and isinstance(people_value_str, str) else {}
+            
+            # ================== START MODIFICATION ==================
+            # Safely parse the JSON from the people column
+            people_value = {}
+            if people_value_str and isinstance(people_value_str, str):
+                try:
+                    people_value = json.loads(people_value_str)
+                except json.JSONDecodeError:
+                    print(f"  -> Warning: Could not decode People column JSON for an item.")
+            # =================== END MODIFICATION ===================
+            
             teacher_id = None
             if people_value:
                 persons = people_value.get('personsAndTeams', [])
@@ -358,7 +368,6 @@ def get_subitem_names(plp_item_id, entry_type_col_id):
     if result and result.get('data', {}).get('items'):
         subitems = result['data']['items'][0].get('subitems', [])
         for sub in subitems:
-            # Only consider subitems with the correct entry type
             entry_type = get_column_value_from_item_data(sub, entry_type_col_id)
             if entry_type == "Curriculum Change":
                 names.add(sub['name'])
