@@ -27,7 +27,10 @@ CANVAS_BOARD_ID = os.environ.get("CANVAS_BOARD_ID")
 CANVAS_COURSES_TEACHER_COLUMN_ID = os.environ.get("CANVAS_COURSES_TEACHER_COLUMN_ID")
 
 # New variables for the specific sync mappings
-PLP_ALL_COURSE_COLUMNS_STR = os.environ.get("PLP_ALL_COURSE_COLUMNS_STR", "")
+# ================== START MODIFICATION ==================
+# Using the existing environment variable as requested
+PLP_ALL_CLASSES_CONNECT_COLUMNS_STR = os.environ.get("PLP_ALL_CLASSES_CONNECT_COLUMNS_STR", "")
+# =================== END MODIFICATION ===================
 MASTER_STUDENT_ACE_PEOPLE_COLUMN_ID = os.environ.get("MASTER_STUDENT_ACE_PEOPLE_COLUMN_ID")
 MASTER_STUDENT_CONNECT_PEOPLE_COLUMN_ID = os.environ.get("MASTER_STUDENT_CONNECT_PEOPLE_COLUMN_ID")
 CANVAS_COURSE_TYPE_COLUMN_ID = os.environ.get("CANVAS_COURSE_TYPE_COLUMN_ID") # Should be status__1
@@ -88,6 +91,9 @@ def get_column_value_from_item_data(item_data, column_id):
     for cv in item_data.get('column_values', []):
         if cv['id'] == column_id:
             try:
+                # Use .get('text') for status columns, otherwise parse value
+                if cv.get('text'):
+                    return cv['text']
                 return json.loads(cv['value']) if cv.get('value') else None
             except (json.JSONDecodeError, TypeError):
                 return cv.get('value')
@@ -96,7 +102,7 @@ def get_column_value_from_item_data(item_data, column_id):
 def get_linked_item_ids(item_data, column_id):
     """Gets linked item IDs from a connect_boards column value."""
     column_value = get_column_value_from_item_data(item_data, column_id)
-    if not column_value or "linkedPulseIds" not in column_value:
+    if not isinstance(column_value, dict) or "linkedPulseIds" not in column_value:
         return []
     return [item['linkedPulseId'] for item in column_value["linkedPulseIds"]]
 
@@ -129,16 +135,16 @@ def bulk_sync_plp_courses():
     required_vars = [
         PLP_BOARD_ID, PLP_TO_MASTER_STUDENT_CONNECT_COLUMN, MASTER_STUDENT_BOARD_ID,
         ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID, CANVAS_BOARD_ID, CANVAS_COURSES_TEACHER_COLUMN_ID,
-        PLP_ALL_COURSE_COLUMNS_STR, MASTER_STUDENT_ACE_PEOPLE_COLUMN_ID,
+        PLP_ALL_CLASSES_CONNECT_COLUMNS_STR, MASTER_STUDENT_ACE_PEOPLE_COLUMN_ID,
         MASTER_STUDENT_CONNECT_PEOPLE_COLUMN_ID, CANVAS_COURSE_TYPE_COLUMN_ID
     ]
     if not all(required_vars):
         print("ERROR: One or more required environment variables are missing. Aborting.")
         return
 
-    plp_course_column_ids = [c.strip() for c in PLP_ALL_COURSE_COLUMNS_STR.split(',') if c.strip()]
+    plp_course_column_ids = [c.strip() for c in PLP_ALL_CLASSES_CONNECT_COLUMNS_STR.split(',') if c.strip()]
     if not plp_course_column_ids:
-        print("ERROR: PLP_ALL_COURSE_COLUMNS_STR is not set. Aborting.")
+        print("ERROR: PLP_ALL_CLASSES_CONNECT_COLUMNS_STR is not set. Aborting.")
         return
 
     print(f"Fetching all students from PLP Board (ID: {PLP_BOARD_ID})...")
