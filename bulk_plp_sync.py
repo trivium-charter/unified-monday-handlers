@@ -6,7 +6,7 @@ from canvasapi import Canvas
 from canvasapi.exceptions import CanvasException, Conflict, ResourceDoesNotExist
 
 # ==============================================================================
-# COMPREHENSIVE BULK PLP SYNC SCRIPT (V5 - Complete)
+# COMPREHENSIVE BULK PLP SYNC SCRIPT (V5.1 - Bug Fixes)
 # ==============================================================================
 # This script performs a full, two-phase sync for all students:
 # 1. Reconciles the High School Roster subitem courses to the PLP board based on
@@ -84,18 +84,15 @@ def execute_monday_graphql(query):
         print(f"  -> API Error: {e}")
         return None
 
-def get_all_items_from_board(board_id, with_subitems=False, item_ids=None):
+def get_all_items_from_board(board_id, with_subitems=False):
     all_items = []
     cursor = None
     subitem_query_part = "subitems { id name column_values { id text value } }" if with_subitems else ""
-    ids_filter = f'ids: {json.dumps(item_ids)}' if item_ids else ''
-    
     while True:
-        # Adjusted limit to 50 to be safer with complex queries
         query = f"""
         query {{
             boards(ids: [{board_id}]) {{
-                items_page (limit: 50{', cursor: "' + cursor + '"' if cursor else ''}, query_params: {{ {ids_filter} }}) {{
+                items_page (limit: 50{', cursor: "' + cursor + '"' if cursor else ''}) {{
                     cursor
                     items {{
                         id
@@ -108,16 +105,39 @@ def get_all_items_from_board(board_id, with_subitems=False, item_ids=None):
         }}
         """
         result = execute_monday_graphql(query)
-        if not result or 'data' not in result or not result['data']['boards']:
+        if not result or 'data' not in result or not result['data'].get('boards'):
             print(f"  -> Could not fetch items for board {board_id}. Stopping.")
             break
         items_page = result['data']['boards'][0]['items_page']
         items = items_page.get('items', [])
         all_items.extend(items)
         cursor = items_page.get('cursor')
-        if not cursor or (item_ids and len(all_items) >= len(item_ids)):
+        if not cursor:
             break
     return all_items
+    
+def get_items_by_ids(board_id, item_ids, column_ids):
+    """Fetches specific items by their IDs."""
+    if not item_ids:
+        return []
+    query = f"""
+    query {{
+        items (ids: {json.dumps(item_ids)}) {{
+            id
+            name
+            column_values(ids: {json.dumps(column_ids)}) {{
+                id
+                value
+                text
+            }}
+        }}
+    }}
+    """
+    result = execute_monday_graphql(query)
+    if result and result.get('data', {}).get('items'):
+        return result['data']['items']
+    return []
+
 
 def get_column_value(item_id, board_id, column_id):
     if not column_id: return None
@@ -136,7 +156,7 @@ def get_column_value(item_id, board_id, column_id):
 
 def get_column_value_from_item_data(item_data, column_id):
     for cv in item_data.get('column_values', []):
-        if cv['id'] == column_id:
+        if cv and cv.get('id') == column_id:
             try:
                 if cv.get('text'): return cv['text']
                 return json.loads(cv['value']) if cv.get('value') else None
@@ -321,7 +341,7 @@ def manage_class_enrollment(plp_item_id, class_item_id, student_details):
         create_subitem(plp_item_id, subitem_title)
 
 def get_linked_item_ids_from_single_course(course_item_id):
-    query = f'query {{ items (ids: [{course_item_id}]) {{ id column_values(ids: ["{ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID}"]) {{ value }} }} }}'
+    query = f'query {{ items (ids: [{course_item_id}]) {{ id column_values(ids: ["{ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID}"]) {{ id value text }} }} }}'
     result = execute_monday_graphql(query)
     if result and result.get('data', {}).get('items'):
         return get_linked_item_ids(result['data']['items'][0], ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
