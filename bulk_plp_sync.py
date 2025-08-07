@@ -6,7 +6,7 @@ from canvasapi import Canvas
 from canvasapi.exceptions import CanvasException, Conflict, ResourceDoesNotExist
 
 # ==============================================================================
-# COMPREHENSIVE BULK PLP SYNC SCRIPT (V5.7 - Final with Bug Fixes)
+# COMPREHENSIVE BULK PLP SYNC SCRIPT (V5.9 - Improved Error Logging)
 # ==============================================================================
 # This script performs a full, two-phase sync for all students:
 # 1. Reconciles the High School Roster subitem courses to the PLP board.
@@ -239,7 +239,9 @@ def create_section_if_not_exists(course_id, section_name):
                 return section
         return course.create_course_section(course_section={'name': section_name})
     except (ResourceDoesNotExist, CanvasException) as e:
-        print(f"    -> ERROR: Canvas section creation/lookup failed: {e}")
+        # ================== START MODIFICATION ==================
+        print(f"    -> ERROR: Canvas section creation/lookup failed for course ID '{course_id}': {e}")
+        # =================== END MODIFICATION ===================
         return None
 
 def enroll_student_in_section(course_id, user_id, section_id):
@@ -317,7 +319,13 @@ def manage_class_enrollment(plp_item_id, class_item_id, student_details, existin
     sections = {"A-G" for s in ["AG"] if s in ag_grad_text} | {"Grad" for s in ["Grad"] if s in ag_grad_text} | {"M-Series" for s in ["M-series"] if s in m_series_text}
     if not sections: sections.add("All")
     
-    results = [enroll_or_create_and_enroll(canvas_course_id, create_section_if_not_exists(canvas_course_id, s_name).id, student_details) for s_name in sections]
+    results = []
+    for s_name in sections:
+        section = create_section_if_not_exists(canvas_course_id, s_name)
+        if section:
+            results.append(enroll_or_create_and_enroll(canvas_course_id, section.id, student_details))
+        else:
+            results.append("Failed (Section Creation Error)")
     
     final_status = "Failed" if "Failed" in results else "Success"
     if "Already Enrolled" in results and "Success" not in results:
@@ -344,15 +352,12 @@ def get_canvas_item_details(canvas_item_ids):
             course_type = get_column_value_from_item_data(item, CANVAS_COURSE_TYPE_COLUMN_ID)
             people_value_str = get_column_value_from_item_data(item, CANVAS_COURSES_TEACHER_COLUMN_ID)
             
-            # ================== START MODIFICATION ==================
-            # Safely parse the JSON from the people column
             people_value = {}
             if people_value_str and isinstance(people_value_str, str):
                 try:
                     people_value = json.loads(people_value_str)
                 except json.JSONDecodeError:
                     print(f"  -> Warning: Could not decode People column JSON for an item.")
-            # =================== END MODIFICATION ===================
             
             teacher_id = None
             if people_value:
