@@ -86,9 +86,9 @@ def get_all_items_from_board(board_id):
             
     return all_items
 
-def get_linked_items_from_board_relation(item_id, board_id, connect_column_id):
-    """Fetches linked item IDs from a 'Connect Boards' column."""
-    column_data = get_column_value_from_item_data(item_id, board_id, connect_column_id) # Uses a helper to avoid re-fetching
+def get_linked_items_from_board_relation(item_data, connect_column_id):
+    """Fetches linked item IDs from a 'Connect Boards' column using pre-fetched item data."""
+    column_data = get_column_value_from_item_data(item_data, connect_column_id)
     if not column_data or not column_data.get('value'):
         return set()
         
