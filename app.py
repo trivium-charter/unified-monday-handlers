@@ -488,7 +488,6 @@ def get_student_details_from_plp(plp_item_id):
     Efficiently fetches all required student details from the linked Master Student
     item in a single GraphQL query to prevent rate-limiting.
     """
-    # This single, complex query gets the linked student item and all necessary column values at once.
     query = f"""
     query {{
         items (ids: [{plp_item_id}]) {{
@@ -498,18 +497,15 @@ def get_student_details_from_plp(plp_item_id):
         }}
     }}
     """
-    
     result = execute_monday_graphql(query)
     
     try:
-        # Extract the ID of the linked master student item
         connect_column_value = json.loads(result['data']['items'][0]['column_values'][0]['value'])
         linked_ids = [item['linkedPulseId'] for item in connect_column_value.get('linkedPulseIds', [])]
         if not linked_ids:
             return None
         master_student_id = linked_ids[0]
 
-        # Now, fetch all details for that specific master student item in one go
         details_query = f"""
         query {{
             items (ids: [{master_student_id}]) {{
@@ -525,8 +521,13 @@ def get_student_details_from_plp(plp_item_id):
         item_details = details_result['data']['items'][0]
         student_name = item_details['name']
         
-        # Create a mapping of column IDs to their text values for easy lookup
-        column_map = {{cv['id']: cv['text'] for cv in item_details['column_values']}}
+        # ================== START MODIFICATION ==================
+        # More robust way to build the column map to avoid type errors
+        column_map = {}
+        for cv in item_details.get('column_values', []):
+            if isinstance(cv, dict) and 'id' in cv:
+                column_map[cv['id']] = cv.get('text')
+        # =================== END MODIFICATION ===================
         
         ssid = column_map.get(MASTER_STUDENT_SSID_COLUMN, '')
         email = column_map.get(MASTER_STUDENT_EMAIL_COLUMN, '')
@@ -535,7 +536,7 @@ def get_student_details_from_plp(plp_item_id):
         if not all([student_name, email]):
             return None
 
-        return {{'name': student_name, 'ssid': ssid, 'email': email, 'canvas_id': canvas_id}}
+        return {'name': student_name, 'ssid': ssid, 'email': email, 'canvas_id': canvas_id}
 
     except (TypeError, KeyError, IndexError, json.JSONDecodeError) as e:
         print(f"ERROR: Could not parse student details from Monday.com response: {e}")
