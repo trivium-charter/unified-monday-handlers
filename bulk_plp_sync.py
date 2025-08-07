@@ -337,6 +337,11 @@ def bulk_plp_sync():
     print("Starting comprehensive bulk PLP sync process...")
     initialize_canvas_api()
 
+    plp_course_column_ids = [c.strip() for c in PLP_ALL_CLASSES_CONNECT_COLUMNS_STR.split(',') if c.strip()]
+    if not plp_course_column_ids:
+        print("ERROR: PLP_ALL_CLASSES_CONNECT_COLUMNS_STR is not set. Aborting.")
+        return
+
     print(f"Fetching all students from HS Roster Board (ID: {HS_ROSTER_BOARD_ID})...")
     all_hs_items = get_all_items_from_board(HS_ROSTER_BOARD_ID, with_subitems=True)
     total_items = len(all_hs_items)
@@ -359,25 +364,33 @@ def bulk_plp_sync():
             if not course_ids_in_subitem:
                 continue
 
-            # New logic to determine course category
             curriculum_text = get_column_value_from_item_data(subitem, HS_ROSTER_SUBITEM_CURRICULUM_COLUMN_ID) or ""
             subject_text = get_column_value_from_item_data(subitem, HS_ROSTER_SUBITEM_SUBJECT_COLUMN_ID) or ""
             
-            target_category = None
+            # ================== START MODIFICATION ==================
+            # Determine all categories a course belongs to
+            categories = set()
             if "ACE" in curriculum_text:
-                target_category = "ACE"
-            elif "Math" in subject_text:
-                target_category = "Math"
-            elif "ELA" in subject_text:
-                target_category = "ELA"
-            else:
-                target_category = "Other" # Fallback category
+                categories.add("ACE")
             
-            target_plp_col = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get(target_category)
-            if target_plp_col:
-                if target_plp_col not in courses_to_sync:
-                    courses_to_sync[target_plp_col] = set()
-                courses_to_sync[target_plp_col].update(course_ids_in_subitem)
+            # Check subjects independently
+            if "Math" in subject_text:
+                categories.add("Math")
+            if "ELA" in subject_text:
+                categories.add("ELA")
+            
+            # If no specific category was found, assign to "Other"
+            if not categories:
+                categories.add("Other")
+            
+            # Map categories to PLP columns
+            for category in categories:
+                target_plp_col = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get(category)
+                if target_plp_col:
+                    if target_plp_col not in courses_to_sync:
+                        courses_to_sync[target_plp_col] = set()
+                    courses_to_sync[target_plp_col].update(course_ids_in_subitem)
+            # =================== END MODIFICATION ===================
 
         if courses_to_sync:
             print("  -> Reconciling courses from HS Roster to PLP...")
@@ -409,7 +422,6 @@ def bulk_plp_sync():
             print("-" * 20); continue
         master_student_id = master_student_ids[0]
         
-        plp_course_column_ids = [c.strip() for c in PLP_ALL_CLASSES_CONNECT_COLUMNS_STR.split(',') if c.strip()]
         all_plp_courses = set()
         for col_id in plp_course_column_ids:
             all_plp_courses.update(get_linked_item_ids(plp_item_data, col_id))
@@ -430,10 +442,15 @@ def bulk_plp_sync():
                             if detail['course_type'] == "ACE": ace_teacher_ids.add(detail['teacher_id'])
                             elif detail['course_type'] == "Connect": connect_teacher_ids.add(detail['teacher_id'])
             
+            # ================== START MODIFICATION ==================
+            # Create detailed subitems instead of a generic summary
             if all_enrollment_results:
-                successful = [res['course_name'] for res in all_enrollment_results if res and ("Success" in res['status'] or "Enrolled" in res['status'])]
-                summary = f"Bulk Sync: {len(successful)} of {len(all_enrollment_results)} courses processed successfully."
-                create_subitem(plp_item_id, summary)
+                print(f"  -> Creating {len(all_enrollment_results)} enrollment log subitems...")
+                for res in all_enrollment_results:
+                    if res: # Ensure result is not None
+                        create_subitem(plp_item_id, f"Enrolled in {res['course_name']}: {res['status']}")
+                        time.sleep(0.2) # Small delay between creating subitems
+            # =================== END MODIFICATION ===================
 
             if ace_teacher_ids:
                 update_people_column_with_ids(master_student_id, int(MASTER_STUDENT_BOARD_ID), MASTER_STUDENT_ACE_PEOPLE_COLUMN_ID, ace_teacher_ids)
@@ -450,4 +467,4 @@ def bulk_plp_sync():
 # SCRIPT EXECUTION
 # ==============================================================================
 if __name__ == '__main__':
-    bulk_sync_plp_courses()
+    bulk_plp_sync()
