@@ -124,7 +124,10 @@ def get_all_board_items(board_id):
 # ==============================================================================
 
 def sync_hs_roster_item(parent_item, dry_run=True):
-    """Processes a single parent item from the HS Roster board."""
+    """
+    Processes a single parent item from the HS Roster board using the final,
+    additive, multi-step categorization logic.
+    """
     parent_item_id = parent_item['id']
     parent_item_name = parent_item['name']
     print(f"\n--- Processing Student: {parent_item_name} (ID: {parent_item_id}) ---")
@@ -142,60 +145,85 @@ def sync_hs_roster_item(parent_item, dry_run=True):
         print("  SKIPPING: Could not find linked PLP item.")
         return
 
-    # 2. Get all subitems for the parent item
+    # 2. Get all subitems and their initial categories
     subitems_query = f"""
         query {{
             items (ids: [{parent_item_id}]) {{
                 subitems {{
                     id
-                    column_values(ids: ["{HS_ROSTER_SUBITEM_DROPDOWN_COLUMN_ID}", "{HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID}"]) {{
-                        id
-                        text
-                        value
-                    }}
+                    column_values(ids: ["{HS_ROSTER_SUBITEM_DROPDOWN_COLUMN_ID}", "{HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID}"]) {{ id text value }}
                 }}
             }}
         }}
     """
     subitems_result = execute_monday_graphql(subitems_query)
     
-    # 3. Aggregate all courses by their target PLP column
-    plp_updates = defaultdict(set)
+    initial_course_categories = {}
     try:
         subitems = subitems_result['data']['items'][0]['subitems']
-        if not subitems:
-            print("  INFO: No subitems to process.")
-            return
-            
         for subitem in subitems:
             subitem_cols = {cv['id']: cv for cv in subitem['column_values']}
-            
-            dropdown_val = subitem_cols.get(HS_ROSTER_SUBITEM_DROPDOWN_COLUMN_ID)
-            courses_val = subitem_cols.get(HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID)
-            
-            if dropdown_val and courses_val:
-                category = dropdown_val['text']
-                
-                # ========= NEW LOGIC STARTS HERE =========
-                target_plp_col_id = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get(category)
-                # If the specific category isn't found, try to find the 'Other' category
-                if not target_plp_col_id:
-                    print(f"    INFO: Category '{category}' not found. Attempting to use 'Other'.")
-                    target_plp_col_id = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get("Other")
-                # ========= NEW LOGIC ENDS HERE =========
-
-                if target_plp_col_id:
-                    course_ids = get_linked_ids_from_connect_column_value(courses_val['value'])
-                    if course_ids:
-                        plp_updates[target_plp_col_id].update(course_ids)
-
+            category = subitem_cols.get(HS_ROSTER_SUBITEM_DROPDOWN_COLUMN_ID, {}).get('text')
+            courses_val = subitem_cols.get(HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID, {}).get('value')
+            if category and courses_val:
+                course_ids = get_linked_ids_from_connect_column_value(courses_val)
+                for course_id in course_ids:
+                    initial_course_categories[course_id] = category
     except (TypeError, KeyError, IndexError):
         print("  ERROR: Could not process subitems.")
         return
 
-    # 4. Perform the updates on the PLP item
+    all_course_ids = list(initial_course_categories.keys())
+    if not all_course_ids:
+        print("  INFO: No courses found in subitems.")
+        return
+
+    # 3. Efficiently query the secondary category status for all courses at once
+    secondary_category_col_id = "dropdown_mkq0r2av"
+    secondary_category_query = f"""
+        query {{
+            items (ids: {all_course_ids}) {{
+                id
+                column_values(ids: ["{secondary_category_col_id}"]) {{ text }}
+            }}
+        }}
+    """
+    secondary_category_results = execute_monday_graphql(secondary_category_query)
+    secondary_category_map = {}
+    try:
+        for item in secondary_category_results['data']['items']:
+            if item.get('column_values'):
+                secondary_category_map[int(item['id'])] = item['column_values'][0].get('text')
+    except (TypeError, KeyError, IndexError):
+        pass
+
+    # 4. Apply the final logic to aggregate PLP updates
+    plp_updates = defaultdict(set)
+    for course_id, initial_category in initial_course_categories.items():
+        
+        # Rule 1: Primary categorization from HS Roster subitem
+        if initial_category == "Math":
+            target_col_id = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get("Math")
+            if target_col_id: plp_updates[target_col_id].add(course_id)
+
+        if initial_category == "English":
+            target_col_id = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get("ELA")
+            if target_col_id: plp_updates[target_col_id].add(course_id)
+
+        # Rule 2: Secondary categorization from All Courses board
+        secondary_category = secondary_category_map.get(course_id)
+        
+        if secondary_category == "ACE":
+            target_col_id = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get("ACE")
+            if target_col_id: plp_updates[target_col_id].add(course_id)
+        
+        if secondary_category not in ["ACE", "Connect"]:
+            target_col_id = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get("Other/Elective")
+            if target_col_id: plp_updates[target_col_id].add(course_id)
+
+    # 5. Perform the updates on the PLP item
     if not plp_updates:
-        print("  INFO: No valid courses found in subitems to sync.")
+        print("  INFO: No valid courses found to sync after categorization.")
         return
 
     print(f"  Found courses to sync for PLP item {plp_item_id}.")
@@ -206,7 +234,7 @@ def sync_hs_roster_item(parent_item, dry_run=True):
 
     for col_id, courses in plp_updates.items():
         bulk_add_to_connect_column(plp_item_id, int(PLP_BOARD_ID), col_id, courses)
-        time.sleep(1) # Respect API limits between updates
+        time.sleep(1)
         
 # ==============================================================================
 # SCRIPT EXECUTION
