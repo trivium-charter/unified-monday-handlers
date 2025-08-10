@@ -600,11 +600,16 @@ if __name__ == '__main__':
 
     # --- Phase 1: Cleanup Subitems ---
     print(f"\n--- PHASE 1: DELETING SUBITEMS CREATED BY '{TARGET_USER_NAME}' ---")
-    creator_id = get_user_id(TARGET_USER_NAME)
-    if creator_id:
-        plp_item_ids = get_all_board_items(PLP_BOARD_ID)
-        print(f"Found {len(plp_item_ids)} total PLP items to check for subitem cleanup.")
-        for i, item_id in enumerate(plp_item_ids):
+creator_id = get_user_id(TARGET_USER_NAME)
+if creator_id:
+    # To test, COMMENT OUT the line below
+    # plp_item_ids = get_all_board_items(PLP_BOARD_ID)
+
+    # And ADD a short list of specific IDs like this:
+    plp_item_ids = [9423043492, 9423043568, 9423043036] # Use your actual student item IDs
+
+    print(f"TESTING with {len(plp_item_ids)} specific PLP items.")
+    for i, item_id in enumerate(plp_item_ids):
             print(f"Checking PLP item {i+1}/{len(plp_item_ids)} (ID: {item_id})...")
             try:
                 clear_subitems_by_creator(int(item_id), creator_id, dry_run=DRY_RUN)
