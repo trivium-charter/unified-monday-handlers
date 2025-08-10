@@ -704,7 +704,7 @@ if __name__ == '__main__':
     # ---! CONFIGURATION !---
     DRY_RUN = False
     TARGET_USER_NAME = "Sarah Bruce"
-    LOG_FILE = "processed_students.log" # The new progress log file
+    LOG_FILE = "processed_students.log" 
     # ---!  END CONFIG   !---
 
     print("======================================================")
@@ -716,7 +716,7 @@ if __name__ == '__main__':
         print("!!!  No actual changes will be made to your data.  !!!")
         print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n")
 
-    # --- NEW: Read already processed IDs from the log file ---
+    # --- Read already processed IDs from the log file ---
     processed_ids = set()
     try:
         with open(LOG_FILE, "r") as f:
@@ -728,17 +728,17 @@ if __name__ == '__main__':
     except ValueError:
         print("WARNING: Could not read progress log. Starting from the beginning.")
         processed_ids = set()
-    # --- END NEW ---
 
-    creator_id = get_user_id(TARGET_USER_USER_NAME)
+    # --- THIS LINE IS THE FIX ---
+    creator_id = get_user_id(TARGET_USER_NAME)
     if not creator_id:
         print("\nFATAL: Halting script because target user could not be found.")
         exit()
         
-    # For the full run, we get all items from the board
+    # This line tells the script to run on ALL students from the board
     all_plp_items = get_all_board_items(PLP_BOARD_ID)
     
-    # --- NEW: Filter out students that have already been processed ---
+    # Filter out students that have already been processed
     items_to_process = [item for item in all_plp_items if int(item['id']) not in processed_ids]
     
     total_to_process = len(items_to_process)
@@ -754,12 +754,11 @@ if __name__ == '__main__':
             print(f"--- Phase 2: Syncing all data for PLP Item {item_id} ---")
             sync_single_plp_item(item_id, dry_run=DRY_RUN)
 
-            # --- NEW: Log the ID upon successful completion ---
+            # Log the ID upon successful completion
             if not DRY_RUN:
                 with open(LOG_FILE, "a") as f:
                     f.write(f"{item_id}\n")
                 print(f"SUCCESS: Logged item {item_id} as complete.")
-            # --- END NEW ---
 
         except Exception as e:
             print(f"FATAL ERROR during processing for item {item_id}: {e}")
