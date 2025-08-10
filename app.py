@@ -677,35 +677,26 @@ def process_canvas_delta_sync_from_course_change(event_data):
     student_details = get_student_details_from_plp(plp_item_id)
     if not student_details: return
     
-    master_student_id = student_details.get('master_id') # Make sure master_id is available
+    master_student_id = student_details.get('master_id')
     if not master_student_id:
         print(f"ERROR: Could not find Master Student ID for PLP {plp_item_id}. Cannot sync teacher.")
         return
 
-    # --- MODIFICATION STARTS HERE ---
-    ENTRY_TYPE_COLUMN_ID = "entry_type__1"  # <-- REPLACE THIS
+    ENTRY_TYPE_COLUMN_ID = "your_entry_type_column_id"
     curriculum_change_values = {ENTRY_TYPE_COLUMN_ID: {"labels": ["Curriculum Change"]}}
-    # --- MODIFICATION ENDS HERE ---
 
     current_ids, previous_ids = get_linked_ids_from_connect_column_value(event_data.get('value')), get_linked_ids_from_connect_column_value(event_data.get('previousValue'))
     added_ids, removed_ids = current_ids - previous_ids, previous_ids - current_ids
-    category_name, date, changer = {v: k for k, v in PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.items()}.get(trigger_column_id, "Course"), datetime.now().strftime('%Y-%m-%d'), get_user_name(user_id) or "automation"
+    category_name = {v: k for k, v in PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.items()}.get(trigger_column_id, "Course")
     
     CANVAS_BOARD_CLASS_TYPE_COLUMN_ID = "status__1"
     ACE_TEACHER_COLUMN_ID_ON_MASTER = "multiple_person_mks1wrfv"
     CONNECT_TEACHER_COLUMN_ID_ON_MASTER = "multiple_person_mks11jeg"
 
     for class_id in added_ids:
-        linked_canvas_item_ids = get_linked_items_from_board_relation(class_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
+        manage_class_enrollment("enroll", plp_item_id, class_id, student_details, category_name, subitem_cols=curriculum_change_values)
         
-        if linked_canvas_item_ids:
-            # Pass the curriculum_change_values to the enrollment function
-            manage_class_enrollment("enroll", plp_item_id, class_id, student_details, subitem_cols=curriculum_change_values)
-        else:
-            class_name = get_item_name(class_id, int(ALL_COURSES_BOARD_ID))
-            # Add curriculum_change_values to direct subitem creation
-            if class_name: create_subitem(plp_item_id, f"Added {category_name} course '{class_name}' on {date} by {changer}", column_values=curriculum_change_values)
-
+        linked_canvas_item_ids = get_linked_items_from_board_relation(class_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
         if linked_canvas_item_ids:
             canvas_item_id = list(linked_canvas_item_ids)[0]
             class_type_val = get_column_value(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_BOARD_CLASS_TYPE_COLUMN_ID)
@@ -721,14 +712,7 @@ def process_canvas_delta_sync_from_course_change(event_data):
                     print(f"WARNING: Could not find linked teacher for course item {class_id}.")
 
     for class_id in removed_ids:
-        is_canvas_course = get_linked_items_from_board_relation(class_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
-        if is_canvas_course:
-            # Pass the curriculum_change_values to the unenrollment function
-            manage_class_enrollment("unenroll", plp_item_id, class_id, student_details, subitem_cols=curriculum_change_values)
-        else:
-            class_name = get_item_name(class_id, int(ALL_COURSES_BOARD_ID))
-            # Add curriculum_change_values to direct subitem creation
-            if class_name: create_subitem(plp_item_id, f"Removed {category_name} course '{class_name}' on {date} by {changer}", column_values=curriculum_change_values)
+        manage_class_enrollment("unenroll", plp_item_id, class_id, student_details, category_name, subitem_cols=curriculum_change_values)
 @celery_app.task
 def process_plp_course_sync_webhook(event_data):
     subitem_id, parent_item_id = event_data.get('pulseId'), event_data.get('parentItemId')
