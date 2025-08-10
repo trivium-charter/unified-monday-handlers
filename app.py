@@ -442,7 +442,20 @@ def enroll_teacher_in_course(course_id, teacher_details):
         return "Already Enrolled"
     except CanvasException as e:
         return f"Failed: {e}"
-        
+
+def get_teacher_person_value_from_canvas_board(canvas_item_id):
+    """Finds the teacher linked to a course on the Canvas Board and returns their 'Person' column value from the All Staff board."""
+    # Find the linked staff item on the All Staff board
+    linked_staff_ids = get_linked_items_from_board_relation(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_TO_STAFF_CONNECT_COLUMN_ID)
+    if not linked_staff_ids:
+        return None
+
+    staff_item_id = list(linked_staff_ids)[0]
+
+    # Get the 'Person' column value for that staff member
+    person_col_val = get_column_value(staff_item_id, int(ALL_STAFF_BOARD_ID), ALL_STAFF_PERSON_COLUMN_ID)
+
+    return person_col_val.get('value') if person_col_val else None
 # ==============================================================================
 # CELERY APP DEFINITION
 # ==============================================================================
@@ -634,25 +647,68 @@ def process_canvas_delta_sync_from_course_change(event_data):
     plp_item_id, user_id, trigger_column_id = event_data.get('pulseId'), event_data.get('userId'), event_data.get('columnId')
     student_details = get_student_details_from_plp(plp_item_id)
     if not student_details: return
+    
+    master_student_id = student_details.get('master_id')
+    if not master_student_id:
+        print(f"ERROR: Could not find Master Student ID for PLP {plp_item_id}. Cannot sync teacher.")
+        return
+
     subitem_cols = {}
     rule = next((r for r in LOG_CONFIGS if r.get("trigger_column_id") == trigger_column_id), None)
     if rule and "params" in rule:
         params = rule["params"]
         if params.get("entry_type_column_id") and params.get("subitem_entry_type"):
             subitem_cols[params["entry_type_column_id"]] = {"labels": [str(params["subitem_entry_type"])]}
+    
     current_ids, previous_ids = get_linked_ids_from_connect_column_value(event_data.get('value')), get_linked_ids_from_connect_column_value(event_data.get('previousValue'))
     added_ids, removed_ids = current_ids - previous_ids, previous_ids - current_ids
     category_name, date, changer = {v: k for k, v in PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.items()}.get(trigger_column_id, "Course"), datetime.now().strftime('%Y-%m-%d'), get_user_name(user_id) or "automation"
     
+    # These values are now filled in with your provided IDs
+    CANVAS_BOARD_CLASS_TYPE_COLUMN_ID = "status__1"
+    ACE_TEACHER_COLUMN_ID_ON_MASTER = "multiple_person_mks1wrfv"
+    CONNECT_TEACHER_COLUMN_ID_ON_MASTER = "multiple_person_mks11jeg"
+
     for class_id in added_ids:
-        is_canvas_course = get_linked_items_from_board_relation(class_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
-        if is_canvas_course:
+        linked_canvas_item_ids = get_linked_items_from_board_relation(class_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
+        
+        # This handles the original student enrollment logic
+        if linked_canvas_item_ids:
             manage_class_enrollment("enroll", plp_item_id, class_id, student_details, subitem_cols)
         else:
             class_name = get_item_name(class_id, int(ALL_COURSES_BOARD_ID))
             if class_name: create_subitem(plp_item_id, f"Added {category_name} course '{class_name}' on {date} by {changer}", subitem_cols)
+
+        # ========= NEW LOGIC STARTS HERE =========
+        if linked_canvas_item_ids:
+            canvas_item_id = list(linked_canvas_item_ids)[0]
             
+            # 1. Determine the class type from the Canvas Board
+            class_type_val = get_column_value(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_BOARD_CLASS_TYPE_COLUMN_ID)
+            class_type_text = class_type_val.get('text', '').lower() if class_type_val else ''
+
+            target_master_col_id = None
+            # Check if 'ace' is part of the status text (covers "ACE" and "ACE-C")
+            if 'ace' in class_type_text:
+                target_master_col_id = ACE_TEACHER_COLUMN_ID_ON_MASTER
+            elif 'connect' in class_type_text:
+                target_master_col_id = CONNECT_TEACHER_COLUMN_ID_ON_MASTER
+
+            # 2. If it's an ACE or Connect class, find the teacher and update the master board
+            if target_master_col_id:
+                print(f"INFO: ACE/Connect class detected. Finding teacher for course item {class_id}.")
+                teacher_person_value = get_teacher_person_value_from_canvas_board(canvas_item_id)
+                
+                if teacher_person_value:
+                    print(f"INFO: Updating Master Student {master_student_id} with teacher.")
+                    # Using "multiple-person" as the column type based on your provided IDs
+                    update_people_column(master_student_id, int(MASTER_STUDENT_BOARD_ID), target_master_col_id, teacher_person_value, "multiple-person")
+                else:
+                    print(f"WARNING: Could not find linked teacher for course item {class_id}.")
+        # ========= NEW LOGIC ENDS HERE =========
+
     for class_id in removed_ids:
+        # The unenrollment logic remains unchanged
         is_canvas_course = get_linked_items_from_board_relation(class_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
         if is_canvas_course:
             manage_class_enrollment("unenroll", plp_item_id, class_id, student_details, subitem_cols)
