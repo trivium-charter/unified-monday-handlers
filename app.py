@@ -705,7 +705,7 @@ def process_canvas_delta_sync_from_course_change(event_data):
         print(f"ERROR: Could not find Master Student ID for PLP {plp_item_id}. Cannot sync teacher.")
         return
 
-    ENTRY_TYPE_COLUMN_ID = "your_entry_type_column_id"  # <-- REPLACE THIS
+    ENTRY_TYPE_COLUMN_ID = "entry_type__1"  # <-- REPLACE THIS
     curriculum_change_values = {ENTRY_TYPE_COLUMN_ID: {"labels": ["Curriculum Change"]}}
 
     current_ids, previous_ids = get_linked_ids_from_connect_column_value(event_data.get('value')), get_linked_ids_from_connect_column_value(event_data.get('previousValue'))
