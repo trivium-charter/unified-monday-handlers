@@ -655,7 +655,7 @@ def get_teacher_person_value_from_canvas_board(canvas_item_id):
 
 if __name__ == '__main__':
     # ---! CONFIGURATION !---
-    DRY_RUN = True
+    DRY_RUN = False
     TARGET_USER_NAME = "Sarah Bruce"
     # ---!  END CONFIG   !---
 
