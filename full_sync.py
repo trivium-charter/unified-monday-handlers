@@ -230,11 +230,6 @@ def update_people_column(item_id, board_id, people_column_id, new_people_value, 
     
     return execute_monday_graphql(mutation) is not None
 
-def delete_item(item_id):
-    """Deletes an item or subitem."""
-    mutation = f"mutation {{ delete_item (item_id: {item_id}) {{ id }} }}"
-    return execute_monday_graphql(mutation)
-
 # ==============================================================================
 # CANVAS UTILITIES (Copied from app.py)
 # ==============================================================================
