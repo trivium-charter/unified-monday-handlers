@@ -598,7 +598,7 @@ def clear_subitems_by_creator(parent_item_id, creator_id_to_delete, dry_run=True
 
 def sync_single_plp_item(plp_item_id, dry_run=True):
     """
-    Final version that sets the Entry Type and uses the correct subitem text.
+    Final version that sets the Entry Type on new subitems.
     """
     print(f"\n--- Processing PLP Item: {plp_item_id} ---")
     student_details = get_student_details_from_plp(plp_item_id)
@@ -611,22 +611,30 @@ def sync_single_plp_item(plp_item_id, dry_run=True):
         print(f"ERROR: Could not find Master Student ID for PLP {plp_item_id}. Skipping.")
         return
 
-    ENTRY_TYPE_COLUMN_ID = "your_entry_type_column_id"
+    # --- Define the Entry Type column ID and values ---
+    ENTRY_TYPE_COLUMN_ID = "entry_type__1"  # <-- REPLACE THIS
     staff_change_values = {ENTRY_TYPE_COLUMN_ID: {"labels": ["Staff Change"]}}
     curriculum_change_values = {ENTRY_TYPE_COLUMN_ID: {"labels": ["Curriculum Change"]}}
 
+    # --- 1. Sync Teacher Assignments from Master to PLP ---
+    print("Syncing teacher assignments from Master Student board to PLP...")
     if not dry_run:
-        print("Syncing teacher assignments from Master Student board to PLP...")
         for trigger_col, mapping in MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS.items():
             master_person_val = get_column_value(master_student_id, int(MASTER_STUDENT_BOARD_ID), trigger_col)
             plp_target_mapping = next((t for t in mapping["targets"] if str(t.get("board_id")) == str(PLP_BOARD_ID)), None)
             if plp_target_mapping and master_person_val and master_person_val.get('value'):
                 update_people_column(plp_item_id, int(PLP_BOARD_ID), plp_target_mapping["target_column_id"], master_person_val['value'], plp_target_mapping["target_column_type"])
-                person_name = get_user_name(list(get_people_ids_from_value(master_person_val['value']))[0])
-                log_message = f"{mapping.get('name', 'Staff')} set to {person_name}"
-                create_subitem(plp_item_id, log_message, column_values=staff_change_values)
+                
+                person_ids = get_people_ids_from_value(master_person_val['value'])
+                if person_ids:
+                    person_name = get_user_name(list(person_ids)[0])
+                    log_message = f"{mapping.get('name', 'Staff')} set to {person_name}"
+                    # Create subitem with "Staff Change" entry type
+                    create_subitem(plp_item_id, log_message, column_values=staff_change_values)
+                
                 time.sleep(1)
 
+    # --- 2. Process All Class-Related Logic ---
     print("Syncing class enrollments and ACE/Connect teachers...")
     class_id_to_category_map = {}
     for category, column_id in PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.items():
@@ -650,6 +658,7 @@ def sync_single_plp_item(plp_item_id, dry_run=True):
 
         if not dry_run:
             category_name = class_id_to_category_map.get(class_item_id, "Course")
+            # Pass the "Curriculum Change" value to the enrollment function
             manage_class_enrollment("enroll", plp_item_id, class_item_id, student_details, category_name, subitem_cols=curriculum_change_values)
 
         linked_canvas_item_ids = get_linked_items_from_board_relation(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
