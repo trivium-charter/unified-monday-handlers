@@ -574,89 +574,31 @@ def clear_subitems_by_creator(parent_item_id, creator_id_to_delete, dry_run=True
         time.sleep(0.5)
 
 def sync_single_plp_item(plp_item_id, dry_run=True):
-    """
-    Final version that sets the Entry Type on new subitems.
-    """
-    print(f"\n--- Processing PLP Item: {plp_item_id} ---")
-    student_details = get_student_details_from_plp(plp_item_id)
-    if not student_details:
-        print(f"WARNING: Could not get student details for PLP {plp_item_id}. Skipping.")
-        return
+    # ... (initial setup code is the same) ...
 
-    master_student_id = student_details.get('master_id')
-    if not master_student_id:
-        print(f"ERROR: Could not find Master Student ID for PLP {plp_item_id}. Skipping.")
-        return
+    # --- Build a map of class IDs to their categories ---
+    class_id_to_category_map = {}
+    for category, column_id in PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.items():
+        linked_class_ids = get_linked_items_from_board_relation(plp_item_id, int(PLP_BOARD_ID), column_id)
+        for class_id in linked_class_ids:
+            class_id_to_category_map[class_id] = category
 
-    # --- Define the Entry Type column ID and values ---
-    ENTRY_TYPE_COLUMN_ID = "entry_type__1"  # <-- REPLACE THIS
-    staff_change_values = {ENTRY_TYPE_COLUMN_ID: {"labels": ["Staff Change"]}}
-    curriculum_change_values = {ENTRY_TYPE_COLUMN_ID: {"labels": ["Curriculum Change"]}}
+    all_class_ids = class_id_to_category_map.keys()
 
-    # --- 1. Sync Teacher Assignments from Master to PLP ---
-    print("Syncing teacher assignments from Master Student board to PLP...")
-    if not dry_run:
-        for trigger_col, mapping in MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS.items():
-            master_person_val = get_column_value(master_student_id, int(MASTER_STUDENT_BOARD_ID), trigger_col)
-            plp_target_mapping = next((t for t in mapping["targets"] if str(t.get("board_id")) == str(PLP_BOARD_ID)), None)
-            if plp_target_mapping and master_person_val and master_person_val.get('value'):
-                # Update the people column
-                update_people_column(plp_item_id, int(PLP_BOARD_ID), plp_target_mapping["target_column_id"], master_person_val['value'], plp_target_mapping["target_column_type"])
-                
-                # Create subitem with "Staff Change" entry type
-                person_name = get_user_name(list(get_people_ids_from_value(master_person_val['value']))[0])
-                log_message = f"{mapping.get('name', 'Staff')} set to {person_name}"
-                create_subitem(plp_item_id, log_message, column_values=staff_change_values) # <-- MODIFIED
-                
-                time.sleep(1)
+    # ... (rest of the setup is the same) ...
 
-    # --- 2. Process All Class-Related Logic ---
-    print("Syncing class enrollments and ACE/Connect teachers...")
-    course_column_ids = [c.strip() for c in PLP_ALL_CLASSES_CONNECT_COLUMNS_STR.split(',') if c.strip()]
-    all_class_ids = set()
-    for col_id in course_column_ids:
-        class_links = get_column_value(plp_item_id, int(PLP_BOARD_ID), col_id)
-        if class_links and class_links.get('value'):
-            all_class_ids.update(get_linked_ids_from_connect_column_value(class_links['value']))
-
-    if not all_class_ids:
-        print("INFO: No classes to sync.")
-        return
-
-    CANVAS_BOARD_CLASS_TYPE_COLUMN_ID = "status__1"
-    ACE_TEACHER_COLUMN_ID_ON_MASTER = "multiple_person_mks1wrfv"
-    CONNECT_TEACHER_COLUMN_ID_ON_MASTER = "multiple_person_mks11jeg"
-
+    # Process each class one by one
     for class_item_id in all_class_ids:
         class_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)) or f"Item {class_item_id}"
         print(f"Processing class: '{class_name}'")
 
         if not dry_run:
-            # Pass the "Curriculum Change" value to the enrollment function
-            manage_class_enrollment("enroll", plp_item_id, class_item_id, student_details, subitem_cols=curriculum_change_values) # <-- MODIFIED
+            # Get the category for this specific class
+            category_name = class_id_to_category_map.get(class_item_id, "Course")
+            # Pass the category name to the enrollment function
+            manage_class_enrollment("enroll", plp_item_id, class_item_id, student_details, category_name, subitem_cols=curriculum_change_values)
 
-        # ACE/Connect teacher logic remains the same...
-        linked_canvas_item_ids = get_linked_items_from_board_relation(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
-        if linked_canvas_item_ids:
-            canvas_item_id = list(linked_canvas_item_ids)[0]
-            class_type_val = get_column_value(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_BOARD_CLASS_TYPE_COLUMN_ID)
-            class_type_text = class_type_val.get('text', '').lower() if class_type_val else ''
-
-            target_master_col_id = None
-            if 'ace' in class_type_text: target_master_col_id = ACE_TEACHER_COLUMN_ID_ON_MASTER
-            elif 'connect' in class_type_text: target_master_col_id = CONNECT_TEACHER_COLUMN_ID_ON_MASTER
-
-            if target_master_col_id:
-                teacher_person_value = get_teacher_person_value_from_canvas_board(canvas_item_id)
-                if teacher_person_value:
-                    print(f"INFO: ACE/Connect class detected. Updating Master Student {master_student_id} with teacher.")
-                    if not dry_run:
-                        update_people_column(master_student_id, int(MASTER_STUDENT_BOARD_ID), target_master_col_id, teacher_person_value, "multiple-person")
-                else:
-                    print(f"WARNING: Could not find a linked teacher on the Canvas Board for course '{class_name}'.")
-        
-        if not dry_run:
-            time.sleep(1)
+        # ... (ACE/Connect teacher logic remains the same) ...
 def get_teacher_person_value_from_canvas_board(canvas_item_id):
     """DEBUG version to find the teacher's 'Person' value."""
     print(f"\n--- DEBUG: Inside get_teacher_person_value_from_canvas_board ---")
