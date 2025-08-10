@@ -787,7 +787,6 @@ def process_master_student_person_sync_webhook(event_data):
     for p_id in (previous_ids - current_ids):
         name = get_user_name(p_id)
         if name: create_subitem(plp_item_id, f"Removed {name} from {col_name} on {date} by {changer}", column_values=staff_change_values)
-
 # ================== START MODIFICATION ==================
 @celery_app.task
 def process_teacher_enrollment_webhook(event_data):
