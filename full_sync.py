@@ -511,17 +511,18 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details,
 # ==============================================================================
 
 def get_all_board_items(board_id):
-    """Fetches all item IDs from a board, handling pagination."""
-    all_item_ids = []
+    """Fetches all item objects from a board, handling pagination."""
+    all_items = [] # Changed variable name for clarity
     cursor = None
     while True:
         cursor_str = f'cursor: "{cursor}"' if cursor else ""
+        # The query needs to fetch both id and name for other functions
         query = f"""
             query {{
                 boards(ids: {board_id}) {{
                     items_page (limit: 100, {cursor_str}) {{
                         cursor
-                        items {{ id }}
+                        items {{ id name }}
                     }}
                 }}
             }}
@@ -530,14 +531,18 @@ def get_all_board_items(board_id):
         if not result or 'data' not in result: break
         try:
             page_info = result['data']['boards'][0]['items_page']
-            all_item_ids.extend([item['id'] for item in page_info['items']])
+            
+            # --- THIS LINE IS THE FIX ---
+            # It now extends the list with the full item objects, not just their IDs
+            all_items.extend(page_info['items'])
+            
             cursor = page_info.get('cursor')
             if not cursor: break
-            print(f"Fetched {len(all_item_ids)} items so far...")
+            print(f"Fetched {len(all_items)} items so far...")
         except (KeyError, IndexError):
             print("ERROR: Could not parse items from board response.")
             break
-    return all_item_ids
+    return all_items
 
 def get_user_id(user_name):
     """Finds a user's ID by their full name."""
