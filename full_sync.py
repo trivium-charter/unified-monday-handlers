@@ -418,7 +418,7 @@ def get_student_details_from_plp(plp_item_id):
         print(f"ERROR: Could not parse student details from Monday.com response for PLP {plp_item_id}: {e}")
         return None
 
-def manage_class_enrollment(action, plp_item_id, class_item_id, student_details, subitem_cols=None):
+def manage_class_enrollment(action, plp_item_id, class_item_id, student_details, category_name, subitem_cols=None):
     subitem_cols = subitem_cols or {}
 
     linked_canvas_item_ids = get_linked_items_from_board_relation(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
@@ -427,11 +427,10 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details,
     # If the class is not linked to the Canvas Board, it's a non-Canvas class.
     if not linked_canvas_item_ids:
         if action == "enroll":
-            print(f"INFO: '{all_courses_item_name}' is not a Canvas course. Logging only.")
-            create_subitem(plp_item_id, f"Added non-Canvas course '{all_courses_item_name}'", subitem_cols)
-        # Unenrollment for non-canvas courses does nothing but log
+            # MODIFIED: Use the category name in the subitem log
+            create_subitem(plp_item_id, f"Added {category_name} '{all_courses_item_name}'", subitem_cols)
         elif action == "unenroll":
-            create_subitem(plp_item_id, f"Removed non-Canvas course '{all_courses_item_name}'", subitem_cols)
+            create_subitem(plp_item_id, f"Removed {category_name} '{all_courses_item_name}'", subitem_cols)
         return
         
     canvas_item_id = list(linked_canvas_item_ids)[0]
@@ -452,7 +451,8 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details,
             if ALL_CLASSES_CANVAS_ID_COLUMN:
                 change_column_value_generic(int(ALL_COURSES_BOARD_ID), class_item_id, ALL_CLASSES_CANVAS_ID_COLUMN, str(canvas_course_id))
         else:
-            create_subitem(plp_item_id, f"Enrollment in {class_name}: Failed - Could not create Canvas course.", subitem_cols)
+            # MODIFIED: Use the category name in the subitem log
+            create_subitem(plp_item_id, f"Added {category_name} '{class_name}': Failed - Could not create Canvas course.", subitem_cols)
             return
 
     if not canvas_course_id:
@@ -479,12 +479,14 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details,
             section_names = ", ".join([res['section'] for res in enrollment_results])
             all_statuses = {res['status'] for res in enrollment_results}
             final_status = "Failed" if "Failed" in all_statuses else "Success"
-            subitem_title = f"Enrolled in {class_name} (Sections: {section_names}): {final_status}"
+            # MODIFIED: Use the category name in the subitem log
+            subitem_title = f"Added {category_name} '{class_name}' (Sections: {section_names}): {final_status}"
             create_subitem(plp_item_id, subitem_title, subitem_cols)
 
     elif action == "unenroll":
         result = unenroll_student_from_course(canvas_course_id, student_details)
-        create_subitem(plp_item_id, f"Unenrolled from {class_name}: {'Success' if result else 'Failed'}", subitem_cols)
+        # MODIFIED: Use the category name in the subitem log
+        create_subitem(plp_item_id, f"Removed {category_name} '{class_name}': {'Success' if result else 'Failed'}", subitem_cols)
 
 # ==============================================================================
 # SCRIPT-SPECIFIC HELPER FUNCTIONS
