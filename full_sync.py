@@ -114,15 +114,33 @@ def get_user_name(user_id):
         return result['data']['users'][0].get('name')
     return None
 
-def get_column_value(item_id, board_id, column_id):
-    if not column_id: return None
-    query = f"query {{ boards(ids: {board_id}) {{ items_page(query_params: {{ids: [{item_id}]}}) {{ items {{ column_values(ids: [\"{column_id}\"]) {{ id value text }} }} }} }} }}"
+def get_column_value(item_id, board_id, column_id): # board_id is no longer used but kept for compatibility
+    if not item_id or not column_id:
+        return None
+    # This is the simplified query, proven to work by the debug script.
+    query = f"""
+    query {{
+        items (ids: [{item_id}]) {{
+            column_values (ids: ["{column_id}"]) {{
+                id
+                text
+                value
+                type
+            }}
+        }}
+    }}
+    """
     result = execute_monday_graphql(query)
     
-    if result and result.get('data', {}).get('boards'):
+    if result and result.get('data', {}).get('items'):
         try:
-            col_val = result['data']['boards'][0]['items_page']['items'][0]['column_values'][0]
-            # This robustly handles the value from the API
+            # The path to the data is now simpler, matching the new query.
+            column_list = result['data']['items'][0].get('column_values', [])
+            if not column_list:
+                # This happens if the column ID exists on the board but not on this specific item.
+                return None
+            
+            col_val = column_list[0]
             parsed_value = col_val.get('value')
             if isinstance(parsed_value, str):
                 try:
@@ -134,7 +152,7 @@ def get_column_value(item_id, board_id, column_id):
             
             return {'value': parsed_value, 'text': col_val.get('text')}
         except (IndexError, KeyError):
-            # This handles cases where the column or item doesn't exist.
+            # This handles cases where the item exists but something is wrong with the column data structure.
             return None
     return None
 
