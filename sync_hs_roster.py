@@ -123,7 +123,7 @@ def get_all_board_items(board_id):
 # CORE SYNC LOGIC
 # ==============================================================================
 
-def sync_hs_roster_item(parent_item, dry_run=False):
+def sync_hs_roster_item(parent_item, dry_run=True):
     """
     Processes a single parent item from the HS Roster board, ignoring any
     subitems marked as "Spring".
@@ -249,7 +249,7 @@ def sync_hs_roster_item(parent_item, dry_run=False):
 # ==============================================================================
 
 if __name__ == '__main__':
-    DRY_RUN = True # SET TO FALSE TO EXECUTE CHANGES
+    DRY_RUN = False # SET TO FALSE TO EXECUTE CHANGES
     
     print("======================================================")
     print("=== STARTING HS ROSTER TO PLP FULL SYNC SCRIPT ===")
