@@ -125,8 +125,7 @@ def get_all_board_items(board_id):
 
 def sync_hs_roster_item(parent_item, dry_run=True):
     """
-    Processes a single parent item from the HS Roster board, ignoring any
-    subitems marked as "Spring".
+    Correctly filters out any subitem marked as "Spring" before processing.
     """
     parent_item_id = parent_item['id']
     parent_item_name = parent_item['name']
@@ -145,15 +144,13 @@ def sync_hs_roster_item(parent_item, dry_run=True):
         print("  SKIPPING: Could not find linked PLP item.")
         return
 
-    # 2. Get all subitems for the parent item
-    HS_ROSTER_SUBITEM_TERM_COLUMN_ID = "color6" # The new column to check
+    # 2. Get all subitems and build the initial category map, IGNORING Spring subitems
+    HS_ROSTER_SUBITEM_TERM_COLUMN_ID = "color6"
     subitems_query = f"""
         query {{
             items (ids: [{parent_item_id}]) {{
                 subitems {{
-                    id
-                    name
-                    # MODIFIED: Added the new Term column to the query
+                    id name
                     column_values(ids: ["{HS_ROSTER_SUBITEM_DROPDOWN_COLUMN_ID}", "{HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID}", "{HS_ROSTER_SUBITEM_TERM_COLUMN_ID}"]) {{ id text value }}
                 }}
             }}
@@ -167,14 +164,14 @@ def sync_hs_roster_item(parent_item, dry_run=True):
         for subitem in subitems:
             subitem_cols = {cv['id']: cv for cv in subitem['column_values']}
             
-            # ========= NEW LOGIC STARTS HERE =========
-            # Check the Term column. If it's "Spring", skip this subitem.
+            # --- THIS IS THE CORRECTED FILTER ---
+            # Check the Term column first. If it's "Spring", skip this entire subitem.
             term_val = subitem_cols.get(HS_ROSTER_SUBITEM_TERM_COLUMN_ID, {}).get('text')
             if term_val == "Spring":
                 print(f"  SKIPPING: Subitem '{subitem['name']}' is marked as Spring.")
                 continue # Move to the next subitem
-            # ========= NEW LOGIC ENDS HERE =========
-
+            
+            # If the subitem is not Spring, process it
             category = subitem_cols.get(HS_ROSTER_SUBITEM_DROPDOWN_COLUMN_ID, {}).get('text')
             courses_val = subitem_cols.get(HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID, {}).get('value')
             if category and courses_val:
@@ -187,19 +184,12 @@ def sync_hs_roster_item(parent_item, dry_run=True):
 
     all_course_ids = list(initial_course_categories.keys())
     if not all_course_ids:
-        print("  INFO: No non-Spring courses found in subitems.")
+        print("  INFO: No non-Spring courses found to process.")
         return
 
-    # 3. Efficiently query the secondary category status for all courses at once
+    # 3. Efficiently query the secondary category status for all non-Spring courses
     secondary_category_col_id = "dropdown_mkq0r2av"
-    secondary_category_query = f"""
-        query {{
-            items (ids: {all_course_ids}) {{
-                id
-                column_values(ids: ["{secondary_category_col_id}"]) {{ text }}
-            }}
-        }}
-    """
+    secondary_category_query = f"query {{ items (ids: {all_course_ids}) {{ id column_values(ids: [\"{secondary_category_col_id}\"]) {{ text }} }} }}"
     secondary_category_results = execute_monday_graphql(secondary_category_query)
     secondary_category_map = {}
     try:
@@ -209,7 +199,7 @@ def sync_hs_roster_item(parent_item, dry_run=True):
     except (TypeError, KeyError, IndexError):
         pass
 
-    # 4. Apply the final logic to aggregate PLP updates
+    # 4. Apply the final logic for valid courses only
     plp_updates = defaultdict(set)
     for course_id, initial_category in initial_course_categories.items():
         if initial_category == "Math":
