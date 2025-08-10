@@ -673,23 +673,20 @@ def process_canvas_delta_sync_from_course_change(event_data):
     student_details = get_student_details_from_plp(plp_item_id)
     if not student_details: return
     
-    master_student_id = student_details.get('master_id')
+    master_student_id = student_details.get('master_id') # Make sure master_id is available
     if not master_student_id:
         print(f"ERROR: Could not find Master Student ID for PLP {plp_item_id}. Cannot sync teacher.")
         return
 
-    subitem_cols = {}
-    rule = next((r for r in LOG_CONFIGS if r.get("trigger_column_id") == trigger_column_id), None)
-    if rule and "params" in rule:
-        params = rule["params"]
-        if params.get("entry_type_column_id") and params.get("subitem_entry_type"):
-            subitem_cols[params["entry_type_column_id"]] = {"labels": [str(params["subitem_entry_type"])]}
-    
+    # --- MODIFICATION STARTS HERE ---
+    ENTRY_TYPE_COLUMN_ID = "your_entry_type_column_id"  # <-- REPLACE THIS
+    curriculum_change_values = {ENTRY_TYPE_COLUMN_ID: {"labels": ["Curriculum Change"]}}
+    # --- MODIFICATION ENDS HERE ---
+
     current_ids, previous_ids = get_linked_ids_from_connect_column_value(event_data.get('value')), get_linked_ids_from_connect_column_value(event_data.get('previousValue'))
     added_ids, removed_ids = current_ids - previous_ids, previous_ids - current_ids
     category_name, date, changer = {v: k for k, v in PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.items()}.get(trigger_column_id, "Course"), datetime.now().strftime('%Y-%m-%d'), get_user_name(user_id) or "automation"
     
-    # These values are now filled in with your provided IDs
     CANVAS_BOARD_CLASS_TYPE_COLUMN_ID = "status__1"
     ACE_TEACHER_COLUMN_ID_ON_MASTER = "multiple_person_mks1wrfv"
     CONNECT_TEACHER_COLUMN_ID_ON_MASTER = "multiple_person_mks11jeg"
@@ -697,50 +694,37 @@ def process_canvas_delta_sync_from_course_change(event_data):
     for class_id in added_ids:
         linked_canvas_item_ids = get_linked_items_from_board_relation(class_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
         
-        # This handles the original student enrollment logic
         if linked_canvas_item_ids:
-            manage_class_enrollment("enroll", plp_item_id, class_id, student_details, subitem_cols)
+            # Pass the curriculum_change_values to the enrollment function
+            manage_class_enrollment("enroll", plp_item_id, class_id, student_details, subitem_cols=curriculum_change_values)
         else:
             class_name = get_item_name(class_id, int(ALL_COURSES_BOARD_ID))
-            if class_name: create_subitem(plp_item_id, f"Added {category_name} course '{class_name}' on {date} by {changer}", subitem_cols)
+            # Add curriculum_change_values to direct subitem creation
+            if class_name: create_subitem(plp_item_id, f"Added {category_name} course '{class_name}' on {date} by {changer}", column_values=curriculum_change_values)
 
-        # ========= NEW LOGIC STARTS HERE =========
         if linked_canvas_item_ids:
             canvas_item_id = list(linked_canvas_item_ids)[0]
-            
-            # 1. Determine the class type from the Canvas Board
             class_type_val = get_column_value(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_BOARD_CLASS_TYPE_COLUMN_ID)
             class_type_text = class_type_val.get('text', '').lower() if class_type_val else ''
-
             target_master_col_id = None
-            # Check if 'ace' is part of the status text (covers "ACE" and "ACE-C")
-            if 'ace' in class_type_text:
-                target_master_col_id = ACE_TEACHER_COLUMN_ID_ON_MASTER
-            elif 'connect' in class_type_text:
-                target_master_col_id = CONNECT_TEACHER_COLUMN_ID_ON_MASTER
-
-            # 2. If it's an ACE or Connect class, find the teacher and update the master board
+            if 'ace' in class_type_text: target_master_col_id = ACE_TEACHER_COLUMN_ID_ON_MASTER
+            elif 'connect' in class_type_text: target_master_col_id = CONNECT_TEACHER_COLUMN_ID_ON_MASTER
             if target_master_col_id:
-                print(f"INFO: ACE/Connect class detected. Finding teacher for course item {class_id}.")
                 teacher_person_value = get_teacher_person_value_from_canvas_board(canvas_item_id)
-                
                 if teacher_person_value:
-                    print(f"INFO: Updating Master Student {master_student_id} with teacher.")
-                    # Using "multiple-person" as the column type based on your provided IDs
                     update_people_column(master_student_id, int(MASTER_STUDENT_BOARD_ID), target_master_col_id, teacher_person_value, "multiple-person")
                 else:
                     print(f"WARNING: Could not find linked teacher for course item {class_id}.")
-        # ========= NEW LOGIC ENDS HERE =========
 
     for class_id in removed_ids:
-        # The unenrollment logic remains unchanged
         is_canvas_course = get_linked_items_from_board_relation(class_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
         if is_canvas_course:
-            manage_class_enrollment("unenroll", plp_item_id, class_id, student_details, subitem_cols)
+            # Pass the curriculum_change_values to the unenrollment function
+            manage_class_enrollment("unenroll", plp_item_id, class_id, student_details, subitem_cols=curriculum_change_values)
         else:
             class_name = get_item_name(class_id, int(ALL_COURSES_BOARD_ID))
-            if class_name: create_subitem(plp_item_id, f"Removed {category_name} course '{class_name}' on {date} by {changer}", subitem_cols)
-
+            # Add curriculum_change_values to direct subitem creation
+            if class_name: create_subitem(plp_item_id, f"Removed {category_name} course '{class_name}' on {date} by {changer}", column_values=curriculum_change_values)
 @celery_app.task
 def process_plp_course_sync_webhook(event_data):
     subitem_id, parent_item_id = event_data.get('pulseId'), event_data.get('parentItemId')
@@ -765,23 +749,36 @@ def process_master_student_person_sync_webhook(event_data):
     current_value_raw, previous_value_raw = event_data.get('value'), event_data.get('previousValue')
     mappings = MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS.get(trigger_column_id)
     if not mappings: return
+
+    # This part remains the same
     for target in mappings["targets"]:
         linked_ids = get_linked_items_from_board_relation(master_item_id, int(MASTER_STUDENT_BOARD_ID), target["connect_column_id"])
         for linked_id in linked_ids:
             update_people_column(linked_id, int(target["board_id"]), target["target_column_id"], current_value_raw, target["target_column_type"])
+    
     plp_target = next((t for t in mappings["targets"] if str(t.get("board_id")) == str(PLP_BOARD_ID)), None)
     if not plp_target: return
+    
     plp_linked_ids = get_linked_items_from_board_relation(master_item_id, int(MASTER_STUDENT_BOARD_ID), plp_target["connect_column_id"])
     if not plp_linked_ids: return
+    
     plp_item_id = list(plp_linked_ids)[0]
+    
+    # --- MODIFICATION STARTS HERE ---
+    ENTRY_TYPE_COLUMN_ID = "your_entry_type_column_id"  # <-- REPLACE THIS
+    staff_change_values = {ENTRY_TYPE_COLUMN_ID: {"labels": ["Staff Change"]}}
+    
     col_name, changer, date = mappings.get("name", "Staff"), get_user_name(user_id) or "automation", datetime.now().strftime('%Y-%m-%d')
     current_ids, previous_ids = get_people_ids_from_value(current_value_raw), get_people_ids_from_value(previous_value_raw)
+    
     for p_id in (current_ids - previous_ids):
         name = get_user_name(p_id)
-        if name: create_subitem(plp_item_id, f"{col_name} changed to {name} on {date} by {changer}")
+        if name: create_subitem(plp_item_id, f"{col_name} changed to {name} on {date} by {changer}", column_values=staff_change_values)
+
     for p_id in (previous_ids - current_ids):
         name = get_user_name(p_id)
-        if name: create_subitem(plp_item_id, f"Removed {name} from {col_name} on {date} by {changer}")
+        if name: create_subitem(plp_item_id, f"Removed {name} from {col_name} on {date} by {changer}", column_values=staff_change_values)
+    # --- MODIFICATION ENDS HERE ---
 
 # ================== START MODIFICATION ==================
 @celery_app.task
