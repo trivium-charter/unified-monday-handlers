@@ -540,49 +540,32 @@ def clear_subitems_by_creator(parent_item_id, creator_id_to_delete, dry_run=True
 
 def sync_single_plp_item(plp_item_id, dry_run=True):
     """
-    Main logic to sync teachers and classes for one student.
-    This version is idempotent and includes the ACE/Connect teacher sync.
+    Final, simplified version to sync teachers and classes for one student.
+    It syncs teachers from the master board, manages student class enrollment,
+    and assigns ACE/Connect teachers to the master board.
     """
     print(f"\n--- Processing PLP Item: {plp_item_id} ---")
     student_details = get_student_details_from_plp(plp_item_id)
     if not student_details:
         print(f"WARNING: Could not get student details for PLP {plp_item_id}. Skipping.")
         return
-    
-    master_student_id = student_details['master_id']
 
-    # Fetch existing subitems ONCE to check against before creating new ones
-    existing_subitems_query = f"query {{ items(ids:[{plp_item_id}]) {{ subitems {{ name }} }} }}"
-    existing_subitems_result = execute_monday_graphql(existing_subitems_query)
-    existing_subitem_names = {s['name'] for s in existing_subitems_result['data']['items'][0]['subitems']}
+    master_student_id = student_details.get('master_id')
+    if not master_student_id:
+        print(f"ERROR: Could not find Master Student ID for PLP {plp_item_id}. Skipping.")
+        return
 
-    # --- Sync Teacher Assignments from Master to PLP ---
+    # --- 1. Sync Teacher Assignments from Master to PLP ---
     print("Syncing teacher assignments from Master Student board to PLP...")
-    for trigger_col, mapping in MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS.items():
-        master_person_val = get_column_value(master_student_id, int(MASTER_STUDENT_BOARD_ID), trigger_col)
-        plp_target_mapping = next((t for t in mapping["targets"] if str(t.get("board_id")) == str(PLP_BOARD_ID)), None)
-        
-        if plp_target_mapping and master_person_val and master_person_val.get('value'):
-            person_ids = get_people_ids_from_value(master_person_val['value'])
-            if not person_ids: continue
-            
-            person_id = list(person_ids)[0]
-            person_name = get_user_name(person_id)
-            map_name = mapping.get("name", "Staff")
-            log_message = f"{map_name} set to {person_name}"
-
-            # CHECK BEFORE CREATING
-            if log_message in existing_subitem_names:
-                print(f"INFO: Log for '{log_message}' already exists. Skipping.")
-                continue
-
-            print(f"INFO: Syncing '{map_name}' to '{person_name}'.")
-            if not dry_run:
+    if not dry_run:
+        for trigger_col, mapping in MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS.items():
+            master_person_val = get_column_value(master_student_id, int(MASTER_STUDENT_BOARD_ID), trigger_col)
+            plp_target_mapping = next((t for t in mapping["targets"] if str(t.get("board_id")) == str(PLP_BOARD_ID)), None)
+            if plp_target_mapping and master_person_val and master_person_val.get('value'):
                 update_people_column(plp_item_id, int(PLP_BOARD_ID), plp_target_mapping["target_column_id"], master_person_val['value'], plp_target_mapping["target_column_type"])
-                create_subitem(plp_item_id, log_message)
                 time.sleep(1)
 
-    # --- Sync Class Enrollments AND ACE/Connect Teacher Assignment ---
+    # --- 2. Process All Class-Related Logic ---
     print("Syncing class enrollments and ACE/Connect teachers...")
     course_column_ids = [c.strip() for c in PLP_ALL_CLASSES_CONNECT_COLUMNS_STR.split(',') if c.strip()]
     all_class_ids = set()
@@ -591,71 +574,49 @@ def sync_single_plp_item(plp_item_id, dry_run=True):
         if class_links and class_links.get('value'):
             all_class_ids.update(get_linked_ids_from_connect_column_value(class_links['value']))
 
-    # Column IDs for the new logic
+    if not all_class_ids:
+        print("INFO: No classes to sync.")
+        return
+
+    # Define column IDs for ACE/Connect logic
     CANVAS_BOARD_CLASS_TYPE_COLUMN_ID = "status__1"
     ACE_TEACHER_COLUMN_ID_ON_MASTER = "multiple_person_mks1wrfv"
     CONNECT_TEACHER_COLUMN_ID_ON_MASTER = "multiple_person_mks11jeg"
 
-    if not all_class_ids:
-        print("INFO: No classes to sync.")
-    else:
-        for class_item_id in all_class_ids:
-            # --- This handles student enrollment in Canvas and subitem creation ---
-            all_courses_item_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)) or f"Item {class_item_id}"
-            enrollment_prefix = f"Enrolled in {all_courses_item_name}"
-            addition_prefix = f"Added non-Canvas course '{all_courses_item_name}'"
-            if not (any(s.startswith(enrollment_prefix) for s in existing_subitem_names) or \
-                    any(s == addition_prefix for s in existing_subitem_names)):
-                print(f"INFO: Processing student enrollment for class '{all_courses_item_name}'.")
-                if not dry_run:
-                    manage_class_enrollment(plp_item_id, class_item_id, student_details)
-            else:
-                print(f"INFO: Student enrollment log for '{all_courses_item_name}' already exists. Skipping.")
+    # Process each class one by one
+    for class_item_id in all_class_ids:
+        class_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)) or f"Item {class_item_id}"
+        print(f"Processing class: '{class_name}'")
 
-            # --- This handles the new ACE/Connect Teacher Logic ---
-            linked_canvas_item_ids = get_linked_items_from_board_relation(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
-            if linked_canvas_item_ids:
-                canvas_item_id = list(linked_canvas_item_ids)[0]
-                class_type_val = get_column_value(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_BOARD_CLASS_TYPE_COLUMN_ID)
-                class_type_text = class_type_val.get('text', '').lower() if class_type_val else ''
+        if not dry_run:
+            # A) Enroll student in Canvas and create subitem log (uses your original working function)
+            manage_class_enrollment("enroll", plp_item_id, class_item_id, student_details)
 
-                target_master_col_id = None
-                if 'ace' in class_type_text:
-                    target_master_col_id = ACE_TEACHER_COLUMN_ID_ON_MASTER
-                elif 'connect' in class_type_text:
-                    target_master_col_id = CONNECT_TEACHER_COLUMN_ID_ON_MASTER
+        # B) Handle ACE/Connect teacher assignment
+        linked_canvas_item_ids = get_linked_items_from_board_relation(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
+        if linked_canvas_item_ids:
+            canvas_item_id = list(linked_canvas_item_ids)[0]
+            class_type_val = get_column_value(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_BOARD_CLASS_TYPE_COLUMN_ID)
+            class_type_text = class_type_val.get('text', '').lower() if class_type_val else ''
 
-                if target_master_col_id:
-                    print(f"INFO: ACE/Connect class detected. Finding teacher for course item {class_item_id}.")
-                    teacher_person_value = get_teacher_person_value_from_canvas_board(canvas_item_id)
-                    
-                    if teacher_person_value:
-                        print(f"INFO: Updating Master Student {master_student_id} with teacher.")
-                        if not dry_run:
-                            update_people_column(master_student_id, int(MASTER_STUDENT_BOARD_ID), target_master_col_id, teacher_person_value, "multiple-person")
-                    else:
-                        print(f"WARNING: Could not find linked teacher for course item {class_item_id}.")
-            
-            if not dry_run:
-                time.sleep(1) # Delay after processing each class
+            target_master_col_id = None
+            if 'ace' in class_type_text:
+                target_master_col_id = ACE_TEACHER_COLUMN_ID_ON_MASTER
+            elif 'connect' in class_type_text:
+                target_master_col_id = CONNECT_TEACHER_COLUMN_ID_ON_MASTER
 
-    # --- Sync Class Enrollments ---
-    print("Syncing class enrollments...")
-    course_column_ids = [c.strip() for c in PLP_ALL_CLASSES_CONNECT_COLUMNS_STR.split(',') if c.strip()]
-    all_class_ids = set()
-    for col_id in course_column_ids:
-        class_links = get_column_value(plp_item_id, int(PLP_BOARD_ID), col_id)
-        if class_links and class_links.get('value'):
-            all_class_ids.update(get_linked_ids_from_connect_column_value(class_links['value']))
-
-    if not all_class_ids:
-        print("INFO: No classes to sync.")
-    else:
-        for class_item_id in all_class_ids:
-            print(f"INFO: Processing enrollment for class item {class_item_id}.")
-            if not dry_run:
-                manage_class_enrollment(plp_item_id, class_item_id, student_details)
-                time.sleep(1)
+            if target_master_col_id:
+                teacher_person_value = get_teacher_person_value_from_canvas_board(canvas_item_id)
+                if teacher_person_value:
+                    print(f"INFO: ACE/Connect class detected. Updating Master Student {master_student_id} with teacher.")
+                    if not dry_run:
+                        update_people_column(master_student_id, int(MASTER_STUDENT_BOARD_ID), target_master_col_id, teacher_person_value, "multiple-person")
+                else:
+                    # This warning is the one you were seeing.
+                    print(f"WARNING: Could not find a linked teacher on the Canvas Board for course '{class_name}'.")
+        
+        if not dry_run:
+            time.sleep(1)
 def get_teacher_person_value_from_canvas_board(canvas_item_id):
     """Finds the teacher linked to a course on the Canvas Board and returns their 'Person' column value from the All Staff board."""
     # Find the linked staff item on the All Staff board
