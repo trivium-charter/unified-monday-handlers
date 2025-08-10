@@ -572,7 +572,9 @@ def clear_subitems_by_creator(parent_item_id, creator_id_to_delete, dry_run=True
         time.sleep(0.5)
 
 def sync_single_plp_item(plp_item_id, dry_run=True):
-    """Final, simplified DEBUG version"""
+    """
+    Final version that sets the Entry Type on new subitems.
+    """
     print(f"\n--- Processing PLP Item: {plp_item_id} ---")
     student_details = get_student_details_from_plp(plp_item_id)
     if not student_details:
@@ -584,10 +586,28 @@ def sync_single_plp_item(plp_item_id, dry_run=True):
         print(f"ERROR: Could not find Master Student ID for PLP {plp_item_id}. Skipping.")
         return
 
+    # --- Define the Entry Type column ID and values ---
+    ENTRY_TYPE_COLUMN_ID = "entry_type__1"  # <-- REPLACE THIS
+    staff_change_values = {ENTRY_TYPE_COLUMN_ID: {"labels": ["Staff Change"]}}
+    curriculum_change_values = {ENTRY_TYPE_COLUMN_ID: {"labels": ["Curriculum Change"]}}
+
     # --- 1. Sync Teacher Assignments from Master to PLP ---
     print("Syncing teacher assignments from Master Student board to PLP...")
-    # Logic is omitted in DRY RUN for speed
-    
+    if not dry_run:
+        for trigger_col, mapping in MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS.items():
+            master_person_val = get_column_value(master_student_id, int(MASTER_STUDENT_BOARD_ID), trigger_col)
+            plp_target_mapping = next((t for t in mapping["targets"] if str(t.get("board_id")) == str(PLP_BOARD_ID)), None)
+            if plp_target_mapping and master_person_val and master_person_val.get('value'):
+                # Update the people column
+                update_people_column(plp_item_id, int(PLP_BOARD_ID), plp_target_mapping["target_column_id"], master_person_val['value'], plp_target_mapping["target_column_type"])
+                
+                # Create subitem with "Staff Change" entry type
+                person_name = get_user_name(list(get_people_ids_from_value(master_person_val['value']))[0])
+                log_message = f"{mapping.get('name', 'Staff')} set to {person_name}"
+                create_subitem(plp_item_id, log_message, column_values=staff_change_values) # <-- MODIFIED
+                
+                time.sleep(1)
+
     # --- 2. Process All Class-Related Logic ---
     print("Syncing class enrollments and ACE/Connect teachers...")
     course_column_ids = [c.strip() for c in PLP_ALL_CLASSES_CONNECT_COLUMNS_STR.split(',') if c.strip()]
@@ -607,16 +627,14 @@ def sync_single_plp_item(plp_item_id, dry_run=True):
 
     for class_item_id in all_class_ids:
         class_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)) or f"Item {class_item_id}"
-        print(f"\nProcessing class: '{class_name}' (ID: {class_item_id})")
+        print(f"Processing class: '{class_name}'")
 
         if not dry_run:
-            manage_class_enrollment("enroll", plp_item_id, class_item_id, student_details)
+            # Pass the "Curriculum Change" value to the enrollment function
+            manage_class_enrollment("enroll", plp_item_id, class_item_id, student_details, subitem_cols=curriculum_change_values) # <-- MODIFIED
 
-        # --- DEBUG FOR ACE/CONNECT ---
-        print(f"DEBUG: Looking on board [ALL_COURSES_BOARD_ID: {ALL_COURSES_BOARD_ID}] for item {class_item_id} using column [ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID: {ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID}]")
+        # ACE/Connect teacher logic remains the same...
         linked_canvas_item_ids = get_linked_items_from_board_relation(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
-        print(f"DEBUG: Found linked_canvas_item_ids: {linked_canvas_item_ids}")
-        
         if linked_canvas_item_ids:
             canvas_item_id = list(linked_canvas_item_ids)[0]
             class_type_val = get_column_value(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_BOARD_CLASS_TYPE_COLUMN_ID)
@@ -628,10 +646,15 @@ def sync_single_plp_item(plp_item_id, dry_run=True):
 
             if target_master_col_id:
                 teacher_person_value = get_teacher_person_value_from_canvas_board(canvas_item_id)
-                if not teacher_person_value:
+                if teacher_person_value:
+                    print(f"INFO: ACE/Connect class detected. Updating Master Student {master_student_id} with teacher.")
+                    if not dry_run:
+                        update_people_column(master_student_id, int(MASTER_STUDENT_BOARD_ID), target_master_col_id, teacher_person_value, "multiple-person")
+                else:
                     print(f"WARNING: Could not find a linked teacher on the Canvas Board for course '{class_name}'.")
         
-        if not dry_run: time.sleep(1)
+        if not dry_run:
+            time.sleep(1)
 def get_teacher_person_value_from_canvas_board(canvas_item_id):
     """DEBUG version to find the teacher's 'Person' value."""
     print(f"\n--- DEBUG: Inside get_teacher_person_value_from_canvas_board ---")
@@ -670,6 +693,7 @@ def get_teacher_person_value_from_canvas_board(canvas_item_id):
 
 if __name__ == '__main__':
     # ---! CONFIGURATION !---
+    # Set to False to run for real. Set to True to only see logs without changes.
     DRY_RUN = False
     TARGET_USER_NAME = "Sarah Bruce"
     # ---!  END CONFIG   !---
@@ -683,32 +707,38 @@ if __name__ == '__main__':
         print("!!!  No actual changes will be made to your data.  !!!")
         print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n")
 
-    # --- Phase 1: Cleanup Subitems ---
-    print(f"\n--- PHASE 1: DELETING SUBITEMS CREATED BY '{TARGET_USER_NAME}' ---")
+    # --- Main Execution Block ---
     creator_id = get_user_id(TARGET_USER_NAME)
-    
-    # This 'if/else' block is now correctly structured
-    if creator_id:
-        # To test, use a short list of specific IDs
-        plp_item_ids = [9423043492, 9423043568, 9423043036] # Your test IDs
-
-        # Or, for the full run, uncomment the line below and remove the list above
-        # plp_item_ids = get_all_board_items(PLP_BOARD_ID)
-
-        print(f"Processing {len(plp_item_ids)} specific PLP items.")
-        for i, item_id in enumerate(plp_item_ids):
-            print(f"Checking PLP item {i+1}/{len(plp_item_ids)} (ID: {item_id})...")
-            try:
-                # Using the idempotent (safer) version of the sync function
-                sync_single_plp_item(int(item_id), dry_run=DRY_RUN)
-            except Exception as e:
-                print(f"FATAL ERROR during processing for item {item_id}: {e}")
-            time.sleep(2) # Main delay between processing each student
-
-    else:
-        # This part will now only run if the user ID is NOT found at the start
+    if not creator_id:
         print("\nFATAL: Halting script because target user could not be found.")
         exit()
+        
+    # To test, use a short list of specific IDs
+    plp_item_ids = [9423043492, 9423043568, 9423043036] 
+
+    # For the full run, comment out the list above and uncomment the line below
+    # plp_item_ids = get_all_board_items(PLP_BOARD_ID)
+
+    print(f"Processing {len(plp_item_ids)} PLP items.")
+    
+    # This loop will now correctly perform both cleanup and sync for each student.
+    for i, item_id in enumerate(plp_item_ids):
+        print(f"\n===== Processing Student {i+1}/{len(plp_item_ids)} (Item ID: {item_id}) =====")
+        try:
+            # STEP 1: CLEAR OLD SUBITEMS
+            print(f"--- Phase 1: Deleting subitems created by '{TARGET_USER_NAME}' ---")
+            clear_subitems_by_creator(int(item_id), creator_id, dry_run=DRY_RUN)
+
+            # STEP 2: SYNC ALL DATA AND CREATE NEW SUBITEMS
+            print(f"--- Phase 2: Syncing all data for PLP Item {item_id} ---")
+            sync_single_plp_item(int(item_id), dry_run=DRY_RUN)
+
+        except Exception as e:
+            print(f"FATAL ERROR during processing for item {item_id}: {e}")
+        
+        # We only need the sleep for real runs to respect API limits
+        if not dry_run:
+            time.sleep(2) 
 
     print("\n======================================================")
     print("=== SCRIPT FINISHED                                ===")
