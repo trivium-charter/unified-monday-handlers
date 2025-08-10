@@ -600,38 +600,30 @@ if __name__ == '__main__':
 
     # --- Phase 1: Cleanup Subitems ---
     print(f"\n--- PHASE 1: DELETING SUBITEMS CREATED BY '{TARGET_USER_NAME}' ---")
-creator_id = get_user_id(TARGET_USER_NAME)
-if creator_id:
-    # To test, COMMENT OUT the line below
-    # plp_item_ids = get_all_board_items(PLP_BOARD_ID)
+    creator_id = get_user_id(TARGET_USER_NAME)
+    
+    # This 'if/else' block is now correctly structured
+    if creator_id:
+        # To test, use a short list of specific IDs
+        plp_item_ids = [9423043492, 9423043568, 9423043036] # Your test IDs
 
-    # And ADD a short list of specific IDs like this:
-    plp_item_ids = [9423043492, 9423043568, 9423043036] # Use your actual student item IDs
+        # Or, for the full run, uncomment the line below and remove the list above
+        # plp_item_ids = get_all_board_items(PLP_BOARD_ID)
 
-    print(f"TESTING with {len(plp_item_ids)} specific PLP items.")
-    for i, item_id in enumerate(plp_item_ids):
+        print(f"Processing {len(plp_item_ids)} specific PLP items.")
+        for i, item_id in enumerate(plp_item_ids):
             print(f"Checking PLP item {i+1}/{len(plp_item_ids)} (ID: {item_id})...")
             try:
-                clear_subitems_by_creator(int(item_id), creator_id, dry_run=DRY_RUN)
-            except Exception as e:
-                print(f"FATAL ERROR during cleanup for item {item_id}: {e}")
-            time.sleep(1)
-    else:
-        print("\nFATAL: Halting script because target user could not be found.")
-        exit()
-
-    # --- Phase 2: Sync Teachers and Classes ---
-    print(f"\n--- PHASE 2: SYNCING TEACHERS AND CLASSES ---")
-    # Re-use the list of items fetched in Phase 1
-    if 'plp_item_ids' in locals() and plp_item_ids:
-        for i, item_id in enumerate(plp_item_ids):
-            try:
+                # Using the idempotent (safer) version of the sync function
                 sync_single_plp_item(int(item_id), dry_run=DRY_RUN)
             except Exception as e:
-                print(f"FATAL ERROR during sync for item {item_id}: {e}")
+                print(f"FATAL ERROR during processing for item {item_id}: {e}")
             time.sleep(2) # Main delay between processing each student
+
     else:
-        print("No items found on PLP board to process for sync.")
+        # This part will now only run if the user ID is NOT found at the start
+        print("\nFATAL: Halting script because target user could not be found.")
+        exit()
 
     print("\n======================================================")
     print("=== SCRIPT FINISHED                                ===")
