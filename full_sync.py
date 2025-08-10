@@ -195,16 +195,39 @@ def create_subitem(parent_item_id, subitem_name, column_values=None):
     return result['data']['create_subitem'].get('id') if result and 'data' in result and result['data'].get('create_subitem') else None
 
 def update_people_column(item_id, board_id, people_column_id, new_people_value, target_column_type):
-    parsed_new_value = new_people_value if isinstance(new_people_value, dict) else json.loads(new_people_value) if isinstance(new_people_value, str) else {}
-    persons_and_teams = parsed_new_value.get('personsAndTeams', [])
+    # First, get the new person's ID from the value we are adding
+    new_persons_and_teams = new_people_value.get('personsAndTeams', [])
+    if not new_persons_and_teams:
+        return False
+    new_person_id = new_persons_and_teams[0].get('id')
+    if not new_person_id:
+        return False
+
+    # Get the list of people already in the column
+    current_col_val = get_column_value(item_id, board_id, people_column_id)
+    current_people_ids = set()
+    if current_col_val and current_col_val.get('value'):
+        current_people_ids = get_people_ids_from_value(current_col_val['value'])
+
+    # Add the new person to the set of existing people
+    current_people_ids.add(new_person_id)
+    
+    # Prepare the final value for the API
+    updated_people_list = [{"id": int(pid), "kind": "person"} for pid in current_people_ids]
+    
+    # Based on the column type, format the final value correctly
     if target_column_type == "person":
-        person_id = persons_and_teams[0].get('id') if persons_and_teams else None
-        graphql_value = json.dumps(json.dumps({"personId": person_id} if person_id else {}))
+        # A "person" column can only hold one person
+        final_value = {"personId": int(new_person_id)}
     elif target_column_type == "multiple-person":
-        people_list = [{"id": p.get('id'), "kind": "person"} for p in persons_and_teams if 'id' in p]
-        graphql_value = json.dumps(json.dumps({"personsAndTeams": people_list}))
-    else: return False
+        # A "multiple-person" column can hold a list
+        final_value = {"personsAndTeams": updated_people_list}
+    else:
+        return False
+
+    graphql_value = json.dumps(json.dumps(final_value))
     mutation = f"mutation {{ change_column_value(board_id: {board_id}, item_id: {item_id}, column_id: \"{people_column_id}\", value: {graphql_value}) {{ id }} }}"
+    
     return execute_monday_graphql(mutation) is not None
 
 def delete_item(item_id):
