@@ -424,7 +424,6 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details,
     linked_canvas_item_ids = get_linked_items_from_board_relation(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
     all_courses_item_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)) or f"Item {class_item_id}"
 
-    # If the class is not linked to the Canvas Board, it's a non-Canvas class.
     if not linked_canvas_item_ids:
         if action == "enroll":
             create_subitem(plp_item_id, f"Added {category_name} '{all_courses_item_name}'", subitem_cols)
@@ -470,7 +469,8 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details,
         for section_name in sections:
             section = create_section_if_not_exists(canvas_course_id, section_name)
             if section:
-                result = enroll_or_create_and_enroll(course_id, section.id, student_details)
+                # --- THIS LINE IS THE FIX ---
+                result = enroll_or_create_and_enroll(canvas_course_id, section.id, student_details)
                 enrollment_results.append({'section': section_name, 'status': result})
 
         if enrollment_results:
@@ -680,7 +680,6 @@ def get_teacher_person_value_from_canvas_board(canvas_item_id):
 
 if __name__ == '__main__':
     # ---! CONFIGURATION !---
-    # Set to False to run for real. Set to True to only see logs without changes.
     DRY_RUN = False
     TARGET_USER_NAME = "Sarah Bruce"
     # ---!  END CONFIG   !---
@@ -694,37 +693,33 @@ if __name__ == '__main__':
         print("!!!  No actual changes will be made to your data.  !!!")
         print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n")
 
-    # --- Main Execution Block ---
     creator_id = get_user_id(TARGET_USER_NAME)
     if not creator_id:
         print("\nFATAL: Halting script because target user could not be found.")
         exit()
         
-    # To test, use a short list of specific IDs
     plp_item_ids = [9423043492, 9423043568, 9423043036] 
-
     # For the full run, comment out the list above and uncomment the line below
     # plp_item_ids = get_all_board_items(PLP_BOARD_ID)
 
     print(f"Processing {len(plp_item_ids)} PLP items.")
     
-    # This loop will now correctly perform both cleanup and sync for each student.
     for i, item_id in enumerate(plp_item_ids):
         print(f"\n===== Processing Student {i+1}/{len(plp_item_ids)} (Item ID: {item_id}) =====")
         try:
-            # STEP 1: CLEAR OLD SUBITEMS
             print(f"--- Phase 1: Deleting subitems created by '{TARGET_USER_NAME}' ---")
             clear_subitems_by_creator(int(item_id), creator_id, dry_run=DRY_RUN)
 
-            # STEP 2: SYNC ALL DATA AND CREATE NEW SUBITEMS
             print(f"--- Phase 2: Syncing all data for PLP Item {item_id} ---")
             sync_single_plp_item(int(item_id), dry_run=DRY_RUN)
 
         except Exception as e:
             print(f"FATAL ERROR during processing for item {item_id}: {e}")
+            import traceback
+            traceback.print_exc() # This will print more detailed error info
         
-        # We only need the sleep for real runs to respect API limits
-        if not dry_run:
+        # --- THIS LINE IS THE FIX ---
+        if not DRY_RUN:
             time.sleep(2) 
 
     print("\n======================================================")
