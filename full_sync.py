@@ -704,6 +704,7 @@ if __name__ == '__main__':
     # ---! CONFIGURATION !---
     DRY_RUN = False
     TARGET_USER_NAME = "Sarah Bruce"
+    LOG_FILE = "processed_students.log" # The new progress log file
     # ---!  END CONFIG   !---
 
     print("======================================================")
@@ -715,32 +716,56 @@ if __name__ == '__main__':
         print("!!!  No actual changes will be made to your data.  !!!")
         print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n")
 
-    creator_id = get_user_id(TARGET_USER_NAME)
+    # --- NEW: Read already processed IDs from the log file ---
+    processed_ids = set()
+    try:
+        with open(LOG_FILE, "r") as f:
+            processed_ids = {int(line.strip()) for line in f}
+        if processed_ids:
+            print(f"INFO: Found {len(processed_ids)} students in the progress log. They will be skipped.")
+    except FileNotFoundError:
+        print("INFO: No progress log file found. Starting from the beginning.")
+    except ValueError:
+        print("WARNING: Could not read progress log. Starting from the beginning.")
+        processed_ids = set()
+    # --- END NEW ---
+
+    creator_id = get_user_id(TARGET_USER_USER_NAME)
     if not creator_id:
         print("\nFATAL: Halting script because target user could not be found.")
         exit()
         
-    plp_item_ids = [9423043492, 9423043568, 9423043036] 
-    # For the full run, comment out the list above and uncomment the line below
-    # plp_item_ids = get_all_board_items(PLP_BOARD_ID)
-
-    print(f"Processing {len(plp_item_ids)} PLP items.")
+    # For the full run, we get all items from the board
+    all_plp_items = get_all_board_items(PLP_BOARD_ID)
     
-    for i, item_id in enumerate(plp_item_ids):
-        print(f"\n===== Processing Student {i+1}/{len(plp_item_ids)} (Item ID: {item_id}) =====")
+    # --- NEW: Filter out students that have already been processed ---
+    items_to_process = [item for item in all_plp_items if int(item['id']) not in processed_ids]
+    
+    total_to_process = len(items_to_process)
+    print(f"Found {len(all_plp_items)} total students. After filtering, {total_to_process} remain to be processed.")
+
+    for i, item in enumerate(items_to_process):
+        item_id = int(item['id'])
+        print(f"\n===== Processing Student {i+1}/{total_to_process} (Item ID: {item_id}) =====")
         try:
             print(f"--- Phase 1: Deleting subitems created by '{TARGET_USER_NAME}' ---")
-            clear_subitems_by_creator(int(item_id), creator_id, dry_run=DRY_RUN)
+            clear_subitems_by_creator(item_id, creator_id, dry_run=DRY_RUN)
 
             print(f"--- Phase 2: Syncing all data for PLP Item {item_id} ---")
-            sync_single_plp_item(int(item_id), dry_run=DRY_RUN)
+            sync_single_plp_item(item_id, dry_run=DRY_RUN)
+
+            # --- NEW: Log the ID upon successful completion ---
+            if not DRY_RUN:
+                with open(LOG_FILE, "a") as f:
+                    f.write(f"{item_id}\n")
+                print(f"SUCCESS: Logged item {item_id} as complete.")
+            # --- END NEW ---
 
         except Exception as e:
             print(f"FATAL ERROR during processing for item {item_id}: {e}")
             import traceback
-            traceback.print_exc() # This will print more detailed error info
+            traceback.print_exc()
         
-        # --- THIS LINE IS THE FIX ---
         if not DRY_RUN:
             time.sleep(2) 
 
