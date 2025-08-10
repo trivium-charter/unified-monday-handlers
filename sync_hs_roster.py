@@ -123,7 +123,7 @@ def get_all_board_items(board_id):
 # CORE SYNC LOGIC
 # ==============================================================================
 
-def sync_hs_roster_item(parent_item, dry_run=True):
+def sync_hs_roster_item(parent_item, dry_run=False):
     """
     Processes a single parent item from the HS Roster board, ignoring any
     subitems marked as "Spring".
