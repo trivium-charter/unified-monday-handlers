@@ -705,7 +705,7 @@ def process_canvas_delta_sync_from_course_change(event_data):
         print(f"ERROR: Could not find Master Student ID for PLP {plp_item_id}. Cannot sync teacher.")
         return
 
-    ENTRY_TYPE_COLUMN_ID = "your_entry_type_column_id"
+    ENTRY_TYPE_COLUMN_ID = "your_entry_type_column_id"  # <-- REPLACE THIS
     curriculum_change_values = {ENTRY_TYPE_COLUMN_ID: {"labels": ["Curriculum Change"]}}
 
     current_ids, previous_ids = get_linked_ids_from_connect_column_value(event_data.get('value')), get_linked_ids_from_connect_column_value(event_data.get('previousValue'))
@@ -761,7 +761,6 @@ def process_master_student_person_sync_webhook(event_data):
     mappings = MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS.get(trigger_column_id)
     if not mappings: return
 
-    # This part remains the same
     for target in mappings["targets"]:
         linked_ids = get_linked_items_from_board_relation(master_item_id, int(MASTER_STUDENT_BOARD_ID), target["connect_column_id"])
         for linked_id in linked_ids:
@@ -775,7 +774,6 @@ def process_master_student_person_sync_webhook(event_data):
     
     plp_item_id = list(plp_linked_ids)[0]
     
-    # --- MODIFICATION STARTS HERE ---
     ENTRY_TYPE_COLUMN_ID = "your_entry_type_column_id"  # <-- REPLACE THIS
     staff_change_values = {ENTRY_TYPE_COLUMN_ID: {"labels": ["Staff Change"]}}
     
@@ -789,7 +787,6 @@ def process_master_student_person_sync_webhook(event_data):
     for p_id in (previous_ids - current_ids):
         name = get_user_name(p_id)
         if name: create_subitem(plp_item_id, f"Removed {name} from {col_name} on {date} by {changer}", column_values=staff_change_values)
-    # --- MODIFICATION ENDS HERE ---
 
 # ================== START MODIFICATION ==================
 @celery_app.task
