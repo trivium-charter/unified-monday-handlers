@@ -550,10 +550,30 @@ def sync_single_plp_item(plp_item_id, dry_run=True):
     existing_subitem_names = {s['name'] for s in existing_subitems_result['data']['items'][0]['subitems']}
 
     # --- Sync Teacher Assignments from Master to PLP ---
-    print("Syncing teacher assignments...")
+    print("Syncing teacher assignments from Master Student board to PLP...")
     for trigger_col, mapping in MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS.items():
-        # This logic remains the same: it syncs teachers from Master to PLP
-        # ... (rest of the teacher sync logic from your existing script) ...
+        master_person_val = get_column_value(master_student_id, int(MASTER_STUDENT_BOARD_ID), trigger_col)
+        plp_target_mapping = next((t for t in mapping["targets"] if str(t.get("board_id")) == str(PLP_BOARD_ID)), None)
+        
+        if plp_target_mapping and master_person_val and master_person_val.get('value'):
+            person_ids = get_people_ids_from_value(master_person_val['value'])
+            if not person_ids: continue
+            
+            person_id = list(person_ids)[0]
+            person_name = get_user_name(person_id)
+            map_name = mapping.get("name", "Staff")
+            log_message = f"{map_name} set to {person_name}"
+
+            # CHECK BEFORE CREATING
+            if log_message in existing_subitem_names:
+                print(f"INFO: Log for '{log_message}' already exists. Skipping.")
+                continue
+
+            print(f"INFO: Syncing '{map_name}' to '{person_name}'.")
+            if not dry_run:
+                update_people_column(plp_item_id, int(PLP_BOARD_ID), plp_target_mapping["target_column_id"], master_person_val['value'], plp_target_mapping["target_column_type"])
+                create_subitem(plp_item_id, log_message)
+                time.sleep(1)
 
     # --- Sync Class Enrollments AND ACE/Connect Teacher Assignment ---
     print("Syncing class enrollments and ACE/Connect teachers...")
@@ -573,10 +593,19 @@ def sync_single_plp_item(plp_item_id, dry_run=True):
         print("INFO: No classes to sync.")
     else:
         for class_item_id in all_class_ids:
-            # This handles student enrollment in Canvas and subitem creation
-            manage_class_enrollment(plp_item_id, class_item_id, student_details)
+            # --- This handles student enrollment in Canvas and subitem creation ---
+            all_courses_item_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)) or f"Item {class_item_id}"
+            enrollment_prefix = f"Enrolled in {all_courses_item_name}"
+            addition_prefix = f"Added non-Canvas course '{all_courses_item_name}'"
+            if not (any(s.startswith(enrollment_prefix) for s in existing_subitem_names) or \
+                    any(s == addition_prefix for s in existing_subitem_names)):
+                print(f"INFO: Processing student enrollment for class '{all_courses_item_name}'.")
+                if not dry_run:
+                    manage_class_enrollment(plp_item_id, class_item_id, student_details)
+            else:
+                print(f"INFO: Student enrollment log for '{all_courses_item_name}' already exists. Skipping.")
 
-            # ========= NEW LOGIC STARTS HERE =========
+            # --- This handles the new ACE/Connect Teacher Logic ---
             linked_canvas_item_ids = get_linked_items_from_board_relation(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
             if linked_canvas_item_ids:
                 canvas_item_id = list(linked_canvas_item_ids)[0]
@@ -599,8 +628,7 @@ def sync_single_plp_item(plp_item_id, dry_run=True):
                             update_people_column(master_student_id, int(MASTER_STUDENT_BOARD_ID), target_master_col_id, teacher_person_value, "multiple-person")
                     else:
                         print(f"WARNING: Could not find linked teacher for course item {class_item_id}.")
-            # ========= NEW LOGIC ENDS HERE =========
-
+            
             if not dry_run:
                 time.sleep(1) # Delay after processing each class
 
