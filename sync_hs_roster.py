@@ -125,8 +125,8 @@ def get_all_board_items(board_id):
 
 def sync_hs_roster_item(parent_item, dry_run=True):
     """
-    Processes a single parent item from the HS Roster board using the final,
-    additive, multi-step categorization logic.
+    Processes a single parent item from the HS Roster board, ignoring any
+    subitems marked as "Spring".
     """
     parent_item_id = parent_item['id']
     parent_item_name = parent_item['name']
@@ -145,13 +145,16 @@ def sync_hs_roster_item(parent_item, dry_run=True):
         print("  SKIPPING: Could not find linked PLP item.")
         return
 
-    # 2. Get all subitems and their initial categories
+    # 2. Get all subitems for the parent item
+    HS_ROSTER_SUBITEM_TERM_COLUMN_ID = "color6" # The new column to check
     subitems_query = f"""
         query {{
             items (ids: [{parent_item_id}]) {{
                 subitems {{
                     id
-                    column_values(ids: ["{HS_ROSTER_SUBITEM_DROPDOWN_COLUMN_ID}", "{HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID}"]) {{ id text value }}
+                    name
+                    # MODIFIED: Added the new Term column to the query
+                    column_values(ids: ["{HS_ROSTER_SUBITEM_DROPDOWN_COLUMN_ID}", "{HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID}", "{HS_ROSTER_SUBITEM_TERM_COLUMN_ID}"]) {{ id text value }}
                 }}
             }}
         }}
@@ -163,6 +166,15 @@ def sync_hs_roster_item(parent_item, dry_run=True):
         subitems = subitems_result['data']['items'][0]['subitems']
         for subitem in subitems:
             subitem_cols = {cv['id']: cv for cv in subitem['column_values']}
+            
+            # ========= NEW LOGIC STARTS HERE =========
+            # Check the Term column. If it's "Spring", skip this subitem.
+            term_val = subitem_cols.get(HS_ROSTER_SUBITEM_TERM_COLUMN_ID, {}).get('text')
+            if term_val == "Spring":
+                print(f"  SKIPPING: Subitem '{subitem['name']}' is marked as Spring.")
+                continue # Move to the next subitem
+            # ========= NEW LOGIC ENDS HERE =========
+
             category = subitem_cols.get(HS_ROSTER_SUBITEM_DROPDOWN_COLUMN_ID, {}).get('text')
             courses_val = subitem_cols.get(HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID, {}).get('value')
             if category and courses_val:
@@ -175,7 +187,7 @@ def sync_hs_roster_item(parent_item, dry_run=True):
 
     all_course_ids = list(initial_course_categories.keys())
     if not all_course_ids:
-        print("  INFO: No courses found in subitems.")
+        print("  INFO: No non-Spring courses found in subitems.")
         return
 
     # 3. Efficiently query the secondary category status for all courses at once
@@ -200,8 +212,6 @@ def sync_hs_roster_item(parent_item, dry_run=True):
     # 4. Apply the final logic to aggregate PLP updates
     plp_updates = defaultdict(set)
     for course_id, initial_category in initial_course_categories.items():
-        
-        # Rule 1: Primary categorization from HS Roster subitem
         if initial_category == "Math":
             target_col_id = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get("Math")
             if target_col_id: plp_updates[target_col_id].add(course_id)
@@ -210,9 +220,7 @@ def sync_hs_roster_item(parent_item, dry_run=True):
             target_col_id = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get("ELA")
             if target_col_id: plp_updates[target_col_id].add(course_id)
 
-        # Rule 2: Secondary categorization from All Courses board
         secondary_category = secondary_category_map.get(course_id)
-        
         if secondary_category == "ACE":
             target_col_id = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get("ACE")
             if target_col_id: plp_updates[target_col_id].add(course_id)
