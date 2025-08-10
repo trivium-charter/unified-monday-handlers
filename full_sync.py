@@ -155,7 +155,11 @@ def get_column_value(item_id, board_id, column_id): # board_id is no longer used
             # This handles cases where the item exists but something is wrong with the column data structure.
             return None
     return None
-
+def delete_item(item_id):
+    """Deletes an item or subitem."""
+    mutation = f"mutation {{ delete_item (item_id: {item_id}) {{ id }} }}"
+    return execute_monday_graphql(mutation)
+    
 def change_column_value_generic(board_id, item_id, column_id, value):
     graphql_value = json.dumps(str(value))
     mutation = f"""
