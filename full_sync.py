@@ -118,17 +118,24 @@ def get_column_value(item_id, board_id, column_id):
     if not column_id: return None
     query = f"query {{ boards(ids: {board_id}) {{ items_page(query_params: {{ids: [{item_id}]}}) {{ items {{ column_values(ids: [\"{column_id}\"]) {{ id value text }} }} }} }} }}"
     result = execute_monday_graphql(query)
-    if result and 'data' in result and result['data'].get('boards'):
-        board = result['data']['boards'][0]
-        if board.get('items_page') and board['items_page'].get('items'):
-            item = board['items_page']['items'][0]
-            if item.get('column_values'):
-                col_val = item['column_values'][0]
-                parsed_value = None
-                if col_val.get('value'):
-                    try: parsed_value = json.loads(col_val['value'])
-                    except json.JSONDecodeError: parsed_value = col_val['value']
-                return {'value': parsed_value, 'text': col_val.get('text')}
+    
+    if result and result.get('data', {}).get('boards'):
+        try:
+            col_val = result['data']['boards'][0]['items_page']['items'][0]['column_values'][0]
+            # This robustly handles the value from the API
+            parsed_value = col_val.get('value')
+            if isinstance(parsed_value, str):
+                try:
+                    # The value from the API is a string containing JSON, so we parse it.
+                    parsed_value = json.loads(parsed_value)
+                except json.JSONDecodeError:
+                    # If parsing fails, we leave it as the raw string.
+                    pass
+            
+            return {'value': parsed_value, 'text': col_val.get('text')}
+        except (IndexError, KeyError):
+            # This handles cases where the column or item doesn't exist.
+            return None
     return None
 
 def change_column_value_generic(board_id, item_id, column_id, value):
