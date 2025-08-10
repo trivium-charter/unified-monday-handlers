@@ -679,7 +679,7 @@ def process_canvas_delta_sync_from_course_change(event_data):
         return
 
     # --- MODIFICATION STARTS HERE ---
-    ENTRY_TYPE_COLUMN_ID = "your_entry_type_column_id"  # <-- REPLACE THIS
+    ENTRY_TYPE_COLUMN_ID = "entry_type__1"  # <-- REPLACE THIS
     curriculum_change_values = {ENTRY_TYPE_COLUMN_ID: {"labels": ["Curriculum Change"]}}
     # --- MODIFICATION ENDS HERE ---
 
