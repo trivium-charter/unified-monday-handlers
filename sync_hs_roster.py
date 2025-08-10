@@ -175,7 +175,15 @@ def sync_hs_roster_item(parent_item, dry_run=True):
             
             if dropdown_val and courses_val:
                 category = dropdown_val['text']
+                
+                # ========= NEW LOGIC STARTS HERE =========
                 target_plp_col_id = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get(category)
+                # If the specific category isn't found, try to find the 'Other' category
+                if not target_plp_col_id:
+                    print(f"    INFO: Category '{category}' not found. Attempting to use 'Other'.")
+                    target_plp_col_id = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get("Other")
+                # ========= NEW LOGIC ENDS HERE =========
+
                 if target_plp_col_id:
                     course_ids = get_linked_ids_from_connect_column_value(courses_val['value'])
                     if course_ids:
@@ -199,7 +207,7 @@ def sync_hs_roster_item(parent_item, dry_run=True):
     for col_id, courses in plp_updates.items():
         bulk_add_to_connect_column(plp_item_id, int(PLP_BOARD_ID), col_id, courses)
         time.sleep(1) # Respect API limits between updates
-
+        
 # ==============================================================================
 # SCRIPT EXECUTION
 # ==============================================================================
