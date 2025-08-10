@@ -418,14 +418,20 @@ def get_student_details_from_plp(plp_item_id):
         print(f"ERROR: Could not parse student details from Monday.com response for PLP {plp_item_id}: {e}")
         return None
 
-def manage_class_enrollment(plp_item_id, class_item_id, student_details):
+def manage_class_enrollment(action, plp_item_id, class_item_id, student_details, subitem_cols=None):
+    subitem_cols = subitem_cols or {}
+
     linked_canvas_item_ids = get_linked_items_from_board_relation(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
     all_courses_item_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)) or f"Item {class_item_id}"
     
     # If the class is not linked to the Canvas Board, it's a non-Canvas class.
     if not linked_canvas_item_ids:
-        print(f"INFO: '{all_courses_item_name}' is not a Canvas course. Logging only.")
-        create_subitem(plp_item_id, f"Added non-Canvas course '{all_courses_item_name}'")
+        if action == "enroll":
+            print(f"INFO: '{all_courses_item_name}' is not a Canvas course. Logging only.")
+            create_subitem(plp_item_id, f"Added non-Canvas course '{all_courses_item_name}'", subitem_cols)
+        # Unenrollment for non-canvas courses does nothing but log
+        elif action == "unenroll":
+            create_subitem(plp_item_id, f"Removed non-Canvas course '{all_courses_item_name}'", subitem_cols)
         return
         
     canvas_item_id = list(linked_canvas_item_ids)[0]
@@ -437,8 +443,8 @@ def manage_class_enrollment(plp_item_id, class_item_id, student_details):
     course_id_val = get_column_value(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_COURSE_ID_COLUMN_ID)
     canvas_course_id = course_id_val.get('text') if course_id_val else None
 
-    if not canvas_course_id:
-        print(f"INFO: No Canvas ID found on Monday item {canvas_item_id}. Creating course for '{class_name}'.")
+    if not canvas_course_id and action == "enroll":
+        print(f"INFO: No Canvas ID found on Monday item {canvas_item_id}. Attempting to create course for '{class_name}'.")
         new_course = create_canvas_course(class_name, CANVAS_TERM_ID)
         if new_course:
             canvas_course_id = new_course.id
@@ -446,30 +452,39 @@ def manage_class_enrollment(plp_item_id, class_item_id, student_details):
             if ALL_CLASSES_CANVAS_ID_COLUMN:
                 change_column_value_generic(int(ALL_COURSES_BOARD_ID), class_item_id, ALL_CLASSES_CANVAS_ID_COLUMN, str(canvas_course_id))
         else:
-            create_subitem(plp_item_id, f"Enrollment in {class_name}: Failed - Could not create Canvas course.")
+            create_subitem(plp_item_id, f"Enrollment in {class_name}: Failed - Could not create Canvas course.", subitem_cols)
             return
 
-    # Determine sections for enrollment
-    m_series_val = get_column_value(plp_item_id, int(PLP_BOARD_ID), PLP_M_SERIES_LABELS_COLUMN)
-    ag_grad_val = get_column_value(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_CLASSES_AG_GRAD_COLUMN)
-    m_series_text = m_series_val.get('text', "") if m_series_val else ""
-    ag_grad_text = ag_grad_val.get('text', "") if ag_grad_val else ""
-    
-    sections = {"A-G" for s in ["AG"] if s in ag_grad_text} | {"Grad" for s in ["Grad"] if s in ag_grad_text} | {"M-Series" for s in ["M-series"] if s in m_series_text}
-    if not sections: sections.add("All")
-    
-    enrollment_results = []
-    for section_name in sections:
-        section = create_section_if_not_exists(canvas_course_id, section_name)
-        if section:
-            result = enroll_or_create_and_enroll(canvas_course_id, section.id, student_details)
-            enrollment_results.append({'section': section_name, 'status': result})
+    if not canvas_course_id:
+        print(f"INFO: No Canvas Course ID available for '{class_name}' to perform action '{action}'. Skipping.")
+        return
 
-    if enrollment_results:
-        section_names = ", ".join([res['section'] for res in enrollment_results])
-        all_statuses = {res['status'] for res in enrollment_results}
-        final_status = "Failed" if "Failed" in all_statuses else "Success"
-        create_subitem(plp_item_id, f"Enrolled in {class_name} (Sections: {section_names}): {final_status}")
+    if action == "enroll":
+        m_series_val = get_column_value(plp_item_id, int(PLP_BOARD_ID), PLP_M_SERIES_LABELS_COLUMN)
+        ag_grad_val = get_column_value(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_CLASSES_AG_GRAD_COLUMN)
+        m_series_text = (m_series_val.get('text') or "") if m_series_val else ""
+        ag_grad_text = (ag_grad_val.get('text') or "") if ag_grad_val else ""
+        
+        sections = {"A-G" for s in ["AG"] if s in ag_grad_text} | {"Grad" for s in ["Grad"] if s in ag_grad_text} | {"M-Series" for s in ["M-series"] if s in m_series_text}
+        if not sections: sections.add("All")
+        
+        enrollment_results = []
+        for section_name in sections:
+            section = create_section_if_not_exists(canvas_course_id, section_name)
+            if section:
+                result = enroll_or_create_and_enroll(canvas_course_id, section.id, student_details)
+                enrollment_results.append({'section': section_name, 'status': result})
+
+        if enrollment_results:
+            section_names = ", ".join([res['section'] for res in enrollment_results])
+            all_statuses = {res['status'] for res in enrollment_results}
+            final_status = "Failed" if "Failed" in all_statuses else "Success"
+            subitem_title = f"Enrolled in {class_name} (Sections: {section_names}): {final_status}"
+            create_subitem(plp_item_id, subitem_title, subitem_cols)
+
+    elif action == "unenroll":
+        result = unenroll_student_from_course(canvas_course_id, student_details)
+        create_subitem(plp_item_id, f"Unenrolled from {class_name}: {'Success' if result else 'Failed'}", subitem_cols)
 
 # ==============================================================================
 # SCRIPT-SPECIFIC HELPER FUNCTIONS
