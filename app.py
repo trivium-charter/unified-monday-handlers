@@ -580,39 +580,41 @@ def get_student_details_from_plp(plp_item_id):
         print(f"ERROR: Could not parse student details from Monday.com response: {e}")
         return None
 
-def manage_class_enrollment(action, plp_item_id, class_item_id, student_details, subitem_cols=None):
+def manage_class_enrollment(action, plp_item_id, class_item_id, student_details, category_name, subitem_cols=None):
     subitem_cols = subitem_cols or {}
 
     linked_canvas_item_ids = get_linked_items_from_board_relation(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
+    all_courses_item_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)) or f"Item {class_item_id}"
+    
+    # If the class is not linked to the Canvas Board, it's a non-Canvas class.
     if not linked_canvas_item_ids:
-        all_courses_item_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)) or f"Item {class_item_id}"
-        print(f"INFO: Course '{all_courses_item_name}' is not linked to the Canvas Board. Skipping Canvas sync.")
+        if action == "enroll":
+            # MODIFIED: Use the category name in the subitem log
+            create_subitem(plp_item_id, f"Added {category_name} '{all_courses_item_name}'", subitem_cols)
+        elif action == "unenroll":
+            create_subitem(plp_item_id, f"Removed {category_name} '{all_courses_item_name}'", subitem_cols)
         return
         
     canvas_item_id = list(linked_canvas_item_ids)[0]
-
     class_name = get_item_name(canvas_item_id, int(CANVAS_BOARD_ID))
-        
     if not class_name:
-        print(f"ERROR: Linked item {canvas_item_id} on Canvas Board {CANVAS_BOARD_ID} has no name. Cannot create course. Aborting.")
+        print(f"ERROR: Linked item {canvas_item_id} on Canvas Board {CANVAS_BOARD_ID} has no name. Aborting.")
         return
 
-    canvas_course_id = None
     course_id_val = get_column_value(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_COURSE_ID_COLUMN_ID)
-    if course_id_val and course_id_val.get('text'):
-        canvas_course_id = course_id_val['text']
+    canvas_course_id = course_id_val.get('text') if course_id_val else None
 
     if not canvas_course_id and action == "enroll":
-        print(f"INFO: No Canvas ID found on linked Monday item {canvas_item_id}. Attempting to create course for '{class_name}'.")
+        print(f"INFO: No Canvas ID found on Monday item {canvas_item_id}. Attempting to create course for '{class_name}'.")
         new_course = create_canvas_course(class_name, CANVAS_TERM_ID)
         if new_course:
             canvas_course_id = new_course.id
-            print(f"INFO: New course created with ID: {canvas_course_id}. Updating Monday.com item {canvas_item_id} on board {CANVAS_BOARD_ID}.")
             change_column_value_generic(int(CANVAS_BOARD_ID), canvas_item_id, CANVAS_COURSE_ID_COLUMN_ID, str(canvas_course_id))
             if ALL_CLASSES_CANVAS_ID_COLUMN:
                 change_column_value_generic(int(ALL_COURSES_BOARD_ID), class_item_id, ALL_CLASSES_CANVAS_ID_COLUMN, str(canvas_course_id))
         else:
-            print(f"ERROR: Failed to create Canvas course for '{class_name}'. Aborting enrollment.")
+            # MODIFIED: Use the category name in the subitem log
+            create_subitem(plp_item_id, f"Added {category_name} '{class_name}': Failed - Could not create Canvas course.", subitem_cols)
             return
 
     if not canvas_course_id:
@@ -639,12 +641,14 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details,
             section_names = ", ".join([res['section'] for res in enrollment_results])
             all_statuses = {res['status'] for res in enrollment_results}
             final_status = "Failed" if "Failed" in all_statuses else "Success"
-            subitem_title = f"Enrolled in {class_name} (Sections: {section_names}): {final_status}"
+            # MODIFIED: Use the category name in the subitem log
+            subitem_title = f"Added {category_name} '{class_name}' (Sections: {section_names}): {final_status}"
             create_subitem(plp_item_id, subitem_title, subitem_cols)
 
     elif action == "unenroll":
         result = unenroll_student_from_course(canvas_course_id, student_details)
-        create_subitem(plp_item_id, f"Unenrolled from {class_name}: {'Success' if result else 'Failed'}", subitem_cols)
+        # MODIFIED: Use the category name in the subitem log
+        create_subitem(plp_item_id, f"Removed {category_name} '{class_name}': {'Success' if result else 'Failed'}", subitem_cols)
 
 @celery_app.task
 def process_canvas_full_sync_from_status(event_data):
