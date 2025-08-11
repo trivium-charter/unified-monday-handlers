@@ -2,33 +2,6 @@
 # ==============================================================================
 # ONE-TIME CLEANUP AND SYNC SCRIPT
 # ==============================================================================
-#
-# PURPOSE:
-# This script performs a full audit and synchronization for student data between
-# Monday.com and Canvas. It is designed to be run as a one-time process to
-# correct inconsistencies that may have occurred due to a high volume of
-# webhook failures.
-#
-# EXECUTION PHASES:
-# 1.  CLEANUP: It first identifies a specific user by name and deletes all
-#     subitems they created on the PLP board. This is intended to remove
-#     all incorrect, automatically-generated logs.
-# 2.  SYNC & RECREATE: It then iterates through every student on the PLP board
-#     and performs two main actions:
-#     a. Teacher Sync: It ensures the teachers assigned on the Master Student
-#        board are correctly synced to the corresponding PLP item and creates
-#        a new, clean subitem log for each assignment.
-#     b. Class Sync: It re-processes all class enrollments. For Canvas
-#        courses, it ensures the student is enrolled in the correct sections
-#        and creates a subitem documenting the success or failure. For
-#        non-Canvas classes, it creates a subitem simply logging the addition.
-#
-# USAGE:
-# Configure the DRY_RUN and TARGET_USER_NAME variables at the bottom of the
-# script before execution. Run with DRY_RUN = True first to verify the
-# script's intended actions without making any actual changes.
-#
-# ==============================================================================
 
 import os
 import json
@@ -38,14 +11,14 @@ from datetime import datetime
 import mysql.connector
 
 # ==============================================================================
-# CENTRALIZED CONFIGURATION (Copied from app.py)
+# CENTRALIZED CONFIGURATION
 # ==============================================================================
 MONDAY_API_KEY = os.environ.get("MONDAY_API_KEY")
 CANVAS_API_KEY = os.environ.get("CANVAS_API_KEY")
 CANVAS_API_URL = os.environ.get("CANVAS_API_URL")
 MONDAY_API_URL = "https://api.monday.com/v2"
 
-# New section for MySQL configuration
+# MySQL configuration
 DB_HOST = os.environ.get("DB_HOST")
 DB_USER = os.environ.get("DB_USER")
 DB_PASSWORD = os.environ.get("DB_PASSWORD")
@@ -59,11 +32,17 @@ PLP_CANVAS_SYNC_STATUS_VALUE = os.environ.get("PLP_CANVAS_SYNC_STATUS_VALUE", "D
 PLP_ALL_CLASSES_CONNECT_COLUMNS_STR = os.environ.get("PLP_ALL_CLASSES_CONNECT_COLUMNS_STR", "")
 PLP_TO_MASTER_STUDENT_CONNECT_COLUMN = os.environ.get("PLP_TO_MASTER_STUDENT_CONNECT_COLUMN")
 PLP_M_SERIES_LABELS_COLUMN = os.environ.get("PLP_M_SERIES_LABELS_COLUMN")
+PLP_SUBITEM_ENTRY_TYPE_COLUMN_ID = os.environ.get("PLP_SUBITEM_ENTRY_TYPE_COLUMN_ID")
+
 
 MASTER_STUDENT_BOARD_ID = os.environ.get("MASTER_STUDENT_BOARD_ID")
 MASTER_STUDENT_SSID_COLUMN = os.environ.get("MASTER_STUDENT_SSID_COLUMN")
 MASTER_STUDENT_EMAIL_COLUMN = os.environ.get("MASTER_STUDENT_EMAIL_COLUMN")
-MASTER_STUDENT_CANVAS_ID_COLUMN = "text_mktgs1ax"  # The student's custom Canvas ID
+MASTER_STUDENT_CANVAS_ID_COLUMN = "text_mktgs1ax"
+MASTER_STUDENT_ACE_PEOPLE_COLUMN_ID = os.environ.get("MASTER_STUDENT_ACE_PEOPLE_COLUMN_ID")
+MASTER_STUDENT_CONNECT_PEOPLE_COLUMN_ID = os.environ.get("MASTER_STUDENT_CONNECT_PEOPLE_COLUMN_ID")
+MASTER_STUDENT_TOR_COLUMN_ID = os.environ.get("MASTER_STUDENT_TOR_COLUMN_ID")
+
 
 ALL_COURSES_BOARD_ID = os.environ.get("ALL_COURSES_BOARD_ID")
 ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID = os.environ.get("ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID")
@@ -74,8 +53,8 @@ ALL_STAFF_BOARD_ID = os.environ.get("ALL_STAFF_BOARD_ID")
 ALL_STAFF_EMAIL_COLUMN_ID = os.environ.get("ALL_STAFF_EMAIL_COLUMN_ID")
 ALL_STAFF_SIS_ID_COLUMN_ID = os.environ.get("ALL_STAFF_SIS_ID_COLUMN_ID")
 ALL_STAFF_PERSON_COLUMN_ID = os.environ.get("ALL_STAFF_PERSON_COLUMN_ID")
-ALL_STAFF_CANVAS_ID_COLUMN = "text_mktg7h6"  # The teacher's custom Canvas ID
-ALL_STAFF_INTERNAL_ID_COLUMN = "text_mkthjxht"  # The teacher's internal Canvas ID
+ALL_STAFF_CANVAS_ID_COLUMN = "text_mktg7h6"
+ALL_STAFF_INTERNAL_ID_COLUMN = "text_mkthjxht"
 
 CANVAS_BOARD_ID = os.environ.get("CANVAS_BOARD_ID")
 CANVAS_COURSE_ID_COLUMN_ID = os.environ.get("CANVAS_COURSE_ID_COLUMN_ID")
@@ -84,7 +63,6 @@ CANVAS_TO_STAFF_CONNECT_COLUMN_ID = os.environ.get("CANVAS_TO_STAFF_CONNECT_COLU
 CANVAS_TERM_ID = os.environ.get("CANVAS_TERM_ID")
 CANVAS_SUBACCOUNT_ID = os.environ.get("CANVAS_SUBACCOUNT_ID")
 CANVAS_TEMPLATE_COURSE_ID = os.environ.get("CANVAS_TEMPLATE_COURSE_ID")
-PLP_SUBITEM_ENTRY_TYPE_COLUMN_ID=os.environ.get("PLP_SUBITEM_ENTRY_TYPE_COLUMN_ID")
 
 try:
     MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS = json.loads(os.environ.get("MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS", "{}"))
@@ -94,7 +72,7 @@ except (json.JSONDecodeError, TypeError):
     PLP_CATEGORY_TO_CONNECT_COLUMN_MAP = {}
 
 # ==============================================================================
-# MONDAY.COM UTILITIES (Copied from app.py)
+# MONDAY.COM UTILITIES
 # ==============================================================================
 MONDAY_HEADERS = {"Authorization": MONDAY_API_KEY, "Content-Type": "application/json", "API-Version": "2023-10"}
 
@@ -147,7 +125,6 @@ def get_column_value(item_id, board_id, column_id):
             column_list = result['data']['items'][0].get('column_values', [])
             if not column_list:
                 return None
-
             col_val = column_list[0]
             parsed_value = col_val.get('value')
             if isinstance(parsed_value, str):
@@ -155,7 +132,6 @@ def get_column_value(item_id, board_id, column_id):
                     parsed_value = json.loads(parsed_value)
                 except json.JSONDecodeError:
                     pass
-
             return {'value': parsed_value, 'text': col_val.get('text')}
         except (IndexError, KeyError):
             return None
@@ -236,7 +212,7 @@ def update_people_column(item_id, board_id, people_column_id, new_people_value, 
     return execute_monday_graphql(mutation) is not None
 
 # ==============================================================================
-# CANVAS UTILITIES (Copied from app.py)
+# CANVAS UTILITIES
 # ==============================================================================
 from canvasapi import Canvas
 from canvasapi.exceptions import CanvasException, Conflict, ResourceDoesNotExist
@@ -394,7 +370,7 @@ def enroll_or_create_and_enroll(course_id, section_id, student_details):
     return "Failed: User not found/created"
 
 # ==============================================================================
-# CORE LOGIC FUNCTIONS (Adapted from app.py)
+# CORE LOGIC FUNCTIONS
 # ==============================================================================
 
 def get_student_details_from_plp(plp_item_id):
@@ -455,7 +431,6 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details,
         if action == "enroll":
             create_subitem(plp_item_id, f"Added {category_name} '{all_courses_item_name}'", subitem_cols)
         elif action == "unenroll":
-            # Unenroll logic is not implemented in the provided code snippet
             create_subitem(plp_item_id, f"Removed {category_name} '{all_courses_item_name}'", subitem_cols)
         return
 
@@ -509,12 +484,7 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details,
             create_subitem(plp_item_id, subitem_title, subitem_cols)
 
     elif action == "unenroll":
-        # Unenroll logic is not implemented in the provided code snippet
         print("INFO: Unenrollment logic is not implemented. Skipping unenrollment.")
-
-# ==============================================================================
-# SCRIPT-SPECIFIC HELPER FUNCTIONS
-# ==============================================================================
 
 def get_all_board_items(board_id):
     """Fetches all item objects from a board, handling pagination."""
@@ -538,7 +508,6 @@ def get_all_board_items(board_id):
         try:
             page_info = result['data']['boards'][0]['items_page']
             all_items.extend(page_info['items'])
-
             cursor = page_info.get('cursor')
             if not cursor:
                 break
@@ -647,8 +616,8 @@ def sync_single_plp_item(plp_item_id, dry_run=True):
         return
 
     CANVAS_BOARD_CLASS_TYPE_COLUMN_ID = "status__1"
-    ACE_TEACHER_COLUMN_ID_ON_MASTER = "multiple_person_mks1wrfv"
-    CONNECT_TEACHER_COLUMN_ID_ON_MASTER = "multiple_person_mks11jeg"
+    ACE_TEACHER_COLUMN_ID_ON_MASTER = os.environ.get("MASTER_STUDENT_ACE_PEOPLE_COLUMN_ID")
+    CONNECT_TEACHER_COLUMN_ID_ON_MASTER = os.environ.get("MASTER_STUDENT_CONNECT_PEOPLE_COLUMN_ID")
 
     for class_item_id in all_class_ids:
         class_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)) or f"Item {class_item_id}"
@@ -739,35 +708,29 @@ if __name__ == '__main__':
 
     print("INFO: Attempting to connect to the database...")
     processed_ids = set()
-    # ...
-try:
-    # All code inside the try block MUST be indented
-    import mysql.connector
-    db = mysql.connector.connect(
-        host=DB_HOST,
-        user=DB_USER,
-        password=DB_PASSWORD,
-        database=DB_NAME,
-        port=int(DB_PORT),
-        ssl_ca='ca-certificate.crt' # Point to the downloaded file
-    )
-    print("INFO: Successfully connected to the database. Fetching processed IDs...")
-    cursor = db.cursor()
+    try:
+        db = mysql.connector.connect(
+            host=DB_HOST,
+            user=DB_USER,
+            password=DB_PASSWORD,
+            database=DB_NAME,
+            port=int(DB_PORT),
+            ssl_verify_cert=True
+        )
+        print("INFO: Successfully connected to the database. Fetching processed IDs...")
+        cursor = db.cursor()
 
-    # Fetch all student IDs that have already been processed
-    cursor.execute("SELECT student_id FROM processed_students")
-    processed_ids = {row[0] for row in cursor.fetchall()}
+        cursor.execute("SELECT student_id FROM processed_students")
+        processed_ids = {row[0] for row in cursor.fetchall()}
 
-    if processed_ids:
-        print(f"INFO: Found {len(processed_ids)} students in the database. They will be skipped.")
-    else:
-        print("INFO: No processed students found in the database. Starting from the beginning.")
+        if processed_ids:
+            print(f"INFO: Found {len(processed_ids)} students in the database. They will be skipped.")
+        else:
+            print("INFO: No processed students found in the database. Starting from the beginning.")
 
-except Exception as e:
-    # The except block also needs to be indented
-    print(f"FATAL: Database connection failed. Cannot proceed with resumable logic. Error: {e}")
-    exit()
-
+    except Exception as e:
+        print(f"FATAL: Database connection failed. Cannot proceed with resumable logic. Error: {e}")
+        exit()
 
     print("INFO: Finding creator ID from Monday.com...")
     creator_id = get_user_id(TARGET_USER_NAME)
@@ -794,7 +757,6 @@ except Exception as e:
             print(f"--- Phase 2: Syncing all data for PLP Item {item_id} ---")
             sync_single_plp_item(item_id, dry_run=DRY_RUN)
 
-            # Log the ID to the database upon successful completion
             if not DRY_RUN:
                 print(f"Logging item {item_id} as complete in the database.")
                 insert_query = "INSERT INTO processed_students (student_id) VALUES (%s)"
@@ -809,7 +771,6 @@ except Exception as e:
         if not DRY_RUN:
             time.sleep(2)
 
-    # Close the database connection when done
     cursor.close()
     db.close()
 
