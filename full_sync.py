@@ -310,11 +310,18 @@ def create_canvas_user(student_details):
 
 def update_user_ssid(user, new_ssid):
     try:
-        logins = user.get_logins()
+        # --- THIS BLOCK IS THE SECOND FIX ---
+        # It checks for both new and old versions of the canvasapi library method
+        if hasattr(user, 'list_logins'):
+            logins = user.list_logins()
+        else:
+            logins = user.get_logins()
+
         if logins:
             login_to_update = logins[0]
             login_to_update.edit(login={'sis_user_id': new_ssid})
             return True
+            
     except CanvasException as e:
         print(f"ERROR: API error updating SSID for user '{user.name}': {e}")
     return False
@@ -612,7 +619,7 @@ def sync_single_plp_item(plp_item_id, dry_run=True):
         print(f"ERROR: Could not find Master Student ID for PLP {plp_item_id}. Skipping.")
         return
 
-    ENTRY_TYPE_COLUMN_ID = "entry_type__1"
+    ENTRY_TYPE_COLUMN_ID = "your_entry_type_column_id"
     staff_change_values = {ENTRY_TYPE_COLUMN_ID: {"labels": ["Staff Change"]}}
     curriculum_change_values = {ENTRY_TYPE_COLUMN_ID: {"labels": ["Curriculum Change"]}}
 
@@ -660,7 +667,12 @@ def sync_single_plp_item(plp_item_id, dry_run=True):
         if linked_canvas_item_ids:
             canvas_item_id = list(linked_canvas_item_ids)[0]
             class_type_val = get_column_value(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_BOARD_CLASS_TYPE_COLUMN_ID)
-            class_type_text = class_type_val.get('text', '').lower() if class_type_val else ''
+            
+            # --- THIS BLOCK IS THE FIRST FIX ---
+            # It now safely handles cases where the class_type_val is None
+            class_type_text = ""
+            if class_type_val and class_type_val.get('text'):
+                class_type_text = class_type_val.get('text', '').lower()
             
             target_master_col_id = None
             if 'ace' in class_type_text: target_master_col_id = ACE_TEACHER_COLUMN_ID_ON_MASTER
@@ -670,7 +682,6 @@ def sync_single_plp_item(plp_item_id, dry_run=True):
                 teacher_person_value = get_teacher_person_value_from_canvas_board(canvas_item_id)
                 if teacher_person_value:
                     if not dry_run:
-                        # --- THIS LINE IS THE FIX ---
                         update_people_column(master_student_id, int(MASTER_STUDENT_BOARD_ID), target_master_col_id, teacher_person_value, "multiple-person")
                 else:
                     print(f"WARNING: Could not find a linked teacher on the Canvas Board for course '{class_name}'.")
