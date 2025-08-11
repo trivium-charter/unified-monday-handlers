@@ -1,17 +1,7 @@
 #!/usr/bin/env python3
 # ==============================================================================
-# ONE-TIME JUMPSTART & STUDY HALL ENROLLMENT SCRIPT
+# ONE-TIME JUMPSTART & STUDY HALL ENROLLMENT SCRIPT (Final Version)
 # ==============================================================================
-#
-# PURPOSE:
-# This script enrolls all students into Jumpstart and the appropriate Study Hall
-# based on a specific set of rules reading from the PLP and Master Student boards.
-#
-# USAGE:
-# Run this AFTER sync_hs_roster.py and BEFORE full_sync.py.
-#
-# ==============================================================================
-
 import os
 import json
 import requests
@@ -29,7 +19,6 @@ CANVAS_API_KEY = os.environ.get("CANVAS_API_KEY")
 CANVAS_API_URL = os.environ.get("CANVAS_API_URL")
 MONDAY_API_URL = "https://api.monday.com/v2"
 
-# --- BOARD AND COLUMN IDs ---
 PLP_BOARD_ID = os.environ.get("PLP_BOARD_ID")
 MASTER_STUDENT_BOARD_ID = os.environ.get("MASTER_STUDENT_BOARD_ID")
 ALL_COURSES_BOARD_ID = os.environ.get("ALL_COURSES_BOARD_ID")
@@ -40,23 +29,32 @@ PLP_ALL_CLASSES_CONNECT_COLUMNS_STR = os.environ.get("PLP_ALL_CLASSES_CONNECT_CO
 PLP_JUMPSTART_SH_CONNECT_COLUMN = "board_relation_mktqp08q"
 
 MASTER_STUDENT_TOR_COLUMN_ID = os.environ.get("MASTER_STUDENT_TOR_COLUMN_ID") 
-MASTER_STUDENT_GRADE_COLUMN_ID = "color_mksy8hcw"
-MASTER_STUDENT_SSID_COLUMN = os.environ.get("MASTER_STUDENT_SSID_COLUMN")
 MASTER_STUDENT_EMAIL_COLUMN = os.environ.get("MASTER_STUDENT_EMAIL_COLUMN")
+MASTER_STUDENT_SSID_COLUMN = os.environ.get("MASTER_STUDENT_SSID_COLUMN")
 MASTER_STUDENT_CANVAS_ID_COLUMN = "text_mktgs1ax"
 
 ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID = os.environ.get("ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID")
-CANVAS_COURSE_ID_COLUMN_ID = os.environ.get("CANVAS_COURSE_ID_COLUMN_ID")
 CANVAS_BOARD_STUDY_HALL_COLUMN_ID = "color_mktqgt0t"
 
-# --- CANVAS COURSE IDs ---
+# --- MONDAY.COM ITEM IDs for Special Courses ---
+# Using the exact IDs you provided for a direct lookup
+SPECIAL_COURSE_MONDAY_IDS = {
+    "Jumpstart": 9717398551,
+    "ACE Study Hall": 9717398779,
+    "Connect English Study Hall": 9717398717,
+    "Connect Math Study Hall": 9717398109,
+    "Prep Math and ELA Study Hall": 9717398063,
+    "EL Support Study Hall": 10046 # Assuming this might be needed
+}
+
+# --- CANVAS COURSE IDs for Enrollment ---
 SPECIAL_COURSE_CANVAS_IDS = {
     "Jumpstart": 10069,
     "ACE Study Hall": 10128,
     "Connect English Study Hall": 10109,
     "Connect Math Study Hall": 9966,
-    "EL Support Study Hall": 10046,
-    "Prep Math and ELA Study Hall": 9960
+    "Prep Math and ELA Study Hall": 9960,
+    "EL Support Study Hall": 10046
 }
 
 # ==============================================================================
@@ -118,11 +116,6 @@ def get_linked_ids_from_connect_column_value(value_data):
     except (json.JSONDecodeError, TypeError): pass
     return set()
 
-def get_people_ids_from_value(value_data):
-    if not value_data: return set()
-    persons_and_teams = value_data.get('personsAndTeams', [])
-    return {person['id'] for person in persons_and_teams if 'id' in person}
-
 def get_user_name(user_id):
     if user_id is None: return None
     query = f"query {{ users(ids: [{user_id}]) {{ name }} }}"
@@ -130,29 +123,6 @@ def get_user_name(user_id):
     if result and 'data' in result and result.get('data', {}).get('users'):
         return result['data']['users'][0].get('name')
     return None
-
-def find_all_courses_item_by_canvas_id(canvas_course_id):
-    query = f"""
-        query {{
-            items_page_by_column_values (board_id: {CANVAS_BOARD_ID}, limit: 1, columns: [{{column_id: "{CANVAS_COURSE_ID_COLUMN_ID}", column_values: ["{canvas_course_id}"]}}]) {{
-                items {{ id }}
-            }}
-        }}
-    """
-    result = execute_monday_graphql(query)
-    try:
-        canvas_item_id = result['data']['items_page_by_column_values']['items'][0]['id']
-        reverse_query = f"""
-            query {{
-                items_page_by_column_values (board_id: {ALL_COURSES_BOARD_ID}, limit: 1, columns: [{{column_id: "{ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID}", column_values: ["{{\\"linkedPulseIds\\":[{{\\"linkedPulseId\\":{canvas_item_id}}}]}}"]}}]) {{
-                    items {{ id }}
-                }}
-            }}
-        """
-        reverse_result = execute_monday_graphql(reverse_query)
-        return reverse_result['data']['items_page_by_column_values']['items'][0]['id']
-    except (TypeError, KeyError, IndexError):
-        return None
 
 def bulk_add_to_connect_column(item_id, board_id, connect_column_id, course_ids_to_add):
     query_current = f'query {{ items(ids:[{item_id}]) {{ column_values(ids:["{connect_column_id}"]) {{ value }} }} }}'
@@ -252,21 +222,6 @@ def enroll_student(canvas_course_id, section_name, student_details):
 # ==============================================================================
 # CORE SYNC LOGIC
 # ==============================================================================
-
-_all_courses_item_cache = {}
-def get_all_courses_item(course_name):
-    if course_name in _all_courses_item_cache:
-        return _all_courses_item_cache[course_name]
-    canvas_id = SPECIAL_COURSE_CANVAS_IDS.get(course_name)
-    if not canvas_id: return None
-    item_id = find_all_courses_item_by_canvas_id(canvas_id)
-    if item_id:
-        print(f"  INFO: Mapped course '{course_name}' to Monday.com item ID {item_id}")
-        _all_courses_item_cache[course_name] = item_id
-    else:
-        print(f"  WARNING: Could not find Monday.com item for course '{course_name}'")
-    return item_id
-
 def process_student_special_enrollments(plp_item, dry_run=True):
     plp_item_id = int(plp_item['id'])
     print(f"\n--- Processing Student: {plp_item['name']} (PLP ID: {plp_item_id}) ---")
@@ -282,12 +237,11 @@ def process_student_special_enrollments(plp_item, dry_run=True):
         return
     master_id = list(master_id_set)[0]
     
-    master_details_query = f'query {{ items(ids:[{master_id}]) {{ name column_values(ids:["{MASTER_STUDENT_TOR_COLUMN_ID}", "{MASTER_STUDENT_GRADE_COLUMN_ID}", "{MASTER_STUDENT_EMAIL_COLUMN}", "{MASTER_STUDENT_SSID_COLUMN}", "{MASTER_STUDENT_CANVAS_ID_COLUMN}"]) {{ id text value }} }} }}'
+    master_details_query = f'query {{ items(ids:[{master_id}]) {{ name column_values(ids:["{MASTER_STUDENT_TOR_COLUMN_ID}", "{MASTER_STUDENT_EMAIL_COLUMN}", "{MASTER_STUDENT_SSID_COLUMN}", "{MASTER_STUDENT_CANVAS_ID_COLUMN}"]) {{ id text value }} }} }}'
     master_result = execute_monday_graphql(master_details_query)
     
     tor_last_name = "Orientation"
     student_details = {}
-    grade = 0
     try:
         item_details = master_result['data']['items'][0]
         cols = {cv['id']: cv for cv in item_details['column_values']}
@@ -295,9 +249,6 @@ def process_student_special_enrollments(plp_item, dry_run=True):
         student_details['email'] = cols.get(MASTER_STUDENT_EMAIL_COLUMN, {}).get('text', '')
         student_details['ssid'] = cols.get(MASTER_STUDENT_SSID_COLUMN, {}).get('text', '')
         student_details['canvas_id'] = cols.get(MASTER_STUDENT_CANVAS_ID_COLUMN, {}).get('text', '')
-        grade_text = cols.get(MASTER_STUDENT_GRADE_COLUMN_ID, {}).get('text', '0')
-        grade_match = re.search(r'\d+', grade_text)
-        if grade_match: grade = int(grade_match.group())
         tor_val_str = cols.get(MASTER_STUDENT_TOR_COLUMN_ID, {}).get('value')
         if tor_val_str:
             tor_val_dict = json.loads(tor_val_str)
@@ -306,7 +257,7 @@ def process_student_special_enrollments(plp_item, dry_run=True):
                 tor_full_name = get_user_name(tor_id)
                 if tor_full_name: tor_last_name = tor_full_name.split()[-1]
     except (TypeError, KeyError, IndexError, AttributeError) as e:
-        print(f"  WARNING: Could not parse all details for master item {master_id}. Error: {e}")
+        print(f"  WARNING: Could not parse student details for master item {master_id}. Error: {e}")
         return
 
     plp_links_to_add = set()
@@ -317,7 +268,7 @@ def process_student_special_enrollments(plp_item, dry_run=True):
         print(f"  Processing Jumpstart enrollment, section: {tor_last_name}")
         if not dry_run:
             enroll_student(jumpstart_canvas_id, tor_last_name, student_details)
-        jumpstart_item_id = get_all_courses_item("Jumpstart")
+        jumpstart_item_id = SPECIAL_COURSE_MONDAY_IDS.get("Jumpstart")
         if jumpstart_item_id: plp_links_to_add.add(jumpstart_item_id)
 
     # 3. Process Study Hall
@@ -328,25 +279,30 @@ def process_student_special_enrollments(plp_item, dry_run=True):
         if column_data: all_regular_course_ids.update(get_linked_ids_from_connect_column_value(column_data.get('value')))
     
     target_sh_name = None
-    # --- THIS IS THE FIX ---
-    # Only run the search logic if the student has regular courses
     if all_regular_course_ids:
-        canvas_links_query = f'query {{ items(ids:{list(all_regular_course_ids)}) {{ linked_items(linked_board_ids:[{CANVAS_BOARD_ID}]) {{ id }} }} }}'
+        # Get all linked Canvas items for the student's regular courses
+        ids_str = ','.join(map(str, all_regular_course_ids))
+        canvas_links_query = f'query {{ items(ids:[{ids_str}]) {{ column_values(ids:["{ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID}"]) {{ value }} }} }}'
         canvas_links_result = execute_monday_graphql(canvas_links_query)
         
-        # Also safely check if the result is valid
+        all_canvas_item_ids = set()
         if canvas_links_result and canvas_links_result.get('data', {}).get('items'):
-            all_canvas_item_ids = {link['id'] for item in canvas_links_result['data']['items'] for link in item.get('linked_items', [])}
-            if all_canvas_item_ids:
-                sh_status_query = f'query {{ items(ids:{list(all_canvas_item_ids)}) {{ column_values(ids:["{CANVAS_BOARD_STUDY_HALL_COLUMN_ID}"]) {{ text }} }} }}'
-                sh_status_result = execute_monday_graphql(sh_status_query)
-                if sh_status_result and sh_status_result.get('data', {}).get('items'):
-                    for item in sh_status_result['data']['items']:
-                        if item.get('column_values'):
-                            sh_name = item['column_values'][0].get('text')
-                            if sh_name and sh_name in SPECIAL_COURSE_CANVAS_IDS:
-                                target_sh_name = sh_name
-                                break
+            for item in canvas_links_result['data']['items']:
+                if item.get('column_values'):
+                    all_canvas_item_ids.update(get_linked_ids_from_connect_column_value(item['column_values'][0].get('value')))
+        
+        if all_canvas_item_ids:
+            # Get the Study Hall status for all those canvas items at once
+            ids_str = ','.join(map(str, all_canvas_item_ids))
+            sh_status_query = f'query {{ items(ids:[{ids_str}]) {{ column_values(ids:["{CANVAS_BOARD_STUDY_HALL_COLUMN_ID}"]) {{ text }} }} }}'
+            sh_status_result = execute_monday_graphql(sh_status_query)
+            if sh_status_result and sh_status_result.get('data', {}).get('items'):
+                for item in sh_status_result['data']['items']:
+                    if item.get('column_values'):
+                        sh_name = item['column_values'][0].get('text')
+                        if sh_name and sh_name in SPECIAL_COURSE_CANVAS_IDS:
+                            target_sh_name = sh_name
+                            break
     
     if target_sh_name:
         target_sh_canvas_id = SPECIAL_COURSE_CANVAS_IDS.get(target_sh_name)
@@ -354,7 +310,7 @@ def process_student_special_enrollments(plp_item, dry_run=True):
             print(f"  Processing {target_sh_name} enrollment, section: General")
             if not dry_run:
                 enroll_student(target_sh_canvas_id, "General", student_details)
-            sh_item_id = get_all_courses_item(target_sh_name)
+            sh_item_id = SPECIAL_COURSE_MONDAY_IDS.get(target_sh_name)
             if sh_item_id: plp_links_to_add.add(sh_item_id)
     else:
         print("  INFO: No Study Hall enrollment rule matched.")
@@ -388,7 +344,7 @@ if __name__ == '__main__':
             import traceback
             traceback.print_exc()
         
-        if not DRY_RUN:
+        if not dry_run:
             time.sleep(2)
 
     print("\n======================================================")
