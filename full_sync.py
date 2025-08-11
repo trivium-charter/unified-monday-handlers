@@ -60,7 +60,7 @@ PLP_M_SERIES_LABELS_COLUMN = os.environ.get("PLP_M_SERIES_LABELS_COLUMN")
 MASTER_STUDENT_BOARD_ID = os.environ.get("MASTER_STUDENT_BOARD_ID")
 MASTER_STUDENT_SSID_COLUMN = os.environ.get("MASTER_STUDENT_SSID_COLUMN")
 MASTER_STUDENT_EMAIL_COLUMN = os.environ.get("MASTER_STUDENT_EMAIL_COLUMN")
-MASTER_STUDENT_CANVAS_ID_COLUMN = "text_mktgs1ax" # The student's custom Canvas ID
+MASTER_STUDENT_CANVAS_ID_COLUMN = "text_mktgs1ax"  # The student's custom Canvas ID
 
 ALL_COURSES_BOARD_ID = os.environ.get("ALL_COURSES_BOARD_ID")
 ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID = os.environ.get("ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID")
@@ -71,7 +71,7 @@ ALL_STAFF_BOARD_ID = os.environ.get("ALL_STAFF_BOARD_ID")
 ALL_STAFF_EMAIL_COLUMN_ID = os.environ.get("ALL_STAFF_EMAIL_COLUMN_ID")
 ALL_STAFF_SIS_ID_COLUMN_ID = os.environ.get("ALL_STAFF_SIS_ID_COLUMN_ID")
 ALL_STAFF_PERSON_COLUMN_ID = os.environ.get("ALL_STAFF_PERSON_COLUMN_ID")
-ALL_STAFF_CANVAS_ID_COLUMN = "text_mktg7h6"       # The teacher's custom Canvas ID
+ALL_STAFF_CANVAS_ID_COLUMN = "text_mktg7h6"  # The teacher's custom Canvas ID
 ALL_STAFF_INTERNAL_ID_COLUMN = "text_mkthjxht"  # The teacher's internal Canvas ID
 
 CANVAS_BOARD_ID = os.environ.get("CANVAS_BOARD_ID")
@@ -92,7 +92,7 @@ except (json.JSONDecodeError, TypeError):
 # ==============================================================================
 # MONDAY.COM UTILITIES (Copied from app.py)
 # ==============================================================================
-MONDAY_HEADERS = { "Authorization": MONDAY_API_KEY, "Content-Type": "application/json", "API-Version": "2023-10" }
+MONDAY_HEADERS = {"Authorization": MONDAY_API_KEY, "Content-Type": "application/json", "API-Version": "2023-10"}
 
 def execute_monday_graphql(query):
     try:
@@ -113,14 +113,15 @@ def get_item_name(item_id, board_id):
     return None
 
 def get_user_name(user_id):
-    if user_id is None or user_id == -4: return None
+    if user_id is None or user_id == -4:
+        return None
     query = f"query {{ users(ids: [{user_id}]) {{ name }} }}"
     result = execute_monday_graphql(query)
     if result and 'data' in result and result['data'].get('users'):
         return result['data']['users'][0].get('name')
     return None
 
-def get_column_value(item_id, board_id, column_id): # board_id is no longer used but kept for compatibility
+def get_column_value(item_id, board_id, column_id):  # board_id is no longer used but kept for compatibility
     if not item_id or not column_id:
         return None
     # This is the simplified query, proven to work by the debug script.
@@ -137,7 +138,7 @@ def get_column_value(item_id, board_id, column_id): # board_id is no longer used
     }}
     """
     result = execute_monday_graphql(query)
-    
+
     if result and result.get('data', {}).get('items'):
         try:
             # The path to the data is now simpler, matching the new query.
@@ -145,7 +146,7 @@ def get_column_value(item_id, board_id, column_id): # board_id is no longer used
             if not column_list:
                 # This happens if the column ID exists on the board but not on this specific item.
                 return None
-            
+
             col_val = column_list[0]
             parsed_value = col_val.get('value')
             if isinstance(parsed_value, str):
@@ -155,17 +156,18 @@ def get_column_value(item_id, board_id, column_id): # board_id is no longer used
                 except json.JSONDecodeError:
                     # If parsing fails, we leave it as the raw string.
                     pass
-            
+
             return {'value': parsed_value, 'text': col_val.get('text')}
         except (IndexError, KeyError):
             # This handles cases where the item exists but something is wrong with the column data structure.
             return None
     return None
+
 def delete_item(item_id):
     """Deletes an item or subitem."""
     mutation = f"mutation {{ delete_item (item_id: {item_id}) {{ id }} }}"
     return execute_monday_graphql(mutation)
-    
+
 def change_column_value_generic(board_id, item_id, column_id, value):
     graphql_value = json.dumps(str(value))
     mutation = f"""
@@ -177,7 +179,8 @@ def change_column_value_generic(board_id, item_id, column_id, value):
     return execute_monday_graphql(mutation) is not None
 
 def get_people_ids_from_value(value_data):
-    if not value_data: return set()
+    if not value_data:
+        return set()
     if isinstance(value_data, str):
         try:
             value_data = json.loads(value_data)
@@ -187,7 +190,8 @@ def get_people_ids_from_value(value_data):
     return {person['id'] for person in persons_and_teams if 'id' in person}
 
 def get_linked_ids_from_connect_column_value(value_data):
-    if not value_data: return set()
+    if not value_data:
+        return set()
     parsed_value = value_data if isinstance(value_data, dict) else json.loads(value_data) if isinstance(value_data, str) else {}
     if "linkedPulseIds" in parsed_value:
         return {int(item["linkedPulseId"]) for item in parsed_value["linkedPulseIds"] if "linkedPulseId" in item}
@@ -221,10 +225,10 @@ def update_people_column(item_id, board_id, people_column_id, new_people_value, 
 
     # Add the new person to the set of existing people
     current_people_ids.add(new_person_id)
-    
+
     # Prepare the final value for the API
     updated_people_list = [{"id": int(pid), "kind": "person"} for pid in current_people_ids]
-    
+
     # Based on the column type, format the final value correctly
     if target_column_type == "person":
         # A "person" column can only hold one person
@@ -237,7 +241,7 @@ def update_people_column(item_id, board_id, people_column_id, new_people_value, 
 
     graphql_value = json.dumps(json.dumps(final_value))
     mutation = f"mutation {{ change_column_value(board_id: {board_id}, item_id: {item_id}, column_id: \"{people_column_id}\", value: {graphql_value}) {{ id }} }}"
-    
+
     return execute_monday_graphql(mutation) is not None
 
 # ==============================================================================
@@ -255,7 +259,8 @@ def initialize_canvas_api():
 
 def find_canvas_user(student_details):
     canvas_api = initialize_canvas_api()
-    if not canvas_api: return None
+    if not canvas_api:
+        return None
 
     # Search by explicit Canvas ID first
     if student_details.get('canvas_id'):
@@ -277,7 +282,7 @@ def find_canvas_user(student_details):
             return canvas_api.get_user(student_details['ssid'], 'sis_user_id')
         except ResourceDoesNotExist:
             pass
-            
+
     # Fallback to broad search by email
     if student_details.get('email'):
         try:
@@ -286,13 +291,14 @@ def find_canvas_user(student_details):
             if len(users) == 1:
                 return users[0]
         except (ResourceDoesNotExist, CanvasException):
-             pass
+            pass
 
     return None
 
 def create_canvas_user(student_details):
     canvas_api = initialize_canvas_api()
-    if not canvas_api: return None
+    if not canvas_api:
+        return None
     try:
         account = canvas_api.get_account(1)
         user_payload = {
@@ -327,7 +333,7 @@ def update_user_ssid(user, new_ssid):
             login_to_update = logins[0]
             login_to_update.edit(login={'sis_user_id': new_ssid})
             return True
-            
+
     except CanvasException as e:
         print(f"ERROR: API error updating SSID for user '{user.name}': {e}")
     return False
@@ -364,7 +370,8 @@ def create_canvas_course(course_name, term_id):
 
 def create_section_if_not_exists(course_id, section_name):
     canvas_api = initialize_canvas_api()
-    if not canvas_api: return None
+    if not canvas_api:
+        return None
     try:
         course = canvas_api.get_course(course_id)
         for section in course.get_sections():
@@ -377,13 +384,15 @@ def create_section_if_not_exists(course_id, section_name):
 
 def enroll_student_in_section(course_id, user_id, section_id):
     canvas_api = initialize_canvas_api()
-    if not canvas_api: return "Failed: Canvas API not initialized"
+    if not canvas_api:
+        return "Failed: Canvas API not initialized"
     try:
         course = canvas_api.get_course(course_id)
         user = canvas_api.get_user(user_id)
         enrollment = course.enroll_user(user, 'StudentEnrollment', enrollment={'course_section_id': section_id, 'notify': False})
         return "Success"
-    except Conflict: return "Already Enrolled"
+    except Conflict:
+        return "Already Enrolled"
     except CanvasException as e:
         print(f"ERROR: Failed to enroll user {user_id} in section {section_id}. Details: {e}")
         return "Failed"
@@ -438,9 +447,9 @@ def get_student_details_from_plp(plp_item_id):
         details_result = execute_monday_graphql(details_query)
         item_details = details_result['data']['items'][0]
         student_name = item_details['name']
-        
+
         column_map = {cv['id']: cv.get('text') for cv in item_details.get('column_values', []) if isinstance(cv, dict)}
-        
+
         ssid = column_map.get(MASTER_STUDENT_SSID_COLUMN, '')
         email = column_map.get(MASTER_STUDENT_EMAIL_COLUMN, '')
         canvas_id = column_map.get(MASTER_STUDENT_CANVAS_ID_COLUMN, '')
@@ -496,10 +505,11 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details,
         ag_grad_val = get_column_value(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_CLASSES_AG_GRAD_COLUMN)
         m_series_text = (m_series_val.get('text') or "") if m_series_val else ""
         ag_grad_text = (ag_grad_val.get('text') or "") if ag_grad_val else ""
-        
+
         sections = {"A-G" for s in ["AG"] if s in ag_grad_text} | {"Grad" for s in ["Grad"] if s in ag_grad_text} | {"M-Series" for s in ["M-series"] if s in m_series_text}
-        if not sections: sections.add("All")
-        
+        if not sections:
+            sections.add("All")
+
         enrollment_results = []
         for section_name in sections:
             section = create_section_if_not_exists(canvas_course_id, section_name)
@@ -516,8 +526,8 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details,
             create_subitem(plp_item_id, subitem_title, subitem_cols)
 
     elif action == "unenroll":
-        result = unenroll_student_from_course(canvas_course_id, student_details)
-        create_subitem(plp_item_id, f"Removed {category_name} '{class_name}': {'Success' if result else 'Failed'}", subitem_cols)
+        # Unenroll logic is not implemented in the provided code snippet
+        print("INFO: Unenrollment logic is not implemented. Skipping unenrollment.")
 
 # ==============================================================================
 # SCRIPT-SPECIFIC HELPER FUNCTIONS
@@ -525,7 +535,7 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details,
 
 def get_all_board_items(board_id):
     """Fetches all item objects from a board, handling pagination."""
-    all_items = [] # Changed variable name for clarity
+    all_items = []  # Changed variable name for clarity
     cursor = None
     while True:
         cursor_str = f'cursor: "{cursor}"' if cursor else ""
@@ -541,16 +551,18 @@ def get_all_board_items(board_id):
             }}
         """
         result = execute_monday_graphql(query)
-        if not result or 'data' not in result: break
+        if not result or 'data' not in result:
+            break
         try:
             page_info = result['data']['boards'][0]['items_page']
-            
+
             # --- THIS LINE IS THE FIX ---
             # It now extends the list with the full item objects, not just their IDs
             all_items.extend(page_info['items'])
-            
+
             cursor = page_info.get('cursor')
-            if not cursor: break
+            if not cursor:
+                break
             print(f"Fetched {len(all_items)} items so far...")
         except (KeyError, IndexError):
             print("ERROR: Could not parse items from board response.")
@@ -576,7 +588,7 @@ def clear_subitems_by_creator(parent_item_id, creator_id_to_delete, dry_run=True
     if not creator_id_to_delete:
         print("ERROR: No creator ID provided. Skipping deletion.")
         return
-    
+
     query = f"""
         query {{
             items (ids: [{parent_item_id}]) {{
@@ -599,7 +611,7 @@ def clear_subitems_by_creator(parent_item_id, creator_id_to_delete, dry_run=True
         return
 
     print(f"INFO: Found {len(subitems_to_delete)} subitem(s) by creator {creator_id_to_delete} to delete for PLP item {parent_item_id}.")
-    
+
     if dry_run:
         print("DRY RUN: Would delete the subitems listed above.")
         return
@@ -625,7 +637,8 @@ def sync_single_plp_item(plp_item_id, dry_run=True):
         print(f"ERROR: Could not find Master Student ID for PLP {plp_item_id}. Skipping.")
         return
 
-    ENTRY_TYPE_COLUMN_ID = "your_entry_type_column_id"
+    # Using the corrected column ID from the user context
+    ENTRY_TYPE_COLUMN_ID = "entry_type__1"
     staff_change_values = {ENTRY_TYPE_COLUMN_ID: {"labels": ["Staff Change"]}}
     curriculum_change_values = {ENTRY_TYPE_COLUMN_ID: {"labels": ["Curriculum Change"]}}
 
@@ -669,21 +682,23 @@ def sync_single_plp_item(plp_item_id, dry_run=True):
             manage_class_enrollment("enroll", plp_item_id, class_item_id, student_details, category_name, subitem_cols=curriculum_change_values)
 
         linked_canvas_item_ids = get_linked_items_from_board_relation(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
-        
+
         if linked_canvas_item_ids:
             canvas_item_id = list(linked_canvas_item_ids)[0]
             class_type_val = get_column_value(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_BOARD_CLASS_TYPE_COLUMN_ID)
-            
+
             # --- THIS BLOCK IS THE FIRST FIX ---
             # It now safely handles cases where the class_type_val is None
             class_type_text = ""
             if class_type_val and class_type_val.get('text'):
                 class_type_text = class_type_val.get('text', '').lower()
-            
+
             target_master_col_id = None
-            if 'ace' in class_type_text: target_master_col_id = ACE_TEACHER_COLUMN_ID_ON_MASTER
-            elif 'connect' in class_type_text: target_master_col_id = CONNECT_TEACHER_COLUMN_ID_ON_MASTER
-            
+            if 'ace' in class_type_text:
+                target_master_col_id = ACE_TEACHER_COLUMN_ID_ON_MASTER
+            elif 'connect' in class_type_text:
+                target_master_col_id = CONNECT_TEACHER_COLUMN_ID_ON_MASTER
+
             if target_master_col_id:
                 teacher_person_value = get_teacher_person_value_from_canvas_board(canvas_item_id)
                 if teacher_person_value:
@@ -691,9 +706,10 @@ def sync_single_plp_item(plp_item_id, dry_run=True):
                         update_people_column(master_student_id, int(MASTER_STUDENT_BOARD_ID), target_master_col_id, teacher_person_value, "multiple-person")
                 else:
                     print(f"WARNING: Could not find a linked teacher on the Canvas Board for course '{class_name}'.")
-        
+
         if not dry_run:
             time.sleep(1)
+
 def get_teacher_person_value_from_canvas_board(canvas_item_id):
     """DEBUG version to find the teacher's 'Person' value."""
     print(f"\n--- DEBUG: Inside get_teacher_person_value_from_canvas_board ---")
@@ -703,7 +719,7 @@ def get_teacher_person_value_from_canvas_board(canvas_item_id):
     print(f"DEBUG: Looking on board [CANVAS_BOARD_ID: {CANVAS_BOARD_ID}] for item {canvas_item_id} using column [CANVAS_TO_STAFF_CONNECT_COLUMN_ID: {CANVAS_TO_STAFF_CONNECT_COLUMN_ID}]")
     linked_staff_ids = get_linked_items_from_board_relation(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_TO_STAFF_CONNECT_COLUMN_ID)
     print(f"DEBUG: Found linked_staff_ids: {linked_staff_ids}")
-    
+
     if not linked_staff_ids:
         print(f"DEBUG: No staff IDs found. Returning None.")
         print(f"--- END DEBUG ---")
@@ -716,28 +732,35 @@ def get_teacher_person_value_from_canvas_board(canvas_item_id):
     print(f"DEBUG: Looking on board [ALL_STAFF_BOARD_ID: {ALL_STAFF_BOARD_ID}] for item {staff_item_id} using column [ALL_STAFF_PERSON_COLUMN_ID: {ALL_STAFF_PERSON_COLUMN_ID}]")
     person_col_val = get_column_value(staff_item_id, int(ALL_STAFF_BOARD_ID), ALL_STAFF_PERSON_COLUMN_ID)
     print(f"DEBUG: Got person_col_val: {person_col_val}")
-    
+
     if not person_col_val:
         print(f"DEBUG: No person column value found. Returning None.")
         print(f"--- END DEBUG ---")
         return None
-        
+
     final_value = person_col_val.get('value')
     print(f"DEBUG: Final value to be returned: {final_value}")
     print(f"--- END DEBUG ---")
     return final_value
+
 # ==============================================================================
 # SCRIPT EXECUTION
 # ==============================================================================
 
 if __name__ == '__main__':
-    # ... (rest of the config)
+    # ---! CONFIGURATION !---
+    DRY_RUN = False
+    TARGET_USER_NAME = "Sarah Bruce"
+    # ---!  END CONFIG   !---
 
     print("======================================================")
     print("=== STARTING MONDAY.COM & CANVAS FULL SYNC SCRIPT ===")
     print("======================================================")
-
-    # ... (DRY_RUN message)
+    if DRY_RUN:
+        print("\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+        print("!!!            DRY RUN MODE IS ON                  !!!")
+        print("!!!  No actual changes will be made to your data.  !!!")
+        print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n")
 
     print("INFO: Attempting to connect to the database...")
     processed_ids = set()
@@ -752,22 +775,29 @@ if __name__ == '__main__':
         print("INFO: Successfully connected to the database. Fetching processed IDs...")
         cursor = db.cursor()
         
-        # ... (rest of the database code)
+        # Fetch all student IDs that have already been processed
+        cursor.execute("SELECT student_id FROM processed_students")
+        processed_ids = {row[0] for row in cursor.fetchall()}
+        
+        if processed_ids:
+            print(f"INFO: Found {len(processed_ids)} students in the database. They will be skipped.")
+        else:
+            print("INFO: No processed students found in the database. Starting from the beginning.")
 
     except Exception as e:
         print(f"FATAL: Database connection failed. Cannot proceed with resumable logic. Error: {e}")
         exit()
 
+    print("INFO: Finding creator ID from Monday.com...")
     creator_id = get_user_id(TARGET_USER_NAME)
     if not creator_id:
         print("\nFATAL: Halting script because target user could not be found.")
         exit()
         
-    print("INFO: Attempting to fetch all PLP board items from Monday.com...")
+    print("INFO: Creator ID found. Now fetching all PLP board items...")
     all_plp_items = get_all_board_items(PLP_BOARD_ID)
     print(f"INFO: Successfully fetched {len(all_plp_items)} items.")
 
-    all_plp_items = get_all_board_items(PLP_BOARD_ID)
     items_to_process = [item for item in all_plp_items if int(item['id']) not in processed_ids]
 
     total_to_process = len(items_to_process)
@@ -803,7 +833,5 @@ if __name__ == '__main__':
     db.close()
 
     print("\n======================================================")
-    print("=== SCRIPT FINISHED                                ===")
-    print("======================================================")
     print("=== SCRIPT FINISHED                                ===")
     print("======================================================")
