@@ -612,7 +612,7 @@ def sync_single_plp_item(plp_item_id, dry_run=True):
         print(f"ERROR: Could not find Master Student ID for PLP {plp_item_id}. Skipping.")
         return
 
-    ENTRY_TYPE_COLUMN_ID = "your_entry_type_column_id"
+    ENTRY_TYPE_COLUMN_ID = "entry_type__1"
     staff_change_values = {ENTRY_TYPE_COLUMN_ID: {"labels": ["Staff Change"]}}
     curriculum_change_values = {ENTRY_TYPE_COLUMN_ID: {"labels": ["Curriculum Change"]}}
 
