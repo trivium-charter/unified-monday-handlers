@@ -774,7 +774,7 @@ def process_master_student_person_sync_webhook(event_data):
     
     plp_item_id = list(plp_linked_ids)[0]
     
-    ENTRY_TYPE_COLUMN_ID = "your_entry_type_column_id"  # <-- REPLACE THIS
+    ENTRY_TYPE_COLUMN_ID = "entry_type__1"  # <-- REPLACE THIS
     staff_change_values = {ENTRY_TYPE_COLUMN_ID: {"labels": ["Staff Change"]}}
     
     col_name, changer, date = mappings.get("name", "Staff"), get_user_name(user_id) or "automation", datetime.now().strftime('%Y-%m-%d')
