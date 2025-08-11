@@ -44,6 +44,12 @@ CANVAS_API_KEY = os.environ.get("CANVAS_API_KEY")
 CANVAS_API_URL = os.environ.get("CANVAS_API_URL")
 MONDAY_API_URL = "https://api.monday.com/v2"
 
+# New section for MySQL configuration
+DB_HOST = os.environ.get("DB_HOST")
+DB_USER = os.environ.get("DB_USER")
+DB_PASSWORD = os.environ.get("DB_PASSWORD")
+DB_NAME = os.environ.get("DB_NAME")
+
 PLP_BOARD_ID = os.environ.get("PLP_BOARD_ID")
 PLP_CANVAS_SYNC_COLUMN_ID = os.environ.get("PLP_CANVAS_SYNC_COLUMN_ID")
 PLP_CANVAS_SYNC_STATUS_VALUE = os.environ.get("PLP_CANVAS_SYNC_STATUS_VALUE", "Done")
@@ -728,43 +734,50 @@ if __name__ == '__main__':
     # ---! CONFIGURATION !---
     DRY_RUN = False
     TARGET_USER_NAME = "Sarah Bruce"
-    LOG_FILE = "processed_students.log" 
-    # ---!  END CONFIG   !---
+    # ---! END CONFIG !---
 
     print("======================================================")
     print("=== STARTING MONDAY.COM & CANVAS FULL SYNC SCRIPT ===")
     print("======================================================")
     if DRY_RUN:
         print("\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
-        print("!!!               DRY RUN MODE IS ON               !!!")
+        print("!!!            DRY RUN MODE IS ON                  !!!")
         print("!!!  No actual changes will be made to your data.  !!!")
         print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n")
 
-    # --- Read already processed IDs from the log file ---
+    # --- Database connection and progress check ---
     processed_ids = set()
     try:
-        with open(LOG_FILE, "r") as f:
-            processed_ids = {int(line.strip()) for line in f}
-        if processed_ids:
-            print(f"INFO: Found {len(processed_ids)} students in the progress log. They will be skipped.")
-    except FileNotFoundError:
-        print("INFO: No progress log file found. Starting from the beginning.")
-    except ValueError:
-        print("WARNING: Could not read progress log. Starting from the beginning.")
-        processed_ids = set()
+        import mysql.connector
+        db = mysql.connector.connect(
+            host=DB_HOST,
+            user=DB_USER,
+            password=DB_PASSWORD,
+            database=DB_NAME
+        )
+        cursor = db.cursor()
 
-    # --- THIS LINE IS THE FIX ---
+        # Fetch all student IDs that have already been processed
+        cursor.execute("SELECT student_id FROM processed_students")
+        processed_ids = {row[0] for row in cursor.fetchall()}
+
+        if processed_ids:
+            print(f"INFO: Found {len(processed_ids)} students in the database. They will be skipped.")
+        else:
+            print("INFO: No processed students found in the database. Starting from the beginning.")
+
+    except Exception as e:
+        print(f"FATAL: Database connection failed. Cannot proceed with resumable logic. Error: {e}")
+        exit()
+
     creator_id = get_user_id(TARGET_USER_NAME)
     if not creator_id:
         print("\nFATAL: Halting script because target user could not be found.")
         exit()
-        
-    # This line tells the script to run on ALL students from the board
+
     all_plp_items = get_all_board_items(PLP_BOARD_ID)
-    
-    # Filter out students that have already been processed
     items_to_process = [item for item in all_plp_items if int(item['id']) not in processed_ids]
-    
+
     total_to_process = len(items_to_process)
     print(f"Found {len(all_plp_items)} total students. After filtering, {total_to_process} remain to be processed.")
 
@@ -778,20 +791,27 @@ if __name__ == '__main__':
             print(f"--- Phase 2: Syncing all data for PLP Item {item_id} ---")
             sync_single_plp_item(item_id, dry_run=DRY_RUN)
 
-            # Log the ID upon successful completion
+            # Log the ID to the database upon successful completion
             if not DRY_RUN:
-                with open(LOG_FILE, "a") as f:
-                    f.write(f"{item_id}\n")
-                print(f"SUCCESS: Logged item {item_id} as complete.")
+                print(f"Logging item {item_id} as complete in the database.")
+                insert_query = "INSERT INTO processed_students (student_id) VALUES (%s)"
+                cursor.execute(insert_query, (item_id,))
+                db.commit()
 
         except Exception as e:
             print(f"FATAL ERROR during processing for item {item_id}: {e}")
             import traceback
             traceback.print_exc()
-        
+
         if not DRY_RUN:
-            time.sleep(2) 
+            time.sleep(2)
+
+    # Close the database connection when done
+    cursor.close()
+    db.close()
 
     print("\n======================================================")
+    print("=== SCRIPT FINISHED                                ===")
+    print("======================================================")
     print("=== SCRIPT FINISHED                                ===")
     print("======================================================")
