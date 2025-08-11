@@ -739,7 +739,9 @@ if __name__ == '__main__':
 
     print("INFO: Attempting to connect to the database...")
     processed_ids = set()
-    try:
+    # ...
+try:
+    # All code inside the try block MUST be indented
     import mysql.connector
     db = mysql.connector.connect(
         host=DB_HOST,
@@ -752,18 +754,20 @@ if __name__ == '__main__':
     print("INFO: Successfully connected to the database. Fetching processed IDs...")
     cursor = db.cursor()
 
-        # Fetch all student IDs that have already been processed
-        cursor.execute("SELECT student_id FROM processed_students")
-        processed_ids = {row[0] for row in cursor.fetchall()}
+    # Fetch all student IDs that have already been processed
+    cursor.execute("SELECT student_id FROM processed_students")
+    processed_ids = {row[0] for row in cursor.fetchall()}
 
-        if processed_ids:
-            print(f"INFO: Found {len(processed_ids)} students in the database. They will be skipped.")
-        else:
-            print("INFO: No processed students found in the database. Starting from the beginning.")
+    if processed_ids:
+        print(f"INFO: Found {len(processed_ids)} students in the database. They will be skipped.")
+    else:
+        print("INFO: No processed students found in the database. Starting from the beginning.")
 
-    except Exception as e:
-        print(f"FATAL: Database connection failed. Cannot proceed with resumable logic. Error: {e}")
-        exit()
+except Exception as e:
+    # The except block also needs to be indented
+    print(f"FATAL: Database connection failed. Cannot proceed with resumable logic. Error: {e}")
+    exit()
+
 
     print("INFO: Finding creator ID from Monday.com...")
     creator_id = get_user_id(TARGET_USER_NAME)
