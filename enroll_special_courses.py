@@ -138,18 +138,32 @@ def get_user_name(user_id):
     return None
 
 def bulk_add_to_connect_column(item_id, board_id, connect_column_id, course_ids_to_add):
+    """Efficiently adds multiple items to a connect boards column."""
+    # First, get the currently linked items
     query_current = f'query {{ items(ids:[{item_id}]) {{ column_values(ids:["{connect_column_id}"]) {{ value }} }} }}'
     result = execute_monday_graphql(query_current)
     current_linked_items = set()
     try:
         col_val = result['data']['items'][0]['column_values']
-        if col_val: current_linked_items = get_linked_ids_from_connect_column_value(col_val[0]['value'])
-    except (TypeError, KeyError, IndexError): pass
+        if col_val and col_val[0] and col_val[0]['value']:
+            current_linked_items = get_linked_ids_from_connect_column_value(col_val[0]['value'])
+    except (TypeError, KeyError, IndexError):
+        pass
+        
+    # Add the new courses to the existing set
     updated_linked_items = current_linked_items.union(course_ids_to_add)
-    if updated_linked_items == current_linked_items: return True
+    
+    # If no change is needed, do nothing
+    if updated_linked_items == current_linked_items:
+        print(f"  INFO: Items already linked in column {connect_column_id}. No update needed.")
+        return True
+
+    # Prepare the value for the mutation
     connect_value = {"linkedPulseIds": [{"linkedPulseId": int(lid)} for lid in sorted(list(updated_linked_items))]}
     graphql_value = json.dumps(json.dumps(connect_value))
+    
     mutation = f'mutation {{ change_column_value (board_id: {board_id}, item_id: {item_id}, column_id: "{connect_column_id}", value: {graphql_value}) {{ id }} }}'
+    
     return execute_monday_graphql(mutation) is not None
 
 def initialize_canvas_api():
