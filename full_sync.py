@@ -9,6 +9,7 @@ import requests
 import time
 from datetime import datetime
 import mysql.connector
+from canvasapi import Canvas
 
 # ==============================================================================
 # CENTRALIZED CONFIGURATION
@@ -702,62 +703,57 @@ if __name__ == '__main__':
     print("======================================================")
     if DRY_RUN:
         print("\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
-        print("!!!            DRY RUN MODE IS ON                  !!!")
+        print("!!!           DRY RUN MODE IS ON                 !!!")
         print("!!!  No actual changes will be made to your data.  !!!")
         print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n")
 
-    print("INFO: Attempting to connect to the database...")
-    processed_ids = set()
+    db = None
+    cursor = None
     try:
-        # Define SSL options based on the environment variable
+        # --- Database Connection ---
+        print("INFO: Attempting to connect to the database...")
         ssl_opts = {
-            'ssl_ca': 'ca.pem',          # Path to your CA certificate
-            'ssl_verify_cert': True,
+            'ssl_ca': 'ca.pem',
+            'ssl_verify_cert': True
         }
-        
-        # Connect to the database using SSL
         db = mysql.connector.connect(
             host=DB_HOST,
             user=DB_USER,
             password=DB_PASSWORD,
             database=DB_NAME,
             port=int(DB_PORT),
-            **ssl_opts # Use the SSL options dictionary
+            **ssl_opts
         )
-    print("INFO: Successfully connected to the database. Fetching processed IDs...")
-    cursor = db.cursor()
-
+        print("INFO: Successfully connected to the database.")
+        
+        cursor = db.cursor()
+        print("INFO: Fetching previously processed students...")
         cursor.execute("SELECT student_id FROM processed_students")
         processed_ids = {row[0] for row in cursor.fetchall()}
-
+        
         if processed_ids:
             print(f"INFO: Found {len(processed_ids)} students in the database. They will be skipped.")
         else:
-            print("INFO: No processed students found in the database. Starting from the beginning.")
+            print("INFO: No processed students found in the database.")
 
-    except Exception as e:
-        print(f"FATAL: Database connection failed. Cannot proceed with resumable logic. Error: {e}")
-        exit()
+        # --- Main Processing Logic ---
+        print("INFO: Finding creator ID from Monday.com...")
+        creator_id = get_user_id(TARGET_USER_NAME)
+        if not creator_id:
+            raise Exception(f"Halting script because target user '{TARGET_USER_NAME}' could not be found.")
 
-    print("INFO: Finding creator ID from Monday.com...")
-    creator_id = get_user_id(TARGET_USER_NAME)
-    if not creator_id:
-        print("\nFATAL: Halting script because target user could not be found.")
-        exit()
+        print("INFO: Creator ID found. Now fetching all PLP board items...")
+        all_plp_items = get_all_board_items(PLP_BOARD_ID)
+        print(f"INFO: Successfully fetched {len(all_plp_items)} items.")
 
-    print("INFO: Creator ID found. Now fetching all PLP board items...")
-    all_plp_items = get_all_board_items(PLP_BOARD_ID)
-    print(f"INFO: Successfully fetched {len(all_plp_items)} items.")
+        items_to_process = [item for item in all_plp_items if int(item['id']) not in processed_ids]
+        total_to_process = len(items_to_process)
+        print(f"Found {len(all_plp_items)} total students. After filtering, {total_to_process} remain to be processed.")
 
-    items_to_process = [item for item in all_plp_items if int(item['id']) not in processed_ids]
-
-    total_to_process = len(items_to_process)
-    print(f"Found {len(all_plp_items)} total students. After filtering, {total_to_process} remain to be processed.")
-
-    for i, item in enumerate(items_to_process):
-        item_id = int(item['id'])
-        print(f"\n===== Processing Student {i + 1}/{total_to_process} (Item ID: {item_id}) =====")
-        try:
+        for i, item in enumerate(items_to_process):
+            item_id = int(item['id'])
+            print(f"\n===== Processing Student {i + 1}/{total_to_process} (Item ID: {item_id}) =====")
+            
             print(f"--- Phase 1: Deleting subitems created by '{TARGET_USER_NAME}' ---")
             clear_subitems_by_creator(item_id, creator_id, dry_run=DRY_RUN)
 
@@ -769,17 +765,23 @@ if __name__ == '__main__':
                 insert_query = "INSERT INTO processed_students (student_id) VALUES (%s)"
                 cursor.execute(insert_query, (item_id,))
                 db.commit()
+            
+            if not DRY_RUN:
+                time.sleep(2)
 
-        except Exception as e:
-            print(f"FATAL ERROR during processing for item {item_id}: {e}")
-            import traceback
-            traceback.print_exc()
-
-        if not DRY_RUN:
-            time.sleep(2)
-
-    cursor.close()
-    db.close()
+    except mysql.connector.Error as err:
+        print(f"FATAL: Database error. Cannot proceed. Error: {err}")
+    except Exception as e:
+        print(f"FATAL ERROR during script execution: {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        # --- Cleanup ---
+        if cursor:
+            cursor.close()
+        if db and db.is_connected():
+            db.close()
+            print("\nINFO: Database connection closed.")
 
     print("\n======================================================")
     print("=== SCRIPT FINISHED                                ===")
