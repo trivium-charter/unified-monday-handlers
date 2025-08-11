@@ -709,14 +709,20 @@ if __name__ == '__main__':
     print("INFO: Attempting to connect to the database...")
     processed_ids = set()
     try:
-    import mysql.connector
-    db = mysql.connector.connect(
-        host=DB_HOST,
-        user=DB_USER,
-        password=DB_PASSWORD,
-        database=DB_NAME,
-        port=int(DB_PORT),
-        ssl_mode='DISABLE'
+        # Define SSL options based on the environment variable
+        ssl_opts = {
+            'ssl_ca': 'ca.pem',          # Path to your CA certificate
+            'ssl_verify_cert': True,
+        }
+        
+        # Connect to the database using SSL
+        db = mysql.connector.connect(
+            host=DB_HOST,
+            user=DB_USER,
+            password=DB_PASSWORD,
+            database=DB_NAME,
+            port=int(DB_PORT),
+            **ssl_opts # Use the SSL options dictionary
     )
     print("INFO: Successfully connected to the database. Fetching processed IDs...")
     cursor = db.cursor()
