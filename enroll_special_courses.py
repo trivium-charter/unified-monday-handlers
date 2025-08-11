@@ -271,7 +271,7 @@ def process_student_special_enrollments(plp_item, dry_run=True):
     plp_item_id = int(plp_item['id'])
     print(f"\n--- Processing Student: {plp_item['name']} (PLP ID: {plp_item_id}) ---")
 
-    # 1. Gather Data (with added safety checks)
+    # 1. Gather Data
     master_link_val = get_column_value(plp_item_id, PLP_TO_MASTER_STUDENT_CONNECT_COLUMN)
     if not master_link_val:
         print("  SKIPPING: No Master Student item linked.")
@@ -286,11 +286,11 @@ def process_student_special_enrollments(plp_item, dry_run=True):
     master_result = execute_monday_graphql(master_details_query)
     
     tor_last_name = "Orientation"
-    grade = 0
     student_details = {}
     try:
         item_details = master_result['data']['items'][0]
         cols = {cv['id']: cv for cv in item_details['column_values']}
+        
         student_details['name'] = item_details.get('name', '')
         student_details['email'] = cols.get(MASTER_STUDENT_EMAIL_COLUMN, {}).get('text', '')
         student_details['ssid'] = cols.get(MASTER_STUDENT_SSID_COLUMN, {}).get('text', '')
@@ -300,17 +300,21 @@ def process_student_special_enrollments(plp_item, dry_run=True):
         grade_match = re.search(r'\d+', grade_text)
         if grade_match: grade = int(grade_match.group())
 
+        # --- THIS BLOCK IS THE FIX ---
+        # It now correctly handles the format for a single-person column
         tor_val = cols.get(MASTER_STUDENT_TOR_COLUMN_ID, {}).get('value')
         if tor_val:
-            tor_ids = get_people_ids_from_value(tor_val)
-            if tor_ids:
-                tor_id = list(tor_ids)[0]
+            # For a single-person column, the ID is directly in the 'id' or 'personId' key
+            tor_id = tor_val.get('id') or tor_val.get('personId')
+            if tor_id:
                 tor_full_name = get_user_name(tor_id)
                 if tor_full_name: tor_last_name = tor_full_name.split()[-1]
-    except (TypeError, KeyError, IndexError, AttributeError):
-        print(f"  WARNING: Could not parse all details for master item {master_id}.")
+        
+    except (TypeError, KeyError, IndexError, AttributeError) as e:
+        print(f"  WARNING: Could not parse all details for master item {master_id}. Error: {e}")
         return
 
+    # --- The rest of the function remains the same ---
     course_column_ids = [c.strip() for c in PLP_ALL_CLASSES_CONNECT_COLUMNS_STR.split(',') if c.strip()]
     all_regular_course_ids = set()
     for col_id in course_column_ids:
