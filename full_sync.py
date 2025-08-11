@@ -618,7 +618,18 @@ def sync_single_plp_item(plp_item_id, dry_run=True):
 
     if not dry_run:
         print("Syncing teacher assignments from Master Student board to PLP...")
-        # ... (This logic is correct and does not need to change) ...
+        for trigger_col, mapping in MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS.items():
+            master_person_val = get_column_value(master_student_id, int(MASTER_STUDENT_BOARD_ID), trigger_col)
+            plp_target_mapping = next((t for t in mapping["targets"] if str(t.get("board_id")) == str(PLP_BOARD_ID)), None)
+            if plp_target_mapping and master_person_val and master_person_val.get('value'):
+                update_people_column(plp_item_id, int(PLP_BOARD_ID), plp_target_mapping["target_column_id"], master_person_val['value'], plp_target_mapping["target_column_type"])
+                person_ids = get_people_ids_from_value(master_person_val['value'])
+                for person_id in person_ids:
+                    person_name = get_user_name(person_id)
+                    if person_name:
+                        log_message = f"{mapping.get('name', 'Staff')} set to {person_name}"
+                        create_subitem(plp_item_id, log_message, column_values=staff_change_values)
+                time.sleep(1)
 
     print("Syncing class enrollments and ACE/Connect teachers...")
     class_id_to_category_map = {}
@@ -644,16 +655,11 @@ def sync_single_plp_item(plp_item_id, dry_run=True):
         if not dry_run:
             manage_class_enrollment("enroll", plp_item_id, class_item_id, student_details, category_name, subitem_cols=curriculum_change_values)
 
-        # --- THIS LOGIC BLOCK IS THE FIX ---
         linked_canvas_item_ids = get_linked_items_from_board_relation(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
         
-        # Only proceed with ACE/Connect logic if the course is a Canvas course
         if linked_canvas_item_ids:
             canvas_item_id = list(linked_canvas_item_ids)[0]
-            
             class_type_val = get_column_value(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_BOARD_CLASS_TYPE_COLUMN_ID)
-            
-            # This check prevents the crash. If class_type_val is None, it safely continues.
             class_type_text = class_type_val.get('text', '').lower() if class_type_val else ''
             
             target_master_col_id = None
@@ -664,7 +670,8 @@ def sync_single_plp_item(plp_item_id, dry_run=True):
                 teacher_person_value = get_teacher_person_value_from_canvas_board(canvas_item_id)
                 if teacher_person_value:
                     if not dry_run:
-                        update_people_column(master_student_id, int(MASTER_STUDTUDENT_BOARD_ID), target_master_col_id, teacher_person_value, "multiple-person")
+                        # --- THIS LINE IS THE FIX ---
+                        update_people_column(master_student_id, int(MASTER_STUDENT_BOARD_ID), target_master_col_id, teacher_person_value, "multiple-person")
                 else:
                     print(f"WARNING: Could not find a linked teacher on the Canvas Board for course '{class_name}'.")
         
