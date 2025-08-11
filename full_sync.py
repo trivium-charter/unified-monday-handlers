@@ -709,16 +709,17 @@ if __name__ == '__main__':
     print("INFO: Attempting to connect to the database...")
     processed_ids = set()
     try:
-        db = mysql.connector.connect(
-            host=DB_HOST,
-            user=DB_USER,
-            password=DB_PASSWORD,
-            database=DB_NAME,
-            port=int(DB_PORT),
-            ssl_verify_cert=True
-        )
-        print("INFO: Successfully connected to the database. Fetching processed IDs...")
-        cursor = db.cursor()
+    import mysql.connector
+    db = mysql.connector.connect(
+        host=DB_HOST,
+        user=DB_USER,
+        password=DB_PASSWORD,
+        database=DB_NAME,
+        port=int(DB_PORT),
+        ssl_mode='DISABLE'
+    )
+    print("INFO: Successfully connected to the database. Fetching processed IDs...")
+    cursor = db.cursor()
 
         cursor.execute("SELECT student_id FROM processed_students")
         processed_ids = {row[0] for row in cursor.fetchall()}
