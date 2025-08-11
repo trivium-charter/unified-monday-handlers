@@ -240,20 +240,13 @@ def process_student_special_enrollments(plp_item, dry_run=True):
         return
     master_id = list(master_id_set)[0]
     
-    # --- THIS BLOCK IS THE FIX ---
-    # It now safely parses each value individually.
+    master_details_query = f'query {{ items(ids:[{master_id}]) {{ name column_values(ids:["{MASTER_STUDENT_TOR_COLUMN_ID}", "{MASTER_STUDENT_GRADE_COLUMN_ID}", "{MASTER_STUDENT_EMAIL_COLUMN}", "{MASTER_STUDENT_SSID_COLUMN}", "{MASTER_STUDENT_CANVAS_ID_COLUMN}"]) {{ id text value }} }} }}'
+    master_result = execute_monday_graphql(master_details_query)
+    
     tor_last_name = "Orientation"
     student_details = {}
     grade = 0
     
-    # --- NEW DEBUG LOGIC ---
-    print("  DEBUG: Fetching details from Master Student board...")
-    master_details_query = f'query {{ items(ids:[{master_id}]) {{ name column_values(ids:["{MASTER_STUDENT_TOR_COLUMN_ID}", "{MASTER_STUDENT_GRADE_COLUMN_ID}", "{MASTER_STUDENT_EMAIL_COLUMN}", "{MASTER_STUDENT_SSID_COLUMN}", "{MASTER_STUDENT_CANVAS_ID_COLUMN}"]) {{ id text value }} }} }}'
-    print(f"  DEBUG: Sending Query: {master_details_query}")
-    master_result = execute_monday_graphql(master_details_query)
-    print(f"  DEBUG: Received Response: {json.dumps(master_result, indent=2)}")
-    # --- END NEW DEBUG LOGIC ---
-
     if not master_result or not master_result.get('data', {}).get('items'):
         print(f"  WARNING: Could not fetch details for master item {master_id}.")
         return
@@ -273,9 +266,13 @@ def process_student_special_enrollments(plp_item, dry_run=True):
     tor_val_str = cols.get(MASTER_STUDENT_TOR_COLUMN_ID, {}).get('value')
     if tor_val_str:
         try:
+            # --- THIS BLOCK IS THE FIX ---
+            # It now correctly uses the get_people_ids_from_value helper, which is
+            # designed for the multiple-person column format the API is sending.
             tor_val_dict = json.loads(tor_val_str)
-            tor_id = tor_val_dict.get('id') or tor_val_dict.get('personId')
-            if tor_id:
+            tor_ids = get_people_ids_from_value(tor_val_dict)
+            if tor_ids:
+                tor_id = list(tor_ids)[0]
                 tor_full_name = get_user_name(tor_id)
                 if tor_full_name: tor_last_name = tor_full_name.split()[-1]
         except (json.JSONDecodeError, TypeError):
@@ -300,6 +297,7 @@ def process_student_special_enrollments(plp_item, dry_run=True):
         if column_data: all_regular_course_ids.update(get_linked_ids_from_connect_column_value(column_data.get('value')))
     
     target_sh_name = None
+    sh_section_name = None
     if all_regular_course_ids:
         ids_str = ','.join(map(str, all_regular_course_ids))
         canvas_links_query = f'query {{ items(ids:[{ids_str}]) {{ id name column_values(ids:["{ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID}"]) {{ value }} }} }}'
