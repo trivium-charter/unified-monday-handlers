@@ -243,12 +243,9 @@ def process_student_special_enrollments(plp_item, dry_run=True):
     master_details_query = f'query {{ items(ids:[{master_id}]) {{ name column_values(ids:["{MASTER_STUDENT_TOR_COLUMN_ID}", "{MASTER_STUDENT_GRADE_COLUMN_ID}", "{MASTER_STUDENT_EMAIL_COLUMN}", "{MASTER_STUDENT_SSID_COLUMN}", "{MASTER_STUDENT_CANVAS_ID_COLUMN}"]) {{ id text value }} }} }}'
     master_result = execute_monday_graphql(master_details_query)
     
-    # --- THIS BLOCK IS THE FIX ---
-    # It now parses each value safely and individually.
     tor_last_name = "Orientation"
-    grade = 0
     student_details = {}
-    
+    grade = 0
     if not master_result or not master_result.get('data', {}).get('items'):
         print(f"  WARNING: Could not fetch details for master item {master_id}.")
         return
@@ -275,7 +272,9 @@ def process_student_special_enrollments(plp_item, dry_run=True):
                 if tor_full_name: tor_last_name = tor_full_name.split()[-1]
         except (json.JSONDecodeError, TypeError):
             print(f"  WARNING: Could not parse TOR value for master item {master_id}.")
-    # --- END FIX ---
+    
+    # --- THIS LINE IS THE FIX ---
+    plp_links_to_add = set()
 
     # 2. Process Jumpstart
     jumpstart_canvas_id = SPECIAL_COURSE_CANVAS_IDS.get("Jumpstart")
@@ -295,7 +294,6 @@ def process_student_special_enrollments(plp_item, dry_run=True):
     
     target_sh_name = None
     if all_regular_course_ids:
-        # Get all linked Canvas items for the student's regular courses
         ids_str = ','.join(map(str, all_regular_course_ids))
         canvas_links_query = f'query {{ items(ids:[{ids_str}]) {{ column_values(ids:["{ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID}"]) {{ value }} }} }}'
         canvas_links_result = execute_monday_graphql(canvas_links_query)
@@ -307,7 +305,6 @@ def process_student_special_enrollments(plp_item, dry_run=True):
                     all_canvas_item_ids.update(get_linked_ids_from_connect_column_value(item['column_values'][0].get('value')))
         
         if all_canvas_item_ids:
-            # Get the Study Hall status for all those canvas items at once
             ids_str = ','.join(map(str, all_canvas_item_ids))
             sh_status_query = f'query {{ items(ids:[{ids_str}]) {{ column_values(ids:["{CANVAS_BOARD_STUDY_HALL_COLUMN_ID}"]) {{ text }} }} }}'
             sh_status_result = execute_monday_graphql(sh_status_query)
