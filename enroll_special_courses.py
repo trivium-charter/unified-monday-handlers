@@ -240,12 +240,20 @@ def process_student_special_enrollments(plp_item, dry_run=True):
         return
     master_id = list(master_id_set)[0]
     
-    master_details_query = f'query {{ items(ids:[{master_id}]) {{ name column_values(ids:["{MASTER_STUDENT_TOR_COLUMN_ID}", "{MASTER_STUDENT_GRADE_COLUMN_ID}", "{MASTER_STUDENT_EMAIL_COLUMN}", "{MASTER_STUDENT_SSID_COLUMN}", "{MASTER_STUDENT_CANVAS_ID_COLUMN}"]) {{ id text value }} }} }}'
-    master_result = execute_monday_graphql(master_details_query)
-    
+    # --- THIS BLOCK IS THE FIX ---
+    # It now safely parses each value individually.
     tor_last_name = "Orientation"
     student_details = {}
+    grade = 0
     
+    # --- NEW DEBUG LOGIC ---
+    print("  DEBUG: Fetching details from Master Student board...")
+    master_details_query = f'query {{ items(ids:[{master_id}]) {{ name column_values(ids:["{MASTER_STUDENT_TOR_COLUMN_ID}", "{MASTER_STUDENT_GRADE_COLUMN_ID}", "{MASTER_STUDENT_EMAIL_COLUMN}", "{MASTER_STUDENT_SSID_COLUMN}", "{MASTER_STUDENT_CANVAS_ID_COLUMN}"]) {{ id text value }} }} }}'
+    print(f"  DEBUG: Sending Query: {master_details_query}")
+    master_result = execute_monday_graphql(master_details_query)
+    print(f"  DEBUG: Received Response: {json.dumps(master_result, indent=2)}")
+    # --- END NEW DEBUG LOGIC ---
+
     if not master_result or not master_result.get('data', {}).get('items'):
         print(f"  WARNING: Could not fetch details for master item {master_id}.")
         return
@@ -257,6 +265,10 @@ def process_student_special_enrollments(plp_item, dry_run=True):
     student_details['email'] = cols.get(MASTER_STUDENT_EMAIL_COLUMN, {}).get('text', '')
     student_details['ssid'] = cols.get(MASTER_STUDENT_SSID_COLUMN, {}).get('text', '')
     student_details['canvas_id'] = cols.get(MASTER_STUDENT_CANVAS_ID_COLUMN, {}).get('text', '')
+
+    grade_text = cols.get(MASTER_STUDENT_GRADE_COLUMN_ID, {}).get('text', '0')
+    grade_match = re.search(r'\d+', grade_text)
+    if grade_match: grade = int(grade_match.group())
 
     tor_val_str = cols.get(MASTER_STUDENT_TOR_COLUMN_ID, {}).get('value')
     if tor_val_str:
@@ -288,9 +300,7 @@ def process_student_special_enrollments(plp_item, dry_run=True):
         if column_data: all_regular_course_ids.update(get_linked_ids_from_connect_column_value(column_data.get('value')))
     
     target_sh_name = None
-    sh_section_name = None # This will hold the triggering course name
     if all_regular_course_ids:
-        # Get all linked Canvas items and their original course names
         ids_str = ','.join(map(str, all_regular_course_ids))
         canvas_links_query = f'query {{ items(ids:[{ids_str}]) {{ id name column_values(ids:["{ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID}"]) {{ value }} }} }}'
         canvas_links_result = execute_monday_graphql(canvas_links_query)
@@ -314,7 +324,7 @@ def process_student_special_enrollments(plp_item, dry_run=True):
                         sh_name = item['column_values'][0].get('text')
                         if sh_name and sh_name in SPECIAL_COURSE_CANVAS_IDS:
                             target_sh_name = sh_name
-                            sh_section_name = canvas_id_to_course_name_map.get(item['id'], "General") # Use course name for section
+                            sh_section_name = canvas_id_to_course_name_map.get(item['id'], "General")
                             break
     
     if target_sh_name:
@@ -333,7 +343,6 @@ def process_student_special_enrollments(plp_item, dry_run=True):
         print(f"  Action: Linking {len(plp_links_to_add)} courses to PLP column {PLP_JUMPSTART_SH_CONNECT_COLUMN}.")
         if not dry_run:
             bulk_add_to_connect_column(plp_item_id, int(PLP_BOARD_ID), PLP_JUMPSTART_SH_CONNECT_COLUMN, plp_links_to_add)
-
 # ==============================================================================
 # SCRIPT EXECUTION
 # ==============================================================================
