@@ -245,7 +245,7 @@ def process_student_special_enrollments(plp_item, dry_run=True):
     
     tor_last_name = "Orientation"
     student_details = {}
-    grade = 0
+    
     if not master_result or not master_result.get('data', {}).get('items'):
         print(f"  WARNING: Could not fetch details for master item {master_id}.")
         return
@@ -258,10 +258,6 @@ def process_student_special_enrollments(plp_item, dry_run=True):
     student_details['ssid'] = cols.get(MASTER_STUDENT_SSID_COLUMN, {}).get('text', '')
     student_details['canvas_id'] = cols.get(MASTER_STUDENT_CANVAS_ID_COLUMN, {}).get('text', '')
 
-    grade_text = cols.get(MASTER_STUDENT_GRADE_COLUMN_ID, {}).get('text', '0')
-    grade_match = re.search(r'\d+', grade_text)
-    if grade_match: grade = int(grade_match.group())
-
     tor_val_str = cols.get(MASTER_STUDENT_TOR_COLUMN_ID, {}).get('value')
     if tor_val_str:
         try:
@@ -273,7 +269,6 @@ def process_student_special_enrollments(plp_item, dry_run=True):
         except (json.JSONDecodeError, TypeError):
             print(f"  WARNING: Could not parse TOR value for master item {master_id}.")
     
-    # --- THIS LINE IS THE FIX ---
     plp_links_to_add = set()
 
     # 2. Process Jumpstart
@@ -293,20 +288,25 @@ def process_student_special_enrollments(plp_item, dry_run=True):
         if column_data: all_regular_course_ids.update(get_linked_ids_from_connect_column_value(column_data.get('value')))
     
     target_sh_name = None
+    sh_section_name = None # This will hold the triggering course name
     if all_regular_course_ids:
+        # Get all linked Canvas items and their original course names
         ids_str = ','.join(map(str, all_regular_course_ids))
-        canvas_links_query = f'query {{ items(ids:[{ids_str}]) {{ column_values(ids:["{ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID}"]) {{ value }} }} }}'
+        canvas_links_query = f'query {{ items(ids:[{ids_str}]) {{ id name column_values(ids:["{ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID}"]) {{ value }} }} }}'
         canvas_links_result = execute_monday_graphql(canvas_links_query)
         
-        all_canvas_item_ids = set()
+        canvas_id_to_course_name_map = {}
         if canvas_links_result and canvas_links_result.get('data', {}).get('items'):
             for item in canvas_links_result['data']['items']:
                 if item.get('column_values'):
-                    all_canvas_item_ids.update(get_linked_ids_from_connect_column_value(item['column_values'][0].get('value')))
-        
+                    canvas_ids = get_linked_ids_from_connect_column_value(item['column_values'][0].get('value'))
+                    for cid in canvas_ids:
+                        canvas_id_to_course_name_map[cid] = item.get('name')
+
+        all_canvas_item_ids = set(canvas_id_to_course_name_map.keys())
         if all_canvas_item_ids:
             ids_str = ','.join(map(str, all_canvas_item_ids))
-            sh_status_query = f'query {{ items(ids:[{ids_str}]) {{ column_values(ids:["{CANVAS_BOARD_STUDY_HALL_COLUMN_ID}"]) {{ text }} }} }}'
+            sh_status_query = f'query {{ items(ids:[{ids_str}]) {{ id column_values(ids:["{CANVAS_BOARD_STUDY_HALL_COLUMN_ID}"]) {{ text }} }} }}'
             sh_status_result = execute_monday_graphql(sh_status_query)
             if sh_status_result and sh_status_result.get('data', {}).get('items'):
                 for item in sh_status_result['data']['items']:
@@ -314,14 +314,15 @@ def process_student_special_enrollments(plp_item, dry_run=True):
                         sh_name = item['column_values'][0].get('text')
                         if sh_name and sh_name in SPECIAL_COURSE_CANVAS_IDS:
                             target_sh_name = sh_name
+                            sh_section_name = canvas_id_to_course_name_map.get(item['id'], "General") # Use course name for section
                             break
     
     if target_sh_name:
         target_sh_canvas_id = SPECIAL_COURSE_CANVAS_IDS.get(target_sh_name)
         if target_sh_canvas_id:
-            print(f"  Processing {target_sh_name} enrollment, section: General")
+            print(f"  Processing {target_sh_name} enrollment, section: {sh_section_name}")
             if not dry_run:
-                enroll_student(target_sh_canvas_id, "General", student_details)
+                enroll_student(target_sh_canvas_id, sh_section_name, student_details)
             sh_item_id = SPECIAL_COURSE_MONDAY_IDS.get(target_sh_name)
             if sh_item_id: plp_links_to_add.add(sh_item_id)
     else:
