@@ -33,15 +33,24 @@ MASTER_STUDENT_TOR_COLUMN_ID = os.environ.get("MASTER_STUDENT_TOR_COLUMN_ID")
 MASTER_STUDENT_EMAIL_COLUMN = os.environ.get("MASTER_STUDENT_EMAIL_COLUMN")
 MASTER_STUDENT_SSID_COLUMN = os.environ.get("MASTER_STUDENT_SSID_COLUMN")
 MASTER_STUDENT_CANVAS_ID_COLUMN = "text_mktgs1ax"
-
-# --- THIS LINE WAS MISSING ---
 MASTER_STUDENT_GRADE_COLUMN_ID = "color_mksy8hcw"
 
 ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID = os.environ.get("ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID")
 CANVAS_COURSE_ID_COLUMN_ID = os.environ.get("CANVAS_COURSE_ID_COLUMN_ID")
 CANVAS_BOARD_STUDY_HALL_COLUMN_ID = "color_mktqgt0t"
 
-# --- CANVAS COURSE IDs ---
+# --- MONDAY.COM ITEM IDs for Special Courses ---
+# This dictionary was missing
+SPECIAL_COURSE_MONDAY_IDS = {
+    "Jumpstart": 9717398551,
+    "ACE Study Hall": 9717398779,
+    "Connect English Study Hall": 9717398717,
+    "Connect Math Study Hall": 9717398109,
+    "Prep Math and ELA Study Hall": 9717398063,
+    "EL Support Study Hall": 10046 # As on your screenshot, using Canvas ID as placeholder
+}
+
+# --- CANVAS COURSE IDs for Enrollment ---
 SPECIAL_COURSE_CANVAS_IDS = {
     "Jumpstart": 10069,
     "ACE Study Hall": 10128,
