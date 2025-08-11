@@ -228,39 +228,51 @@ def process_student_special_enrollments(plp_item, dry_run=True):
 
     # 1. Gather Data
     master_link_val = get_column_value(plp_item_id, PLP_TO_MASTER_STUDENT_CONNECT_COLUMN)
-    if not master_link_val:
+    if not master_link_val or not master_link_val.get('value'):
         print("  SKIPPING: No Master Student item linked.")
         return
-    master_id_set = get_linked_ids_from_connect_column_value(master_link_val.get('value'))
+    master_id_set = get_linked_ids_from_connect_column_value(master_link_val['value'])
     if not master_id_set:
         print("  SKIPPING: No Master Student item linked.")
         return
     master_id = list(master_id_set)[0]
     
-    master_details_query = f'query {{ items(ids:[{master_id}]) {{ name column_values(ids:["{MASTER_STUDENT_TOR_COLUMN_ID}", "{MASTER_STUDENT_EMAIL_COLUMN}", "{MASTER_STUDENT_SSID_COLUMN}", "{MASTER_STUDENT_CANVAS_ID_COLUMN}"]) {{ id text value }} }} }}'
+    master_details_query = f'query {{ items(ids:[{master_id}]) {{ name column_values(ids:["{MASTER_STUDENT_TOR_COLUMN_ID}", "{MASTER_STUDENT_GRADE_COLUMN_ID}", "{MASTER_STUDENT_EMAIL_COLUMN}", "{MASTER_STUDENT_SSID_COLUMN}", "{MASTER_STUDENT_CANVAS_ID_COLUMN}"]) {{ id text value }} }} }}'
     master_result = execute_monday_graphql(master_details_query)
     
+    # --- THIS BLOCK IS THE FIX ---
+    # It now parses each value safely and individually.
     tor_last_name = "Orientation"
+    grade = 0
     student_details = {}
-    try:
-        item_details = master_result['data']['items'][0]
-        cols = {cv['id']: cv for cv in item_details['column_values']}
-        student_details['name'] = item_details.get('name', '')
-        student_details['email'] = cols.get(MASTER_STUDENT_EMAIL_COLUMN, {}).get('text', '')
-        student_details['ssid'] = cols.get(MASTER_STUDENT_SSID_COLUMN, {}).get('text', '')
-        student_details['canvas_id'] = cols.get(MASTER_STUDENT_CANVAS_ID_COLUMN, {}).get('text', '')
-        tor_val_str = cols.get(MASTER_STUDENT_TOR_COLUMN_ID, {}).get('value')
-        if tor_val_str:
+    
+    if not master_result or not master_result.get('data', {}).get('items'):
+        print(f"  WARNING: Could not fetch details for master item {master_id}.")
+        return
+
+    item_details = master_result['data']['items'][0]
+    cols = {cv['id']: cv for cv in item_details.get('column_values', [])}
+    
+    student_details['name'] = item_details.get('name', '')
+    student_details['email'] = cols.get(MASTER_STUDENT_EMAIL_COLUMN, {}).get('text', '')
+    student_details['ssid'] = cols.get(MASTER_STUDENT_SSID_COLUMN, {}).get('text', '')
+    student_details['canvas_id'] = cols.get(MASTER_STUDENT_CANVAS_ID_COLUMN, {}).get('text', '')
+
+    grade_text = cols.get(MASTER_STUDENT_GRADE_COLUMN_ID, {}).get('text', '0')
+    grade_match = re.search(r'\d+', grade_text)
+    if grade_match: grade = int(grade_match.group())
+
+    tor_val_str = cols.get(MASTER_STUDENT_TOR_COLUMN_ID, {}).get('value')
+    if tor_val_str:
+        try:
             tor_val_dict = json.loads(tor_val_str)
             tor_id = tor_val_dict.get('id') or tor_val_dict.get('personId')
             if tor_id:
                 tor_full_name = get_user_name(tor_id)
                 if tor_full_name: tor_last_name = tor_full_name.split()[-1]
-    except (TypeError, KeyError, IndexError, AttributeError) as e:
-        print(f"  WARNING: Could not parse student details for master item {master_id}. Error: {e}")
-        return
-
-    plp_links_to_add = set()
+        except (json.JSONDecodeError, TypeError):
+            print(f"  WARNING: Could not parse TOR value for master item {master_id}.")
+    # --- END FIX ---
 
     # 2. Process Jumpstart
     jumpstart_canvas_id = SPECIAL_COURSE_CANVAS_IDS.get("Jumpstart")
