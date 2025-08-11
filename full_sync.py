@@ -35,6 +35,7 @@ import json
 import requests
 import time
 from datetime import datetime
+import mysql.connector
 
 # ==============================================================================
 # CENTRALIZED CONFIGURATION (Copied from app.py)
@@ -81,6 +82,7 @@ CANVAS_TO_STAFF_CONNECT_COLUMN_ID = os.environ.get("CANVAS_TO_STAFF_CONNECT_COLU
 CANVAS_TERM_ID = os.environ.get("CANVAS_TERM_ID")
 CANVAS_SUBACCOUNT_ID = os.environ.get("CANVAS_SUBACCOUNT_ID")
 CANVAS_TEMPLATE_COURSE_ID = os.environ.get("CANVAS_TEMPLATE_COURSE_ID")
+PLP_SUBITEM_ENTRY_TYPE_COLUMN_ID=os.environ.get("PLP_SUBITEM_ENTRY_TYPE_COLUMN_ID")
 
 try:
     MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS = json.loads(os.environ.get("MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS", "{}"))
@@ -121,10 +123,9 @@ def get_user_name(user_id):
         return result['data']['users'][0].get('name')
     return None
 
-def get_column_value(item_id, board_id, column_id):  # board_id is no longer used but kept for compatibility
+def get_column_value(item_id, board_id, column_id):
     if not item_id or not column_id:
         return None
-    # This is the simplified query, proven to work by the debug script.
     query = f"""
     query {{
         items (ids: [{item_id}]) {{
@@ -141,25 +142,20 @@ def get_column_value(item_id, board_id, column_id):  # board_id is no longer use
 
     if result and result.get('data', {}).get('items'):
         try:
-            # The path to the data is now simpler, matching the new query.
             column_list = result['data']['items'][0].get('column_values', [])
             if not column_list:
-                # This happens if the column ID exists on the board but not on this specific item.
                 return None
 
             col_val = column_list[0]
             parsed_value = col_val.get('value')
             if isinstance(parsed_value, str):
                 try:
-                    # The value from the API is a string containing JSON, so we parse it.
                     parsed_value = json.loads(parsed_value)
                 except json.JSONDecodeError:
-                    # If parsing fails, we leave it as the raw string.
                     pass
 
             return {'value': parsed_value, 'text': col_val.get('text')}
         except (IndexError, KeyError):
-            # This handles cases where the item exists but something is wrong with the column data structure.
             return None
     return None
 
@@ -209,7 +205,6 @@ def create_subitem(parent_item_id, subitem_name, column_values=None):
     return result['data']['create_subitem'].get('id') if result and 'data' in result and result['data'].get('create_subitem') else None
 
 def update_people_column(item_id, board_id, people_column_id, new_people_value, target_column_type):
-    # First, get the new person's ID from the value we are adding
     new_persons_and_teams = new_people_value.get('personsAndTeams', [])
     if not new_persons_and_teams:
         return False
@@ -217,24 +212,18 @@ def update_people_column(item_id, board_id, people_column_id, new_people_value, 
     if not new_person_id:
         return False
 
-    # Get the list of people already in the column
     current_col_val = get_column_value(item_id, board_id, people_column_id)
     current_people_ids = set()
     if current_col_val and current_col_val.get('value'):
         current_people_ids = get_people_ids_from_value(current_col_val['value'])
 
-    # Add the new person to the set of existing people
     current_people_ids.add(new_person_id)
 
-    # Prepare the final value for the API
     updated_people_list = [{"id": int(pid), "kind": "person"} for pid in current_people_ids]
 
-    # Based on the column type, format the final value correctly
     if target_column_type == "person":
-        # A "person" column can only hold one person
         final_value = {"personId": int(new_person_id)}
     elif target_column_type == "multiple-person":
-        # A "multiple-person" column can hold a list
         final_value = {"personsAndTeams": updated_people_list}
     else:
         return False
@@ -247,8 +236,6 @@ def update_people_column(item_id, board_id, people_column_id, new_people_value, 
 # ==============================================================================
 # CANVAS UTILITIES (Copied from app.py)
 # ==============================================================================
-# In a real-world scenario, you would import these from a shared library
-# to avoid code duplication. For this standalone script, they are copied directly.
 from canvasapi import Canvas
 from canvasapi.exceptions import CanvasException, Conflict, ResourceDoesNotExist
 
@@ -262,28 +249,24 @@ def find_canvas_user(student_details):
     if not canvas_api:
         return None
 
-    # Search by explicit Canvas ID first
     if student_details.get('canvas_id'):
         try:
             return canvas_api.get_user(student_details['canvas_id'])
         except (ResourceDoesNotExist, ValueError):
             pass
 
-    # Then by email login
     if student_details.get('email'):
         try:
             return canvas_api.get_user(student_details['email'], 'login_id')
         except ResourceDoesNotExist:
             pass
 
-    # Then by SIS ID
     if student_details.get('ssid'):
         try:
             return canvas_api.get_user(student_details['ssid'], 'sis_user_id')
         except ResourceDoesNotExist:
             pass
 
-    # Fallback to broad search by email
     if student_details.get('email'):
         try:
             search_results = canvas_api.get_account(1).get_users(search_term=student_details['email'])
@@ -322,8 +305,6 @@ def create_canvas_user(student_details):
 
 def update_user_ssid(user, new_ssid):
     try:
-        # --- THIS BLOCK IS THE SECOND FIX ---
-        # It checks for both new and old versions of the canvasapi library method
         if hasattr(user, 'list_logins'):
             logins = user.list_logins()
         else:
@@ -472,6 +453,7 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details,
         if action == "enroll":
             create_subitem(plp_item_id, f"Added {category_name} '{all_courses_item_name}'", subitem_cols)
         elif action == "unenroll":
+            # Unenroll logic is not implemented in the provided code snippet
             create_subitem(plp_item_id, f"Removed {category_name} '{all_courses_item_name}'", subitem_cols)
         return
 
@@ -514,7 +496,6 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details,
         for section_name in sections:
             section = create_section_if_not_exists(canvas_course_id, section_name)
             if section:
-                # --- THIS LINE IS THE FIX ---
                 result = enroll_or_create_and_enroll(canvas_course_id, section.id, student_details)
                 enrollment_results.append({'section': section_name, 'status': result})
 
@@ -535,11 +516,10 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details,
 
 def get_all_board_items(board_id):
     """Fetches all item objects from a board, handling pagination."""
-    all_items = []  # Changed variable name for clarity
+    all_items = []
     cursor = None
     while True:
         cursor_str = f'cursor: "{cursor}"' if cursor else ""
-        # The query needs to fetch both id and name for other functions
         query = f"""
             query {{
                 boards(ids: {board_id}) {{
@@ -555,9 +535,6 @@ def get_all_board_items(board_id):
             break
         try:
             page_info = result['data']['boards'][0]['items_page']
-
-            # --- THIS LINE IS THE FIX ---
-            # It now extends the list with the full item objects, not just their IDs
             all_items.extend(page_info['items'])
 
             cursor = page_info.get('cursor')
@@ -637,10 +614,8 @@ def sync_single_plp_item(plp_item_id, dry_run=True):
         print(f"ERROR: Could not find Master Student ID for PLP {plp_item_id}. Skipping.")
         return
 
-    # Using the corrected column ID from the user context
-    ENTRY_TYPE_COLUMN_ID = "entry_type__1"
-    staff_change_values = {ENTRY_TYPE_COLUMN_ID: {"labels": ["Staff Change"]}}
-    curriculum_change_values = {ENTRY_TYPE_COLUMN_ID: {"labels": ["Curriculum Change"]}}
+    staff_change_values = {PLP_SUBITEM_ENTRY_TYPE_COLUMN_ID: {"label": "Staff Change"}}
+    curriculum_change_values = {PLP_SUBITEM_ENTRY_TYPE_COLUMN_ID: {"label": "Curriculum Change"}}
 
     if not dry_run:
         print("Syncing teacher assignments from Master Student board to PLP...")
@@ -687,8 +662,6 @@ def sync_single_plp_item(plp_item_id, dry_run=True):
             canvas_item_id = list(linked_canvas_item_ids)[0]
             class_type_val = get_column_value(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_BOARD_CLASS_TYPE_COLUMN_ID)
 
-            # --- THIS BLOCK IS THE FIRST FIX ---
-            # It now safely handles cases where the class_type_val is None
             class_type_text = ""
             if class_type_val and class_type_val.get('text'):
                 class_type_text = class_type_val.get('text', '').lower()
@@ -765,7 +738,6 @@ if __name__ == '__main__':
     print("INFO: Attempting to connect to the database...")
     processed_ids = set()
     try:
-        import mysql.connector
         db = mysql.connector.connect(
             host=DB_HOST,
             user=DB_USER,
@@ -774,11 +746,11 @@ if __name__ == '__main__':
         )
         print("INFO: Successfully connected to the database. Fetching processed IDs...")
         cursor = db.cursor()
-        
+
         # Fetch all student IDs that have already been processed
         cursor.execute("SELECT student_id FROM processed_students")
         processed_ids = {row[0] for row in cursor.fetchall()}
-        
+
         if processed_ids:
             print(f"INFO: Found {len(processed_ids)} students in the database. They will be skipped.")
         else:
@@ -793,7 +765,7 @@ if __name__ == '__main__':
     if not creator_id:
         print("\nFATAL: Halting script because target user could not be found.")
         exit()
-        
+
     print("INFO: Creator ID found. Now fetching all PLP board items...")
     all_plp_items = get_all_board_items(PLP_BOARD_ID)
     print(f"INFO: Successfully fetched {len(all_plp_items)} items.")
@@ -805,7 +777,7 @@ if __name__ == '__main__':
 
     for i, item in enumerate(items_to_process):
         item_id = int(item['id'])
-        print(f"\n===== Processing Student {i+1}/{total_to_process} (Item ID: {item_id}) =====")
+        print(f"\n===== Processing Student {i + 1}/{total_to_process} (Item ID: {item_id}) =====")
         try:
             print(f"--- Phase 1: Deleting subitems created by '{TARGET_USER_NAME}' ---")
             clear_subitems_by_creator(item_id, creator_id, dry_run=DRY_RUN)
