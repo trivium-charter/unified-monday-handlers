@@ -271,7 +271,12 @@ def process_student_special_enrollments(plp_item, dry_run=True):
     plp_item_id = int(plp_item['id'])
     print(f"\n--- Processing Student: {plp_item['name']} (PLP ID: {plp_item_id}) ---")
 
-    master_id_set = get_linked_ids_from_connect_column_value(get_column_value(plp_item_id, PLP_TO_MASTER_STUDENT_CONNECT_COLUMN).get('value'))
+    # 1. Gather Data (with added safety checks)
+    master_link_val = get_column_value(plp_item_id, PLP_TO_MASTER_STUDENT_CONNECT_COLUMN)
+    if not master_link_val:
+        print("  SKIPPING: No Master Student item linked.")
+        return
+    master_id_set = get_linked_ids_from_connect_column_value(master_link_val.get('value'))
     if not master_id_set:
         print("  SKIPPING: No Master Student item linked.")
         return
@@ -281,6 +286,7 @@ def process_student_special_enrollments(plp_item, dry_run=True):
     master_result = execute_monday_graphql(master_details_query)
     
     tor_last_name = "Orientation"
+    grade = 0
     student_details = {}
     try:
         item_details = master_result['data']['items'][0]
@@ -289,18 +295,38 @@ def process_student_special_enrollments(plp_item, dry_run=True):
         student_details['email'] = cols.get(MASTER_STUDENT_EMAIL_COLUMN, {}).get('text', '')
         student_details['ssid'] = cols.get(MASTER_STUDENT_SSID_COLUMN, {}).get('text', '')
         student_details['canvas_id'] = cols.get(MASTER_STUDENT_CANVAS_ID_COLUMN, {}).get('text', '')
+
+        grade_text = cols.get(MASTER_STUDENT_GRADE_COLUMN_ID, {}).get('text', '0')
+        grade_match = re.search(r'\d+', grade_text)
+        if grade_match: grade = int(grade_match.group())
+
         tor_val = cols.get(MASTER_STUDENT_TOR_COLUMN_ID, {}).get('value')
         if tor_val:
-            tor_id = list(get_people_ids_from_value(tor_val))[0]
-            tor_full_name = get_user_name(tor_id)
-            if tor_full_name: tor_last_name = tor_full_name.split()[-1]
+            tor_ids = get_people_ids_from_value(tor_val)
+            if tor_ids:
+                tor_id = list(tor_ids)[0]
+                tor_full_name = get_user_name(tor_id)
+                if tor_full_name: tor_last_name = tor_full_name.split()[-1]
     except (TypeError, KeyError, IndexError, AttributeError):
         print(f"  WARNING: Could not parse all details for master item {master_id}.")
         return
 
+    course_column_ids = [c.strip() for c in PLP_ALL_CLASSES_CONNECT_COLUMNS_STR.split(',') if c.strip()]
+    all_regular_course_ids = set()
+    for col_id in course_column_ids:
+        column_data = get_column_value(plp_item_id, col_id)
+        if column_data: all_regular_course_ids.update(get_linked_ids_from_connect_column_value(column_data.get('value')))
+    
+    regular_course_names = []
+    if all_regular_course_ids:
+        names_query = f'query {{ items(ids:{list(all_regular_course_ids)}) {{ name }} }}'
+        names_result = execute_monday_graphql(names_query)
+        try: regular_course_names = [item['name'] for item in names_result['data']['items']]
+        except (TypeError, KeyError, IndexError): pass
+        
     plp_links_to_add = set()
 
-    # Process Jumpstart
+    # 2. Process Jumpstart
     jumpstart_canvas_id = SPECIAL_COURSE_CANVAS_IDS.get("Jumpstart")
     if jumpstart_canvas_id:
         print(f"  Processing Jumpstart enrollment, section: {tor_last_name}")
@@ -309,22 +335,14 @@ def process_student_special_enrollments(plp_item, dry_run=True):
         jumpstart_item_id = get_all_courses_item("Jumpstart")
         if jumpstart_item_id: plp_links_to_add.add(jumpstart_item_id)
 
-    # Process Study Hall
-    course_column_ids = [c.strip() for c in PLP_ALL_CLASSES_CONNECT_COLUMNS_STR.split(',') if c.strip()]
-    all_regular_course_ids = set()
-    for col_id in course_column_ids:
-        column_data = get_column_value(plp_item_id, col_id)
-        if column_data: all_regular_course_ids.update(get_linked_ids_from_connect_column_value(column_data.get('value')))
-    
+    # 3. Process Study Hall
     target_sh_name = None
     if all_regular_course_ids:
-        # Find all linked canvas items for the student's courses
         canvas_links_query = f'query {{ items(ids:{list(all_regular_course_ids)}) {{ linked_items(linked_board_ids:[{CANVAS_BOARD_ID}]) {{ id }} }} }}'
         canvas_links_result = execute_monday_graphql(canvas_links_query)
-        all_canvas_item_ids = {link['id'] for item in canvas_links_result['data']['items'] for link in item['linked_items']}
+        all_canvas_item_ids = {link['id'] for item in canvas_links_result['data']['items'] for link in item.get('linked_items', [])}
         
         if all_canvas_item_ids:
-            # Get the Study Hall status for all those canvas items at once
             sh_status_query = f'query {{ items(ids:{list(all_canvas_item_ids)}) {{ column_values(ids:["{CANVAS_BOARD_STUDY_HALL_COLUMN_ID}"]) {{ text }} }} }}'
             sh_status_result = execute_monday_graphql(sh_status_query)
             for item in sh_status_result['data']['items']:
@@ -332,7 +350,7 @@ def process_student_special_enrollments(plp_item, dry_run=True):
                     sh_name = item['column_values'][0].get('text')
                     if sh_name and sh_name in SPECIAL_COURSE_CANVAS_IDS:
                         target_sh_name = sh_name
-                        break # Found the first one, stop looking
+                        break
     
     if target_sh_name:
         target_sh_canvas_id = SPECIAL_COURSE_CANVAS_IDS.get(target_sh_name)
@@ -345,7 +363,7 @@ def process_student_special_enrollments(plp_item, dry_run=True):
     else:
         print("  INFO: No Study Hall enrollment rule matched.")
 
-    # Update the PLP connect column
+    # 4. Update the PLP connect column
     if plp_links_to_add:
         print(f"  Action: Linking {len(plp_links_to_add)} courses to PLP column {PLP_JUMPSTART_SH_CONNECT_COLUMN}.")
         if not dry_run:
@@ -374,7 +392,7 @@ if __name__ == '__main__':
             import traceback
             traceback.print_exc()
         
-        if not dry_run:
+        if not DRY_RUN:
             time.sleep(2)
 
     print("\n======================================================")
