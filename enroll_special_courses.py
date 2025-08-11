@@ -287,6 +287,7 @@ def process_student_special_enrollments(plp_item, dry_run=True):
     
     tor_last_name = "Orientation"
     student_details = {}
+    grade = 0
     try:
         item_details = master_result['data']['items'][0]
         cols = {cv['id']: cv for cv in item_details['column_values']}
@@ -300,12 +301,12 @@ def process_student_special_enrollments(plp_item, dry_run=True):
         grade_match = re.search(r'\d+', grade_text)
         if grade_match: grade = int(grade_match.group())
 
-        # --- THIS BLOCK IS THE FIX ---
-        # It now correctly handles the format for a single-person column
-        tor_val = cols.get(MASTER_STUDENT_TOR_COLUMN_ID, {}).get('value')
-        if tor_val:
-            # For a single-person column, the ID is directly in the 'id' or 'personId' key
-            tor_id = tor_val.get('id') or tor_val.get('personId')
+        tor_val_str = cols.get(MASTER_STUDENT_TOR_COLUMN_ID, {}).get('value')
+        if tor_val_str:
+            # --- THIS BLOCK IS THE FIX ---
+            # It now correctly parses the JSON string before trying to read from it
+            tor_val_dict = json.loads(tor_val_str)
+            tor_id = tor_val_dict.get('id') or tor_val_dict.get('personId')
             if tor_id:
                 tor_full_name = get_user_name(tor_id)
                 if tor_full_name: tor_last_name = tor_full_name.split()[-1]
