@@ -91,6 +91,16 @@ def get_column_value(item_id, column_id):
         except (IndexError, KeyError): return None
     return None
 
+def get_people_ids_from_value(value_data):
+    if not value_data: return set()
+    if isinstance(value_data, str):
+        try:
+            value_data = json.loads(value_data)
+        except json.JSONDecodeError:
+            return set()
+    persons_and_teams = value_data.get('personsAndTeams', [])
+    return {person['id'] for person in persons_and_teams if 'id' in person}
+    
 def get_all_board_items(board_id):
     all_items = []
     cursor = None
