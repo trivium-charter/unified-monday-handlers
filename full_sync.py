@@ -50,6 +50,7 @@ DB_HOST = os.environ.get("DB_HOST")
 DB_USER = os.environ.get("DB_USER")
 DB_PASSWORD = os.environ.get("DB_PASSWORD")
 DB_NAME = os.environ.get("DB_NAME")
+DB_PORT = os.environ.get("DB_PORT", 3306) # Added DB_PORT with a default value
 
 PLP_BOARD_ID = os.environ.get("PLP_BOARD_ID")
 PLP_CANVAS_SYNC_COLUMN_ID = os.environ.get("PLP_CANVAS_SYNC_COLUMN_ID")
