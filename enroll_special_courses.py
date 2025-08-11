@@ -344,7 +344,8 @@ if __name__ == '__main__':
             import traceback
             traceback.print_exc()
         
-        if not dry_run:
+        # --- THIS LINE IS THE FIX ---
+        if not DRY_RUN:
             time.sleep(2)
 
     print("\n======================================================")
