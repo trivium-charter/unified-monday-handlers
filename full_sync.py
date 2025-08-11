@@ -51,6 +51,8 @@ DB_USER = os.environ.get("DB_USER")
 DB_PASSWORD = os.environ.get("DB_PASSWORD")
 DB_NAME = os.environ.get("DB_NAME")
 DB_PORT = os.environ.get("DB_PORT", 3306) # Added DB_PORT with a default value
+DB_SSL_MODE = os.environ.get("DB_SSL_MODE")
+
 
 PLP_BOARD_ID = os.environ.get("PLP_BOARD_ID")
 PLP_CANVAS_SYNC_COLUMN_ID = os.environ.get("PLP_CANVAS_SYNC_COLUMN_ID")
@@ -744,6 +746,8 @@ if __name__ == '__main__':
             user=DB_USER,
             password=DB_PASSWORD,
             database=DB_NAME
+            port=int(DB_PORT)
+            ssl_mode=DB_SSL_MODE # Add this line
         )
         print("INFO: Successfully connected to the database. Fetching processed IDs...")
         cursor = db.cursor()
