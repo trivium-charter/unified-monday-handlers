@@ -291,44 +291,24 @@ def process_student_special_enrollments(plp_item, dry_run=True):
     try:
         item_details = master_result['data']['items'][0]
         cols = {cv['id']: cv for cv in item_details['column_values']}
-        
         student_details['name'] = item_details.get('name', '')
         student_details['email'] = cols.get(MASTER_STUDENT_EMAIL_COLUMN, {}).get('text', '')
         student_details['ssid'] = cols.get(MASTER_STUDENT_SSID_COLUMN, {}).get('text', '')
         student_details['canvas_id'] = cols.get(MASTER_STUDENT_CANVAS_ID_COLUMN, {}).get('text', '')
-
         grade_text = cols.get(MASTER_STUDENT_GRADE_COLUMN_ID, {}).get('text', '0')
         grade_match = re.search(r'\d+', grade_text)
         if grade_match: grade = int(grade_match.group())
-
         tor_val_str = cols.get(MASTER_STUDENT_TOR_COLUMN_ID, {}).get('value')
         if tor_val_str:
-            # --- THIS BLOCK IS THE FIX ---
-            # It now correctly parses the JSON string before trying to read from it
             tor_val_dict = json.loads(tor_val_str)
             tor_id = tor_val_dict.get('id') or tor_val_dict.get('personId')
             if tor_id:
                 tor_full_name = get_user_name(tor_id)
                 if tor_full_name: tor_last_name = tor_full_name.split()[-1]
-        
     except (TypeError, KeyError, IndexError, AttributeError) as e:
         print(f"  WARNING: Could not parse all details for master item {master_id}. Error: {e}")
         return
 
-    # --- The rest of the function remains the same ---
-    course_column_ids = [c.strip() for c in PLP_ALL_CLASSES_CONNECT_COLUMNS_STR.split(',') if c.strip()]
-    all_regular_course_ids = set()
-    for col_id in course_column_ids:
-        column_data = get_column_value(plp_item_id, col_id)
-        if column_data: all_regular_course_ids.update(get_linked_ids_from_connect_column_value(column_data.get('value')))
-    
-    regular_course_names = []
-    if all_regular_course_ids:
-        names_query = f'query {{ items(ids:{list(all_regular_course_ids)}) {{ name }} }}'
-        names_result = execute_monday_graphql(names_query)
-        try: regular_course_names = [item['name'] for item in names_result['data']['items']]
-        except (TypeError, KeyError, IndexError): pass
-        
     plp_links_to_add = set()
 
     # 2. Process Jumpstart
@@ -341,21 +321,32 @@ def process_student_special_enrollments(plp_item, dry_run=True):
         if jumpstart_item_id: plp_links_to_add.add(jumpstart_item_id)
 
     # 3. Process Study Hall
+    course_column_ids = [c.strip() for c in PLP_ALL_CLASSES_CONNECT_COLUMNS_STR.split(',') if c.strip()]
+    all_regular_course_ids = set()
+    for col_id in course_column_ids:
+        column_data = get_column_value(plp_item_id, col_id)
+        if column_data: all_regular_course_ids.update(get_linked_ids_from_connect_column_value(column_data.get('value')))
+    
     target_sh_name = None
+    # --- THIS IS THE FIX ---
+    # Only run the search logic if the student has regular courses
     if all_regular_course_ids:
         canvas_links_query = f'query {{ items(ids:{list(all_regular_course_ids)}) {{ linked_items(linked_board_ids:[{CANVAS_BOARD_ID}]) {{ id }} }} }}'
         canvas_links_result = execute_monday_graphql(canvas_links_query)
-        all_canvas_item_ids = {link['id'] for item in canvas_links_result['data']['items'] for link in item.get('linked_items', [])}
         
-        if all_canvas_item_ids:
-            sh_status_query = f'query {{ items(ids:{list(all_canvas_item_ids)}) {{ column_values(ids:["{CANVAS_BOARD_STUDY_HALL_COLUMN_ID}"]) {{ text }} }} }}'
-            sh_status_result = execute_monday_graphql(sh_status_query)
-            for item in sh_status_result['data']['items']:
-                if item.get('column_values'):
-                    sh_name = item['column_values'][0].get('text')
-                    if sh_name and sh_name in SPECIAL_COURSE_CANVAS_IDS:
-                        target_sh_name = sh_name
-                        break
+        # Also safely check if the result is valid
+        if canvas_links_result and canvas_links_result.get('data', {}).get('items'):
+            all_canvas_item_ids = {link['id'] for item in canvas_links_result['data']['items'] for link in item.get('linked_items', [])}
+            if all_canvas_item_ids:
+                sh_status_query = f'query {{ items(ids:{list(all_canvas_item_ids)}) {{ column_values(ids:["{CANVAS_BOARD_STUDY_HALL_COLUMN_ID}"]) {{ text }} }} }}'
+                sh_status_result = execute_monday_graphql(sh_status_query)
+                if sh_status_result and sh_status_result.get('data', {}).get('items'):
+                    for item in sh_status_result['data']['items']:
+                        if item.get('column_values'):
+                            sh_name = item['column_values'][0].get('text')
+                            if sh_name and sh_name in SPECIAL_COURSE_CANVAS_IDS:
+                                target_sh_name = sh_name
+                                break
     
     if target_sh_name:
         target_sh_canvas_id = SPECIAL_COURSE_CANVAS_IDS.get(target_sh_name)
