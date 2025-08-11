@@ -723,7 +723,7 @@ if __name__ == '__main__':
             database=DB_NAME,
             port=int(DB_PORT),
             **ssl_opts # Use the SSL options dictionary
-    )
+        )
     print("INFO: Successfully connected to the database. Fetching processed IDs...")
     cursor = db.cursor()
 
