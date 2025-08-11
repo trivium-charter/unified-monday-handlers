@@ -235,7 +235,7 @@ def enroll_student(canvas_course_id, section_name, student_details):
 # ==============================================================================
 # CORE SYNC LOGIC
 # ==============================================================================
-def process_student_special_enrollments(plp_item, dry_run=False):
+def process_student_special_enrollments(plp_item, dry_run=True):
     plp_item_id = int(plp_item['id'])
     print(f"\n--- Processing Student: {plp_item['name']} (PLP ID: {plp_item_id}) ---")
 
@@ -355,7 +355,7 @@ def process_student_special_enrollments(plp_item, dry_run=False):
 # SCRIPT EXECUTION
 # ==============================================================================
 if __name__ == '__main__':
-    DRY_RUN = True
+    DRY_RUN = False
     print("======================================================")
     print("=== STARTING JUMPSTART & STUDY HALL SYNC SCRIPT ===")
     print("======================================================")
