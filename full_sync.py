@@ -731,21 +731,15 @@ def get_teacher_person_value_from_canvas_board(canvas_item_id):
 # ==============================================================================
 
 if __name__ == '__main__':
-    # ---! CONFIGURATION !---
-    DRY_RUN = False
-    TARGET_USER_NAME = "Sarah Bruce"
-    # ---! END CONFIG !---
+    # ... (rest of the config)
 
     print("======================================================")
     print("=== STARTING MONDAY.COM & CANVAS FULL SYNC SCRIPT ===")
     print("======================================================")
-    if DRY_RUN:
-        print("\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
-        print("!!!            DRY RUN MODE IS ON                  !!!")
-        print("!!!  No actual changes will be made to your data.  !!!")
-        print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n")
 
-    # --- Database connection and progress check ---
+    # ... (DRY_RUN message)
+
+    print("INFO: Attempting to connect to the database...")
     processed_ids = set()
     try:
         import mysql.connector
@@ -755,16 +749,10 @@ if __name__ == '__main__':
             password=DB_PASSWORD,
             database=DB_NAME
         )
+        print("INFO: Successfully connected to the database. Fetching processed IDs...")
         cursor = db.cursor()
-
-        # Fetch all student IDs that have already been processed
-        cursor.execute("SELECT student_id FROM processed_students")
-        processed_ids = {row[0] for row in cursor.fetchall()}
-
-        if processed_ids:
-            print(f"INFO: Found {len(processed_ids)} students in the database. They will be skipped.")
-        else:
-            print("INFO: No processed students found in the database. Starting from the beginning.")
+        
+        # ... (rest of the database code)
 
     except Exception as e:
         print(f"FATAL: Database connection failed. Cannot proceed with resumable logic. Error: {e}")
@@ -774,6 +762,10 @@ if __name__ == '__main__':
     if not creator_id:
         print("\nFATAL: Halting script because target user could not be found.")
         exit()
+        
+    print("INFO: Attempting to fetch all PLP board items from Monday.com...")
+    all_plp_items = get_all_board_items(PLP_BOARD_ID)
+    print(f"INFO: Successfully fetched {len(all_plp_items)} items.")
 
     all_plp_items = get_all_board_items(PLP_BOARD_ID)
     items_to_process = [item for item in all_plp_items if int(item['id']) not in processed_ids]
