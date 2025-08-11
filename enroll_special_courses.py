@@ -250,35 +250,24 @@ def process_student_special_enrollments(plp_item, dry_run=True):
         return
     master_id = list(master_id_set)[0]
     
-    master_details_query = f'query {{ items(ids:[{master_id}]) {{ name column_values(ids:["{MASTER_STUDENT_TOR_COLUMN_ID}", "{MASTER_STUDENT_GRADE_COLUMN_ID}", "{MASTER_STUDENT_EMAIL_COLUMN}", "{MASTER_STUDENT_SSID_COLUMN}", "{MASTER_STUDENT_CANVAS_ID_COLUMN}"]) {{ id text value }} }} }}'
+    master_details_query = f'query {{ items(ids:[{master_id}]) {{ name column_values(ids:["{MASTER_STUDENT_TOR_COLUMN_ID}", "{MASTER_STUDENT_EMAIL_COLUMN}", "{MASTER_STUDENT_SSID_COLUMN}", "{MASTER_STUDENT_CANVAS_ID_COLUMN}"]) {{ id text value }} }} }}'
     master_result = execute_monday_graphql(master_details_query)
     
     tor_last_name = "Orientation"
     student_details = {}
-    grade = 0
-    
     if not master_result or not master_result.get('data', {}).get('items'):
         print(f"  WARNING: Could not fetch details for master item {master_id}.")
         return
 
     item_details = master_result['data']['items'][0]
     cols = {cv['id']: cv for cv in item_details.get('column_values', [])}
-    
     student_details['name'] = item_details.get('name', '')
     student_details['email'] = cols.get(MASTER_STUDENT_EMAIL_COLUMN, {}).get('text', '')
     student_details['ssid'] = cols.get(MASTER_STUDENT_SSID_COLUMN, {}).get('text', '')
     student_details['canvas_id'] = cols.get(MASTER_STUDENT_CANVAS_ID_COLUMN, {}).get('text', '')
-
-    grade_text = cols.get(MASTER_STUDENT_GRADE_COLUMN_ID, {}).get('text', '0')
-    grade_match = re.search(r'\d+', grade_text)
-    if grade_match: grade = int(grade_match.group())
-
     tor_val_str = cols.get(MASTER_STUDENT_TOR_COLUMN_ID, {}).get('value')
     if tor_val_str:
         try:
-            # --- THIS BLOCK IS THE FIX ---
-            # It now correctly uses the get_people_ids_from_value helper, which is
-            # designed for the multiple-person column format the API is sending.
             tor_val_dict = json.loads(tor_val_str)
             tor_ids = get_people_ids_from_value(tor_val_dict)
             if tor_ids:
@@ -307,15 +296,17 @@ def process_student_special_enrollments(plp_item, dry_run=True):
         if column_data: all_regular_course_ids.update(get_linked_ids_from_connect_column_value(column_data.get('value')))
     
     target_sh_name = None
-    sh_section_name = None
+    sh_section_name = "General" # Default value
     if all_regular_course_ids:
+        # --- THIS BLOCK IS THE FIX ---
+        # It now more reliably finds the course name associated with the Study Hall.
         ids_str = ','.join(map(str, all_regular_course_ids))
-        canvas_links_query = f'query {{ items(ids:[{ids_str}]) {{ id name column_values(ids:["{ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID}"]) {{ value }} }} }}'
-        canvas_links_result = execute_monday_graphql(canvas_links_query)
+        courses_query = f'query {{ items(ids:[{ids_str}]) {{ id name column_values(ids:["{ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID}"]) {{ value }} }} }}'
+        courses_result = execute_monday_graphql(courses_query)
         
         canvas_id_to_course_name_map = {}
-        if canvas_links_result and canvas_links_result.get('data', {}).get('items'):
-            for item in canvas_links_result['data']['items']:
+        if courses_result and courses_result.get('data', {}).get('items'):
+            for item in courses_result['data']['items']:
                 if item.get('column_values'):
                     canvas_ids = get_linked_ids_from_connect_column_value(item['column_values'][0].get('value'))
                     for cid in canvas_ids:
@@ -328,11 +319,11 @@ def process_student_special_enrollments(plp_item, dry_run=True):
             sh_status_result = execute_monday_graphql(sh_status_query)
             if sh_status_result and sh_status_result.get('data', {}).get('items'):
                 for item in sh_status_result['data']['items']:
-                    if item.get('column_values'):
+                    if item.get('column_values') and item['column_values'][0]:
                         sh_name = item['column_values'][0].get('text')
                         if sh_name and sh_name in SPECIAL_COURSE_CANVAS_IDS:
                             target_sh_name = sh_name
-                            sh_section_name = canvas_id_to_course_name_map.get(item['id'], "General")
+                            sh_section_name = canvas_id_to_course_name_map.get(int(item['id']), "General")
                             break
     
     if target_sh_name:
