@@ -749,7 +749,7 @@ try:
         password=DB_PASSWORD,
         database=DB_NAME,
         port=int(DB_PORT),
-        ssl_verify_cert=True
+        ssl_ca='ca-certificate.crt' # Point to the downloaded file
     )
     print("INFO: Successfully connected to the database. Fetching processed IDs...")
     cursor = db.cursor()
