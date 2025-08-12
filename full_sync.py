@@ -619,7 +619,7 @@ def sync_single_plp_item(plp_item_id, dry_run=True):
         print(f"ERROR: Could not find Master Student ID for PLP {plp_item_id}. Skipping.")
         return
 
-    staff_change_val_ues = {PLP_SUBITEM_ENTRY_TYPE_COLUMN_ID: {"labels": ["Staff Change"]}}
+    staff_change_values = {PLP_SUBITEM_ENTRY_TYPE_COLUMN_ID: {"labels": ["Staff Change"]}}
     curriculum_change_values = {PLP_SUBITEM_ENTRY_TYPE_COLUMN_ID: {"labels": ["Curriculum Change"]}}
 
     if not dry_run:
