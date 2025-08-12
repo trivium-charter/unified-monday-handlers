@@ -420,17 +420,39 @@ def enroll_student_in_section(course_id, user_id, section_id):
         return "Failed"
 
 def enroll_or_create_and_enroll(course_id, section_id, student_details):
+    """
+    Finds or creates a user, ensures the full user object is loaded,
+    and then proceeds with enrollment and SSID updates.
+    """
+    canvas_api = initialize_canvas_api()
+    if not canvas_api:
+        return "Failed: Canvas API not initialized"
+
     user = find_canvas_user(student_details)
     if not user:
         print(f"INFO: Canvas user not found for {student_details['email']}. Creating new user.")
         user = create_canvas_user(student_details)
 
     if user:
-        if student_details.get('ssid') and hasattr(user, 'sis_user_id') and user.sis_user_id != student_details['ssid']:
-            update_user_ssid(user, student_details['ssid'])
-        return enroll_student_in_section(course_id, user.id, section_id)
+        # --- Start of new, corrected logic ---
+        try:
+            # This is the key step: re-fetch the user by their ID to get the full object
+            # with all its methods, including .get_logins().
+            full_user = canvas_api.get_user(user.id)
+            
+            # Now, perform the SSID update using the full_user object.
+            if student_details.get('ssid') and hasattr(full_user, 'sis_user_id') and full_user.sis_user_id != student_details['ssid']:
+                update_user_ssid(full_user, student_details['ssid'])
 
-    return "Failed: User not found/created"
+            # Proceed with enrollment using the full_user object.
+            return enroll_student_in_section(course_id, full_user.id, section_id)
+
+        except CanvasException as e:
+            print(f"ERROR: Could not retrieve full user object or enroll for user ID {user.id}. Details: {e}")
+            return "Failed"
+        # --- End of new, corrected logic ---
+        
+    return "Failed: User not found or could not be created"
 
 # ==============================================================================
 # CORE LOGIC FUNCTIONS
