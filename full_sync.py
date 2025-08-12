@@ -575,7 +575,7 @@ def sync_single_plp_item(plp_item_id, dry_run=True):
     Final, corrected version that handles non-Canvas courses properly during
     the ACE/Connect teacher sync.
     """
-    print(f"\n--- Processing PLP Item: {plp_item_id} ---")
+    print(f"\n--- Processing PLP Item: {plp_item_id} (Dry Run: {dry_run}) ---") # Added dry_run status
     student_details = get_student_details_from_plp(plp_item_id)
     if not student_details:
         print(f"WARNING: Could not get student details for PLP {plp_item_id}. Skipping.")
@@ -590,21 +590,26 @@ def sync_single_plp_item(plp_item_id, dry_run=True):
     curriculum_change_values = {PLP_SUBITEM_ENTRY_TYPE_COLUMN_ID: {"label": "Curriculum Change"}}
 
     if not dry_run:
-        print("Syncing teacher assignments from Master Student board to PLP...")
+        print("ACTION: Syncing teacher assignments from Master Student board to PLP...")
         for trigger_col, mapping in MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS.items():
             master_person_val = get_column_value(master_student_id, int(MASTER_STUDENT_BOARD_ID), trigger_col)
             plp_target_mapping = next((t for t in mapping["targets"] if str(t.get("board_id")) == str(PLP_BOARD_ID)), None)
             if plp_target_mapping and master_person_val and master_person_val.get('value'):
+                print(f"ACTION: Updating people column '{plp_target_mapping['target_column_id']}'...")
                 update_people_column(plp_item_id, int(PLP_BOARD_ID), plp_target_mapping["target_column_id"], master_person_val['value'], plp_target_mapping["target_column_type"])
                 person_ids = get_people_ids_from_value(master_person_val['value'])
                 for person_id in person_ids:
                     person_name = get_user_name(person_id)
                     if person_name:
                         log_message = f"{mapping.get('name', 'Staff')} set to {person_name}"
+                        print(f"ACTION: Creating subitem -> '{log_message}'")
                         create_subitem(plp_item_id, log_message, column_values=staff_change_values)
                 time.sleep(1)
+    else:
+        print("DRY RUN: Skipping teacher sync from Master Student board.")
 
-    print("Syncing class enrollments and ACE/Connect teachers...")
+
+    print("INFO: Syncing class enrollments and ACE/Connect teachers...")
     class_id_to_category_map = {}
     for category, column_id in PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.items():
         linked_class_ids = get_linked_items_from_board_relation(plp_item_id, int(PLP_BOARD_ID), column_id)
@@ -622,11 +627,15 @@ def sync_single_plp_item(plp_item_id, dry_run=True):
 
     for class_item_id in all_class_ids:
         class_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)) or f"Item {class_item_id}"
-        print(f"Processing class: '{class_name}'")
+        print(f"INFO: Processing class: '{class_name}'")
 
         category_name = class_id_to_category_map.get(class_item_id, "Course")
         if not dry_run:
+            print(f"ACTION: Calling manage_class_enrollment for '{class_name}'...")
             manage_class_enrollment("enroll", plp_item_id, class_item_id, student_details, category_name, subitem_cols=curriculum_change_values)
+        else:
+            print(f"DRY RUN: Skipping enrollment for '{class_name}'.")
+
 
         linked_canvas_item_ids = get_linked_items_from_board_relation(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
 
@@ -648,7 +657,10 @@ def sync_single_plp_item(plp_item_id, dry_run=True):
                 teacher_person_value = get_teacher_person_value_from_canvas_board(canvas_item_id)
                 if teacher_person_value:
                     if not dry_run:
+                        print(f"ACTION: Updating master student board with teacher for '{class_name}'...")
                         update_people_column(master_student_id, int(MASTER_STUDENT_BOARD_ID), target_master_col_id, teacher_person_value, "multiple-person")
+                    else:
+                        print(f"DRY RUN: Skipping teacher update for '{class_name}'.")
                 else:
                     print(f"WARNING: Could not find a linked teacher on the Canvas Board for course '{class_name}'.")
 
