@@ -312,20 +312,31 @@ def create_canvas_user(student_details):
         return None
 
 def update_user_ssid(user, new_ssid):
+    """
+    Updates a Canvas user's SIS ID using the correct API method.
+    """
     try:
-        if hasattr(user, 'list_logins'):
-            logins = user.list_logins()
-        else:
-            logins = user.get_logins()
-
+        # The correct method is to call get_logins() on the User object.
+        # This returns a list of login objects associated with the user.
+        logins = user.get_logins()
+        
         if logins:
-            login_to_update = logins[0]
-            login_to_update.edit(login={'sis_user_id': new_ssid})
+            # Typically, we update the first (and often only) login object.
+            primary_login = logins[0]
+            primary_login.edit(login={'sis_user_id': new_ssid})
+            print(f"INFO: Successfully updated SSID for user '{user.name}' to '{new_ssid}'.")
             return True
-
+        else:
+            print(f"WARNING: No logins found for user '{user.name}'. Cannot update SSID.")
+            return False
+            
     except CanvasException as e:
-        print(f"ERROR: API error updating SSID for user '{user.name}': {e}")
-    return False
+        print(f"ERROR: Canvas API error while updating SSID for user '{user.name}': {e}")
+        return False
+    except AttributeError:
+        # This is a fallback in case the 'get_logins' method is still not found.
+        print(f"ERROR: The 'get_logins' method was not found on the User object. Please check your canvasapi library version.")
+        return False
 
 def create_canvas_course(course_name, term_id):
     canvas_api = initialize_canvas_api()
