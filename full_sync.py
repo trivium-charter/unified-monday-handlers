@@ -495,7 +495,11 @@ def get_student_details_from_plp(plp_item_id):
         column_map = {cv['id']: cv.get('text') for cv in item_details.get('column_values', []) if isinstance(cv, dict)}
 
         ssid = column_map.get(MASTER_STUDENT_SSID_COLUMN, '')
-        email = column_map.get(MASTER_STUDENT_EMAIL_COLUMN, '')
+        import unicodedata
+
+        # ... inside the get_student_details_from_plp function ...
+        raw_email = column_map.get(MASTER_STUDENT_EMAIL_COLUMN, '')
+        email = unicodedata.normalize('NFKC', raw_email).strip()
         canvas_id = column_map.get(MASTER_STUDENT_CANVAS_ID_COLUMN, '')
 
         if not all([student_name, email]):
