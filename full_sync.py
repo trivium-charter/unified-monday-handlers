@@ -867,13 +867,14 @@ if __name__ == '__main__':
                 cursor.execute(insert_query, (item_id,))
                 db.commit()
 
+            time.sleep(0.2) # <-- THIS IS THE CORRECT PLACE FOR THE PAUSE
+
     except mysql.connector.Error as err:
         print(f"FATAL: Database error. Cannot proceed. Error: {err}")
     except Exception as e:
         print(f"FATAL ERROR during script execution: {e}")
         import traceback
         traceback.print_exc()
-    time.sleep(0.2)  # Pause for 200 milliseconds
     finally:
         # --- Cleanup ---
         if cursor:
