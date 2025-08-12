@@ -78,12 +78,22 @@ except (json.JSONDecodeError, TypeError):
 MONDAY_HEADERS = {"Authorization": MONDAY_API_KEY, "Content-Type": "application/json", "API-Version": "2023-10"}
 
 def execute_monday_graphql(query):
+    """Executes a GraphQL query and now includes error checking for the API response payload."""
     try:
         response = requests.post(MONDAY_API_URL, json={"query": query}, headers=MONDAY_HEADERS)
-        response.raise_for_status()
-        return response.json()
+        response.raise_for_status()  # Check for HTTP errors like 4xx/5xx
+        
+        json_response = response.json()
+        
+        # Check for GraphQL-level errors, which come with a 200 status
+        if "errors" in json_response:
+            print(f"ERROR: Monday.com GraphQL API Error Response: {json_response['errors']}")
+            return None
+            
+        return json_response
+        
     except requests.exceptions.RequestException as e:
-        print(f"ERROR: Monday.com API Error: {e}")
+        print(f"ERROR: Monday.com HTTP Request Error: {e}")
         return None
 
 def get_item_name(item_id, board_id):
@@ -177,11 +187,30 @@ def get_linked_items_from_board_relation(item_id, board_id, connect_column_id):
     return get_linked_ids_from_connect_column_value(column_data.get('value')) if column_data else set()
 
 def create_subitem(parent_item_id, subitem_name, column_values=None):
-    values_for_api = {col_id: val for col_id, val in (column_values or {}).items()}
-    column_values_json = json.dumps(values_for_api)
-    mutation = f"mutation {{ create_subitem (parent_item_id: {parent_item_id}, item_name: {json.dumps(subitem_name)}, column_values: {json.dumps(column_values_json)}) {{ id }} }}"
+    """Creates a subitem with properly formatted column values."""
+    # This correctly formats the column data into a JSON string.
+    column_values_json = json.dumps(column_values or {})
+
+    # The key change is REMOVING the extra json.dumps() around column_values_json.
+    # The API expects a raw JSON string here, not a double-encoded one.
+    mutation = f"""
+        mutation {{
+            create_subitem (
+                parent_item_id: {parent_item_id},
+                item_name: {json.dumps(subitem_name)},
+                column_values: {json.dumps(column_values_json)}
+            ) {{
+                id
+            }}
+        }}
+    """
     result = execute_monday_graphql(mutation)
-    return result['data']['create_subitem'].get('id') if result and 'data' in result and result['data'].get('create_subitem') else None
+    
+    if result and 'data' in result and result['data'].get('create_subitem'):
+        return result['data']['create_subitem'].get('id')
+    else:
+        print(f"WARNING: Failed to create subitem '{subitem_name}'. Result was: {result}")
+        return None
 
 def update_people_column(item_id, board_id, people_column_id, new_people_value, target_column_type):
     new_persons_and_teams = new_people_value.get('personsAndTeams', [])
@@ -423,18 +452,20 @@ def get_student_details_from_plp(plp_item_id):
         return None
 
 def manage_class_enrollment(action, plp_item_id, class_item_id, student_details, category_name, subitem_cols=None):
+    """Manages class enrollment and creates verbose subitems about its actions."""
     subitem_cols = subitem_cols or {}
-
-    linked_canvas_item_ids = get_linked_items_from_board_relation(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
     all_courses_item_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)) or f"Item {class_item_id}"
 
+    # Get the linked course on the Canvas Board
+    linked_canvas_item_ids = get_linked_items_from_board_relation(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
+    
     if not linked_canvas_item_ids:
+        print(f"INFO: No Canvas course linked for '{all_courses_item_name}'. Creating log subitem.")
         if action == "enroll":
-            create_subitem(plp_item_id, f"Added {category_name} '{all_courses_item_name}'", subitem_cols)
-        elif action == "unenroll":
-            create_subitem(plp_item_id, f"Removed {category_name} '{all_courses_item_name}'", subitem_cols)
+            create_subitem(plp_item_id, f"Added {category_name} '{all_courses_item_name}' (Non-Canvas)", subitem_cols)
         return
 
+    # --- From here, we know it's a Canvas-linked course ---
     canvas_item_id = list(linked_canvas_item_ids)[0]
     class_name = get_item_name(canvas_item_id, int(CANVAS_BOARD_ID))
     if not class_name:
@@ -445,7 +476,7 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details,
     canvas_course_id = course_id_val.get('text') if course_id_val else None
 
     if not canvas_course_id and action == "enroll":
-        print(f"INFO: No Canvas ID found on Monday item {canvas_item_id}. Attempting to create course for '{class_name}'.")
+        print(f"INFO: No Canvas ID found for '{class_name}'. Attempting to create course.")
         new_course = create_canvas_course(class_name, CANVAS_TERM_ID)
         if new_course:
             canvas_course_id = new_course.id
@@ -453,7 +484,7 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details,
             if ALL_CLASSES_CANVAS_ID_COLUMN:
                 change_column_value_generic(int(ALL_COURSES_BOARD_ID), class_item_id, ALL_CLASSES_CANVAS_ID_COLUMN, str(canvas_course_id))
         else:
-            create_subitem(plp_item_id, f"Added {category_name} '{class_name}': Failed - Could not create Canvas course.", subitem_cols)
+            create_subitem(plp_item_id, f"Added {category_name} '{class_name}': FAILED - Could not create Canvas course.", subitem_cols)
             return
 
     if not canvas_course_id:
@@ -461,6 +492,7 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details,
         return
 
     if action == "enroll":
+        # ... [The rest of the enrollment logic remains the same] ...
         m_series_val = get_column_value(plp_item_id, int(PLP_BOARD_ID), PLP_M_SERIES_LABELS_COLUMN)
         ag_grad_val = get_column_value(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_CLASSES_AG_GRAD_COLUMN)
         m_series_text = (m_series_val.get('text') or "") if m_series_val else ""
@@ -472,6 +504,7 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details,
 
         enrollment_results = []
         for section_name in sections:
+            print(f"INFO: Enrolling student in '{class_name}', section '{section_name}'...")
             section = create_section_if_not_exists(canvas_course_id, section_name)
             if section:
                 result = enroll_or_create_and_enroll(canvas_course_id, section.id, student_details)
