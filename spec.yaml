@@ -1,0 +1,375 @@
+alerts:
+- rule: DEPLOYMENT_FAILED
+- rule: DOMAIN_FAILED
+databases:
+- cluster_name: db-valkey-sfo2-51185
+  engine: VALKEY
+  name: db-valkey-sfo2-51185
+  production: true
+  version: "8"
+- cluster_name: db-mysql-sfo2-12728
+  db_name: monday_sync
+  db_user: doadmin
+  engine: MYSQL
+  name: db-mysql-sfo2-12728
+  production: true
+  version: "8"
+envs:
+- key: MONDAY_API_KEY
+  scope: RUN_AND_BUILD_TIME
+  type: SECRET
+  value: EV[1:HKF3weaUT0ereBkQqicbI27ZjG/9yr5k:U3ESPZCgBem+xw/vr6h1pnzXJQtuGqRxk8n2i53z/YV+jlibRdPNtv0/rEnslkCjOxnDeSOLfxjySU1kbvlzKW0y4BVWzkHRystJO/wl7K8hsWJNJblmlKMmLTzDNa6m4ARxcqmQrz/bzvQm7qOcRDo8FLwiuK5C6P6kbnEnOel0wSvE7gZwfSXVC5VfZfJyycMIxoRP2UzJnnya/8lhmBVFTMt9i3Kfg8AGJd/WzaGDHo9O27LnlkX3bprf7u0xfIbCGuVCk1SSVAF67FhWYMPM0VsqiJoWgxgukqp7s1hcP29yEoJsGU6FR/hmVecu]
+- key: REDIS_URL
+  scope: RUN_AND_BUILD_TIME
+  type: SECRET
+  value: EV[1:xlWyaIf5VmWF/ULj86SW3IvtDBS3rmFq:eImgl3x+vUkoUt3A7V0HWgcLLjSptjF4uH6C262SfIGNsEEPf4dACkgtKymzyXiHvPBHjczry/LDoFhNjmlg7MIbCnyL1quHXSmlz+IRL4GxWCGfh0m4TH31UNjauFEZFIJx6bhFqblOaBIbq4h3XmCUx3u/JKatx7q0H8oyBQ==]
+- key: MASTER_STUDENT_PEOPLE_COLUMNS
+  scope: RUN_AND_BUILD_TIME
+  value: '{"multiple_person_mks1ccav": "TOR", "multiple_person_mks1wrfv": "ACE", "multiple_person_mks11jeg":
+    "Connect", "multiple_person_mks1h8rp": "Case Manager"}'
+- key: MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS
+  scope: RUN_AND_BUILD_TIME
+  value: '{"multiple_person_mks1ccav": {"name": "TOR", "targets": [{"board_id": "8993025745",
+    "connect_column_id": "board_relation_mks1mm92", "target_column_id": "person",
+    "target_column_type": "multiple-person"}, {"board_id": "6760943570", "connect_column_id":
+    "connect_boards_10__1", "target_column_id": "multiple_person_mks841jb", "target_column_type":
+    "multiple-person"}, {"board_id": "8792275301", "connect_column_id": "board_relation_mkq1pbm7",
+    "target_column_id": "multiple_person_mks881tx", "target_column_type": "multiple-person"},
+    {"board_id": "2910925965", "connect_column_id": "board_relation_mknt2k62", "target_column_id":
+    "multiple_person_mks88bas", "target_column_type": "multiple-person"}, {"board_id":
+    "6983028727", "connect_column_id": "connect_boards9__1", "target_column_id": "multiple_person_mks8tw9m",
+    "target_column_type": "multiple-person"}, {"board_id": "7192727422", "connect_column_id":
+    "board_relation12__1", "target_column_id": "multiple_person_mks8ynvv", "target_column_type":
+    "multiple-person"}, {"board_id": "6954571843", "connect_column_id": "board_relation_mks856tz",
+    "target_column_id": "multiple_person_mks8m4cx", "target_column_type": "multiple-person"}]},
+    "multiple_person_mks1wrfv": {"name": "ACE", "targets": [{"board_id": "8993025745",
+    "connect_column_id": "board_relation_mks1mm92", "target_column_id": "multiple_person_mks1w5fc",
+    "target_column_type": "multiple-person"}, {"board_id": "6760943570", "connect_column_id":
+    "connect_boards_10__1", "target_column_id": "multiple_person_mks8bbc9", "target_column_type":
+    "multiple-person"}, {"board_id": "8792275301", "connect_column_id": "board_relation_mkq1pbm7",
+    "target_column_id": "multiple_person_mks8fv4j", "target_column_type": "multiple-person"},
+    {"board_id": "2910925965", "connect_column_id": "board_relation_mknt2k62", "target_column_id":
+    "multiple_person_mks8wthq", "target_column_type": "multiple-person"}, {"board_id":
+    "6983028727", "connect_column_id": "connect_boards9__1", "target_column_id": "multiple_person_mks8q7v4",
+    "target_column_type": "multiple-person"}, {"board_id": "7192727422", "connect_column_id":
+    "board_relation12__1", "target_column_id": "multiple_person_mks8p47v", "target_column_type":
+    "multiple-person"}, {"board_id": "6954571843", "connect_column_id": "board_relation_mks856tz",
+    "target_column_id": "multiple_person_mks8ed5d", "target_column_type": "multiple-person"}]},
+    "multiple_person_mks11jeg": {"name": "Connect", "targets": [{"board_id": "8993025745",
+    "connect_column_id": "board_relation_mks1mm92", "target_column_id": "multiple_person_mks1hzcz",
+    "target_column_type": "multiple-person"}, {"board_id": "6760943570", "connect_column_id":
+    "connect_boards_10__1", "target_column_id": "multiple_person_mks8wbbd", "target_column_type":
+    "multiple-person"}, {"board_id": "8792275301", "connect_column_id": "board_relation_mkq1pbm7",
+    "target_column_id": "multiple_person_mks8p0wk", "target_column_type": "multiple-person"},
+    {"board_id": "2910925965", "connect_column_id": "board_relation_mknt2k62", "target_column_id":
+    "multiple_person_mks8bhb9", "target_column_type": "multiple-person"}, {"board_id":
+    "6983028727", "connect_column_id": "connect_boards9__1", "target_column_id": "multiple_person_mks82afn",
+    "target_column_type": "multiple-person"}, {"board_id": "7192727422", "connect_column_id":
+    "board_relation12__1", "target_column_id": "multiple_person_mks8532a", "target_column_type":
+    "multiple-person"}, {"board_id": "6954571843", "connect_column_id": "board_relation_mks856tz",
+    "target_column_id": "multiple_person_mks856hc", "target_column_type": "multiple-person"}]},
+    "multiple_person_mks1h8rp": {"name": "Case Manager", "targets": [{"board_id":
+    "8993025745", "connect_column_id": "board_relation_mks1mm92", "target_column_id":
+    "multiple_person_mks1hqnj", "target_column_type": "multiple-person"}, {"board_id":
+    "6760943570", "connect_column_id": "connect_boards_10__1", "target_column_id":
+    "multiple_person_mks1e40r", "target_column_type": "multiple-person"}, {"board_id":
+    "8792275301", "connect_column_id": "board_relation_mkq1pbm7", "target_column_id":
+    "multiple_person_mks8xm4t", "target_column_type": "multiple-person"}, {"board_id":
+    "2910925965", "connect_column_id": "board_relation_mknt2k62", "target_column_id":
+    "multiple_person_mks81rz7", "target_column_type": "multiple-person"}, {"board_id":
+    "6983028727", "connect_column_id": "connect_boards9__1", "target_column_id": "multiple_person_mks8q9ds",
+    "target_column_type": "multiple-person"}, {"board_id": "7192727422", "connect_column_id":
+    "board_relation12__1", "target_column_id": "multiple_person_mks8t19s", "target_column_type":
+    "multiple-person"}, {"board_id": "6954571843", "connect_column_id": "board_relation_mks856tz",
+    "target_column_id": "multiple_person_mks8prj4", "target_column_type": "multiple-person"}]}}'
+- key: HS_ROSTER_BOARD_ID
+  scope: RUN_AND_BUILD_TIME
+  value: "8792275301"
+- key: HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID
+  scope: RUN_AND_BUILD_TIME
+  value: board_relation_mkr0bwsf
+- key: HS_ROSTER_SUBITEM_DROPDOWN_COLUMN_ID
+  scope: RUN_AND_BUILD_TIME
+  value: dropdown_mks6zjqh
+- key: HS_ROSTER_MAIN_ITEM_to_PLP_CONNECT_COLUMN_ID
+  scope: RUN_AND_BUILD_TIME
+  value: board_relation_mks270k0
+- key: ALL_COURSES_BOARD_ID
+  scope: RUN_AND_BUILD_TIME
+  value: "8931036662"
+- key: PLP_BOARD_ID
+  scope: RUN_AND_BUILD_TIME
+  value: "8993025745"
+- key: PLP_CATEGORY_TO_CONNECT_COLUMN_MAP
+  scope: RUN_AND_BUILD_TIME
+  value: '{"Math": "board_relation_mkqnbtaf", "ELA": "board_relation_mkqnxyjd", "ACE":
+    "board_relation_mkqn34pg", "Other/Elective": "board_relation_mkr54dtg"}'
+- key: MASTER_STUDENT_LIST_BOARD_ID
+  scope: RUN_AND_BUILD_TIME
+  value: "6563671510"
+- key: SPED_STUDENTS_BOARD_ID
+  scope: RUN_AND_BUILD_TIME
+  value: "6760943570"
+- key: IEP_AP_BOARD_ID
+  scope: RUN_AND_BUILD_TIME
+  value: "6760108968"
+- key: SPED_TO_IEPAP_CONNECT_COLUMN_ID
+  scope: RUN_AND_BUILD_TIME
+  value: board_relation1__1
+- key: SPED_STUDENTS_PEOPLE_COLUMN_MAPPING
+  scope: RUN_AND_BUILD_TIME
+  value: '{"multiple_person_mks841jb": {"name": "TOR", "target_column_id": "multiple_person_mksyfdqr",
+    "target_column_type": "multiple-person"}, "multiple_person_mks8bbc9": {"name":
+    "ACE", "target_column_id": "multiple_person_mksyzwe5", "target_column_type": "multiple-person"},
+    "multiple_person_mks8wbbd": {"name": "Connect", "target_column_id": "multiple_person_mksy21yc",
+    "target_column_type": "multiple-person"}, "multiple_person_mks1e40r": {"name":
+    "Case Manager", "target_column_id": "people8__1", "target_column_type": "multiple-person"},
+    "people6__1": {"name": "SAI EF", "target_column_id": "multiple_person_mksy87ry",
+    "target_column_type": "multiple-person"}, "people7__1": {"name": "Transition",
+    "target_column_id": "multiple_person_mksyhrc7", "target_column_type": "multiple-person"},
+    "people9__1": {"name": "SAI Math", "target_column_id": "multiple_person_mksywns2",
+    "target_column_type": "multiple-person"}, "people3__1": {"name": "SAI ELA", "target_column_id":
+    "multiple_person_mksyy0n5", "target_column_type": "multiple-person"}, "people38__1":
+    {"name": "OT Provider", "target_column_id": "multiple_person_mksymw13", "target_column_type":
+    "multiple-person"}, "people1__1": {"name": "SLP Provider", "target_column_id":
+    "multiple_person_mksy8ceq", "target_column_type": "multiple-person"}, "people":
+    {"name": "Counseling Provider", "target_column_id": "multiple_person_mksy8rzv",
+    "target_column_type": "multiple-person"}, "people4__1": {"name": "Other service
+    provider", "target_column_id": "people7__1", "target_column_type": "multiple-person"}}'
+- key: MONDAY_MAIN_BOARD_ID
+  scope: RUN_AND_BUILD_TIME
+  value: "8993025745"
+- key: MONDAY_CONNECT_BOARD_COLUMN_ID
+  scope: RUN_AND_BUILD_TIME
+  value: board_relation_mkqnbtaf
+- key: LINKED_BOARD_ID
+  scope: RUN_AND_BUILD_TIME
+  value: "8931036662"
+- key: MONDAY_ENTRY_TYPE_COLUMN_ID
+  scope: RUN_AND_BUILD_TIME
+  value: entry_type__1
+- key: MONDAY_LOGGING_CONFIGS
+  scope: RUN_AND_BUILD_TIME
+  value: "[{\"trigger_column_id\": \"board_relation_mkqnbtaf\", \"log_type\": \"ConnectBoardChange\",
+    \"trigger_board_id\": \"8993025745\", \"params\": {\"subitem_name_prefix\": \"Math\",
+    \"subitem_entry_type\": \"Curriculum Change\", \"linked_board_id\": \"8931036662\",
+    \"entry_type_column_id\": \"entry_type__1\"}}, {\"trigger_column_id\": \"board_relation_mkqnxyjd\",
+    \"log_type\": \"ConnectBoardChange\", \"trigger_board_id\": \"8993025745\", \"params\":
+    {\"subitem_name_prefix\": \"ELA\", \"subitem_entry_type\": \"Curriculum Change\",
+    \"linked_board_id\": \"8931036662\", \"entry_type_column_id\": \"entry_type__1\"}},
+    {\"trigger_column_id\": \"board_relation_mkqn34pg\", \"log_type\": \"ConnectBoardChange\",
+    \"trigger_board_id\": \"8993025745\", \"params\": {\"subitem_name_prefix\": \"ACE\",
+    \"subitem_entry_type\": \"Curriculum Change\", \"linked_board_id\": \"8931036662\",
+    \"entry_type_column_id\": \"entry_type__1\"}}, {\"trigger_column_id\": \"board_relation_mkr54dtg\",
+    \"log_type\": \"ConnectBoardChange\", \"trigger_board_id\": \"8993025745\", \"params\":
+    {\"subitem_name_prefix\": \"Other/Elective\", \"subitem_entry_type\": \"Curriculum
+    Change\", \"linked_board_id\": \"8931036662\", \"entry_type_column_id\": \"entry_type__1\"}},
+    {\"log_type\": \"CopyToItemName\", \"trigger_board_id\": \"4647499288\", \"params\":
+    {\"source_column_id\": \"long_text\"}}, {\"log_type\": \"NameReformat\", \"trigger_board_id\":
+    \"8867053145\", \"trigger_column_id\": \"color_mkqrxk88\", \"params\": {\"target_text_column_id\":
+    \"text_mkq49hxd\"}}, {\"log_type\": \"NameReformat\", \"trigger_board_id\": \"8867061937\",
+    \"trigger_column_id\": \"color_mkqrvyxh\", \"params\": {\"target_text_column_id\":
+    \"text_mkq4ck1v\"}}, {\"log_type\": \"NameReformat\", \"trigger_board_id\": \"8867065088\",
+    \"trigger_column_id\": \"color_mkqrcqxc\", \"params\": {\"target_text_column_id\":
+    \"text_mkq4etq0\"}}, {\"log_type\": \"NameReformat\", \"trigger_board_id\": \"8867073280\",
+    \"trigger_column_id\": \"color_mkqrd8yq\", \"params\": {\"target_text_column_id\":
+    \"text_mkq4vdgp\"}}, {\"log_type\": \"NameReformat\", \"trigger_board_id\": \"8867076980\",
+    \"trigger_column_id\": \"color_mkqr4g1m\", \"params\": {\"target_text_column_id\":
+    \"text_mkq4c7s7\"}}, {\"log_type\": \"NameReformat\", \"trigger_board_id\": \"8867082107\",
+    \"trigger_column_id\": \"color_mkqr14fy\", \"params\": {\"target_text_column_id\":
+    \"text_mkq1qfj\"}}, {\"log_type\": \"NameReformat\", \"trigger_board_id\": \"8867125881\",
+    \"trigger_column_id\": \"color_mkqryw8a\", \"params\": {\"target_text_column_id\":
+    \"text_mkq1tkfd\"}}, {\"log_type\": \"NameReformat\", \"trigger_board_id\": \"8867127575\",
+    \"trigger_column_id\": \"color_mkqr1ygg\", \"params\": {\"target_text_column_id\":
+    \"text_mkq1h7a4\"}}, {\"log_type\": \"NameReformat\", \"trigger_board_id\": \"8867129440\",
+    \"trigger_column_id\": \"color_mkqrj1h8\", \"params\": {\"target_text_column_id\":
+    \"text_mkq17db1\"}}, {\"log_type\": \"CopyToItemName\", \"trigger_board_id\":
+    \"8650606421\", \"params\": {\"source_column_id\": \"email\"}}, {\"log_type\":
+    \"CopyToItemName\", \"trigger_board_id\": \"8488453286\", \"params\": {\"source_column_id\":
+    \"email4\"}}, {\"log_type\": \"CopyToItemName\", \"trigger_board_id\": \"7896495905\",
+    \"params\": {\"source_column_id\": \"email99\"}}, {\"log_type\": \"CopyToItemName\",
+    \"trigger_board_id\": \"8250920438\", \"params\": {\"source_column_id\": \"email\"}},
+    {\"log_type\": \"CopyToItemName\", \"trigger_board_id\": \"8250737479\", \"params\":
+    {\"source_column_id\": \"email\"}}]"
+- key: PLP_CANVAS_SYNC_COLUMN_ID
+  scope: RUN_AND_BUILD_TIME
+  value: color_mktdzdxj
+- key: PLP_CANVAS_SYNC_STATUS_VALUE
+  scope: RUN_AND_BUILD_TIME
+  value: Done
+- key: ALL_CLASSES_BOARD_ID
+  scope: RUN_AND_BUILD_TIME
+  value: "8931036662"
+- key: PLP_ALL_CLASSES_CONNECT_COLUMNS_STR
+  scope: RUN_AND_BUILD_TIME
+  value: board_relation_mkqnbtaf,board_relation_mkqnxyjd,board_relation_mkqn34pg,board_relation_mkr54dtg,color_mktdzdxj
+- key: ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID
+  scope: RUN_AND_BUILD_TIME
+  value: board_relation_mkt2hp4c
+- key: ALL_CLASSES_AG_GRAD_COLUMN
+  scope: RUN_AND_BUILD_TIME
+  value: dropdown_mkq0r2sj
+- key: PLP_OP2_SECTION_COLUMN
+  scope: RUN_AND_BUILD_TIME
+  value: lookup_mkta9mgv
+- key: PLP_M_SERIES_LABELS_COLUMN
+  scope: RUN_AND_BUILD_TIME
+  value: lookup_mkta9mgv
+- key: CANVAS_API_URL
+  scope: RUN_AND_BUILD_TIME
+  value: https://triviumcharter.instructure.com/
+- key: CANVAS_TERM_ID
+  scope: RUN_AND_BUILD_TIME
+  value: "2526"
+- key: PLP_TO_MASTER_STUDENT_CONNECT_COLUMN
+  scope: RUN_AND_BUILD_TIME
+  value: board_relation_mks1n32a
+- key: MASTER_STUDENT_SSID_COLUMN
+  scope: RUN_AND_BUILD_TIME
+  value: text__1
+- key: MASTER_STUDENT_EMAIL_COLUMN
+  scope: RUN_AND_BUILD_TIME
+  value: _students1__school_email_address
+- key: MASTER_STUDENT_BOARD_ID
+  scope: RUN_AND_BUILD_TIME
+  value: "6563671510"
+- key: CANVAS_API_KEY
+  scope: RUN_AND_BUILD_TIME
+  type: SECRET
+  value: EV[1:HNRODlfiOoPI8JCC/PpHYijEJjkQcYrU:cJo/82Ys1XQGQ020M2KKNTVxLXf0cmdyaTokC53PlHVivjjmydzJ1x0d8AOMrLY8EHHfuVmYdQErDde2sEm/U3APif4VisQWmPN16s0JGFB4JTLLFPU=]
+- key: HS_ROSTER_MAIN_ITEM_to_PLP_CONNECT_COLUMN_ID
+  scope: RUN_AND_BUILD_TIME
+  value: board_relation_mks270k0
+- key: CANVAS_BOARD_ID
+  scope: RUN_AND_BUILD_TIME
+  value: "7308051382"
+- key: CANVAS_COURSE_ID_COLUMN_ID
+  scope: RUN_AND_BUILD_TIME
+  value: canvas_course_id_mkm1fwt4
+- key: CANVAS_SUBACCOUNT_ID
+  scope: RUN_AND_BUILD_TIME
+  value: "4"
+- key: CANVAS_TEMPLATE_COURSE_ID
+  scope: RUN_AND_BUILD_TIME
+  value: "39"
+- key: CANVAS_BOARD_COURSE_NAME_COLUMN_ID
+  scope: RUN_AND_BUILD_TIME
+  value: text65__1
+- key: CANVAS_COURSES_TEACHER_COLUMN_ID
+  scope: RUN_AND_BUILD_TIME
+  value: teacher__1
+- key: PLP_TO_HS_ROSTER_CONNECT_COLUMN
+  scope: RUN_AND_BUILD_TIME
+  value: board_relation_mks2cttw
+- key: HS_ROSTER_SUBITEM_INTEGRITY_STATUS_COLUMN_ID
+  scope: RUN_AND_BUILD_TIME
+  value: color_mktf6eh
+- key: HS_ROSTER_SUBITEM_MISMATCH_STATUS_VALUE
+  scope: RUN_AND_BUILD_TIME
+  value: "⚠️ PLP Mismatch"
+- key: CANVAS_COURSE_ID_COLUMN
+  scope: RUN_AND_BUILD_TIME
+  value: canvas_course_id_mkm1fwt4
+- key: ALL_STAFF_BOARD_ID
+  scope: RUN_AND_BUILD_TIME
+  value: "9743629443"
+- key: ALL_STAFF_EMAIL_COLUMN_ID
+  scope: RUN_AND_BUILD_TIME
+  value: _staff1__work_email
+- key: ALL_STAFF_SIS_ID_COLUMN_ID
+  scope: RUN_AND_BUILD_TIME
+  value: text_mktg7h6
+- key: ALL_STAFF_PERSON_COLUMN_ID
+  scope: RUN_AND_BUILD_TIME
+  value: multiple_person_mkrkvkek
+- key: CANVAS_TO_STAFF_CONNECT_COLUMN_ID
+  scope: RUN_AND_BUILD_TIME
+  value: board_relation_mkthbzgr
+- key: CANVAS_COURSE_TYPE_COLUMN_ID
+  scope: RUN_AND_BUILD_TIME
+  value: status__1
+- key: MASTER_STUDENT_ACE_PEOPLE_COLUMN_ID
+  scope: RUN_AND_BUILD_TIME
+  value: multiple_person_mks1wrfv
+- key: MASTER_STUDENT_CONNECT_PEOPLE_COLUMN_ID
+  scope: RUN_AND_BUILD_TIME
+  value: multiple_person_mks11jeg
+- key: PLP_SUBITEM_ENTRY_TYPE_COLUMN_ID
+  scope: RUN_AND_BUILD_TIME
+  value: entry_type__1
+- key: MASTER_STUDENT_TOR_COLUMN_ID
+  scope: RUN_AND_BUILD_TIME
+  value: multiple_person_mks1ccav
+- key: DB_USER
+  scope: RUN_AND_BUILD_TIME
+  value: doadmin
+- key: DB_PASSWORD
+  scope: RUN_AND_BUILD_TIME
+  type: SECRET
+  value: EV[1:8NT3kNiarG5Q5vLXHWioIfFN7XQ8bZdO:bPyK61jAHkmpjDynujwmRhVQ/1RmHRbe/wfqJD/QMigUKtssfABJfA==]
+- key: DB_NAME
+  scope: RUN_AND_BUILD_TIME
+  value: monday_sync
+- key: DB_PORT
+  scope: RUN_AND_BUILD_TIME
+  value: "25060"
+- key: DB_HOST
+  scope: RUN_AND_BUILD_TIME
+  value: db-mysql-sfo2-12728-do-user-18960292-0.f.db.ondigitalocean.com
+- key: DB_SSL_MODE
+  scope: RUN_AND_BUILD_TIME
+  value: REQUIRED
+features:
+- buildpack-stack=ubuntu-22
+ingress:
+  rules:
+  - component:
+      name: unified-webhook-handler
+    match:
+      authority:
+        exact: ""
+      path:
+        prefix: /
+name: plankton-app
+region: nyc
+services:
+- environment_slug: python
+  envs:
+  - key: DATABASE_URL
+    scope: RUN_TIME
+    value: ${db-valkey-sfo2-51185.DATABASE_URL}
+  github:
+    branch: main
+    deploy_on_push: true
+    repo: trivium-charter/unified-monday-handlers
+  http_port: 8080
+  instance_count: 1
+  instance_size_slug: apps-s-1vcpu-0.5gb
+  name: unified-webhook-handler
+  run_command: gunicorn --worker-class gevent -w 4 app:app
+  source_dir: /
+workers:
+- environment_slug: python
+  envs:
+  - key: DATABASE_URL
+    scope: RUN_TIME
+    value: ${db-valkey-sfo2-51185.DATABASE_URL}
+  github:
+    branch: main
+    deploy_on_push: true
+    repo: trivium-charter/unified-monday-handlers
+  instance_count: 1
+  instance_size_slug: apps-s-1vcpu-0.5gb
+  name: celery-worker
+  run_command: celery -A app.celery_app worker --loglevel=info -P gevent -c 100
+  source_dir: /
+- environment_slug: python
+  github:
+    branch: main
+    deploy_on_push: true
+    repo: trivium-charter/unified-monday-handlers
+  instance_count: 1
+  instance_size_slug: apps-s-1vcpu-0.5gb
+  name: unified-monday-handlers
+  run_command: python3 full_sync.py
+  source_dir: /
