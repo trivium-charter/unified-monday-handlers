@@ -253,28 +253,50 @@ def initialize_canvas_api():
     return None
 
 def find_canvas_user(student_details):
+    """
+    Finds a Canvas user by various identifiers, correctly handling both
+    integer-based internal IDs and text-based SIS User IDs.
+    """
     canvas_api = initialize_canvas_api()
     if not canvas_api:
         return None
 
-    if student_details.get('canvas_id'):
+    # --- Start of new, more robust logic ---
+    
+    # 1. First, try to find the user using the ID from Monday.com
+    # This ID could be the internal Canvas ID OR the SIS User ID.
+    id_from_monday = student_details.get('canvas_id')
+    if id_from_monday:
         try:
-            return canvas_api.get_user(student_details['canvas_id'])
-        except (ResourceDoesNotExist, ValueError):
+            # Try to treat it as the internal integer ID first.
+            user_id = int(id_from_monday)
+            return canvas_api.get_user(user_id)
+        except (ValueError, TypeError):
+            # If it's not a number (e.g., 'student_12883'), it must be an SIS ID.
+            try:
+                return canvas_api.get_user(id_from_monday, 'sis_user_id')
+            except ResourceDoesNotExist:
+                # The SIS ID was not found. Continue to other search methods.
+                pass
+        except ResourceDoesNotExist:
+            # It was a valid number, but no user was found. Continue.
             pass
 
+    # 2. If not found by ID, proceed to search by email.
     if student_details.get('email'):
         try:
             return canvas_api.get_user(student_details['email'], 'login_id')
         except ResourceDoesNotExist:
             pass
 
-    if student_details.get('ssid'):
+    # 3. If still not found, search by SSID (which might be different from the main ID).
+    if student_details.get('ssid') and student_details.get('ssid') != id_from_monday:
         try:
             return canvas_api.get_user(student_details['ssid'], 'sis_user_id')
         except ResourceDoesNotExist:
             pass
-
+            
+    # 4. As a last resort, search by email term.
     if student_details.get('email'):
         try:
             search_results = canvas_api.get_account(1).get_users(search_term=student_details['email'])
