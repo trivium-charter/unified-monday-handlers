@@ -660,7 +660,6 @@ def clear_subitems_by_creator(parent_item_id, creator_id_to_delete, dry_run=True
     for subitem_id in subitems_to_delete:
         print(f"DELETING subitem {subitem_id}...")
         delete_item(subitem_id)
-        time.sleep(0.5)
 
 def sync_single_plp_item(plp_item_id, dry_run=True):
     """
@@ -696,7 +695,7 @@ def sync_single_plp_item(plp_item_id, dry_run=True):
                         log_message = f"{mapping.get('name', 'Staff')} set to {person_name}"
                         print(f"ACTION: Creating subitem -> '{log_message}'")
                         create_subitem(plp_item_id, log_message, column_values=staff_change_values)
-                time.sleep(1)
+
     else:
         print("DRY RUN: Skipping teacher sync from Master Student board.")
 
@@ -756,8 +755,6 @@ def sync_single_plp_item(plp_item_id, dry_run=True):
                 else:
                     print(f"WARNING: Could not find a linked teacher on the Canvas Board for course '{class_name}'.")
 
-        if not dry_run:
-            time.sleep(1)
 
 def get_teacher_person_value_from_canvas_board(canvas_item_id):
     """DEBUG version to find the teacher's 'Person' value."""
@@ -869,9 +866,6 @@ if __name__ == '__main__':
                 insert_query = "INSERT INTO processed_students (student_id) VALUES (%s)"
                 cursor.execute(insert_query, (item_id,))
                 db.commit()
-            
-            if not DRY_RUN:
-                time.sleep(2)
 
     except mysql.connector.Error as err:
         print(f"FATAL: Database error. Cannot proceed. Error: {err}")
@@ -879,6 +873,7 @@ if __name__ == '__main__':
         print(f"FATAL ERROR during script execution: {e}")
         import traceback
         traceback.print_exc()
+    time.sleep(0.2)  # Pause for 200 milliseconds
     finally:
         # --- Cleanup ---
         if cursor:
