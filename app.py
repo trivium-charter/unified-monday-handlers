@@ -513,7 +513,11 @@ if broker_use_ssl_config:
     celery_app.conf.broker_use_ssl = broker_use_ssl_config
     celery_app.conf.redis_backend_use_ssl = broker_use_ssl_config
 celery_app.conf.timezone = 'America/Los_Angeles'
-celery_app.conf.broker_transport_options = {'health_check_interval': 60}
+# In app.py - NEW CONFIGURATION
+celery_app.conf.broker_transport_options = {
+    'health_check_interval': 30,  # Checks the connection every 30 seconds
+    'socket_keepalive': True,     # Enables TCP keepalives
+}
 celery_app.conf.broker_connection_retry_on_startup = True
 # ==============================================================================
 # CELERY TASKS
