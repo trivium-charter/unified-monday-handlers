@@ -22,7 +22,7 @@ import mysql.connector
 from canvasapi import Canvas
 from canvasapi.exceptions import CanvasException, Conflict, ResourceDoesNotExist
 import unicodedata
-
+import re
 # ==============================================================================
 # 1. CENTRALIZED CONFIGURATION
 # ==============================================================================
@@ -67,7 +67,28 @@ MASTER_STUDENT_TOR_COLUMN_ID = os.environ.get("MASTER_STUDENT_TOR_COLUMN_ID")
 CANVAS_TERM_ID = os.environ.get("CANVAS_TERM_ID")
 CANVAS_SUBACCOUNT_ID = os.environ.get("CANVAS_SUBACCOUNT_ID")
 CANVAS_TEMPLATE_COURSE_ID = os.environ.get("CANVAS_TEMPLATE_COURSE_ID")
+# --- Add these to Section 1 ---
 
+PLP_JUMPSTART_SH_CONNECT_COLUMN = "board_relation_mktqp08q" # Example ID, use your actual column ID
+MASTER_STUDENT_GRADE_COLUMN_ID = "color_mksy8hcw" # Example ID, use your actual column ID
+
+SPECIAL_COURSE_MONDAY_IDS = {
+    "Jumpstart": 9717398551,
+    "ACE Study Hall": 9717398779,
+    "Connect English Study Hall": 9717398717,
+    "Connect Math Study Hall": 9717398109,
+    "Prep Math and ELA Study Hall": 9717398063,
+    "EL Support Study Hall": 10046 # Using Canvas ID as a placeholder
+}
+
+SPECIAL_COURSE_CANVAS_IDS = {
+    "Jumpstart": 10069,
+    "ACE Study Hall": 10128,
+    "Connect English Study Hall": 10109,
+    "Connect Math Study Hall": 9966,
+    "Prep Math and ELA Study Hall": 9960,
+    "EL Support Study Hall": 10046
+}
 try:
     PLP_CATEGORY_TO_CONNECT_COLUMN_MAP = json.loads(os.environ.get("PLP_CATEGORY_TO_CONNECT_COLUMN_MAP", "{}"))
     MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS = json.loads(os.environ.get("MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS", "{}"))
@@ -108,6 +129,95 @@ def execute_monday_graphql(query):
                 return None
     return None
 
+# --- Add these two functions to Section 2 ---
+
+def get_study_hall_section_from_grade(grade_text):
+    """
+    Determines the correct Study Hall section name based on the student's grade level.
+    """
+    if not grade_text:
+        return "General"
+
+    match = re.search(r'\d+', grade_text)
+    if grade_text.upper() in ["TK", "K"]:
+        grade_level = 0
+    elif match:
+        grade_level = int(match.group(0))
+    else:
+        return "General"
+
+    if grade_level <= 5:
+        return "Elementary School"
+    elif 6 <= grade_level <= 8:
+        return "Middle School"
+    elif 9 <= grade_level <= 12:
+        return "High School"
+    else:
+        return "General"
+
+def process_student_special_enrollments(plp_item, dry_run=True):
+    plp_item_id = int(plp_item['id'])
+    print(f"\n--- Processing Special Enrollments for: {plp_item['name']} (PLP ID: {plp_item_id}) ---")
+
+    student_details = get_student_details_from_plp(plp_item_id)
+    if not student_details:
+        print("  SKIPPING: Could not get student details.")
+        return
+
+    master_id = student_details['master_id']
+    
+    # Get TOR and Grade Level from Master Student Item
+    master_details_query = f'query {{ items(ids:[{master_id}]) {{ column_values(ids:["{MASTER_STUDENT_TOR_COLUMN_ID}", "{MASTER_STUDENT_GRADE_COLUMN_ID}"]) {{ id text value }} }} }}'
+    master_result = execute_monday_graphql(master_details_query)
+    
+    tor_last_name = "Orientation"
+    grade_text = ""
+    if master_result and master_result.get('data', {}).get('items'):
+        cols = {cv['id']: cv for cv in master_result['data']['items'][0].get('column_values', [])}
+        grade_text = cols.get(MASTER_STUDENT_GRADE_COLUMN_ID, {}).get('text', '')
+        tor_val_str = cols.get(MASTER_STUDENT_TOR_COLUMN_ID, {}).get('value')
+        if tor_val_str:
+            try:
+                tor_ids = get_people_ids_from_value(json.loads(tor_val_str))
+                if tor_ids:
+                    tor_full_name = get_user_name(list(tor_ids)[0])
+                    if tor_full_name: tor_last_name = tor_full_name.split()[-1]
+            except (json.JSONDecodeError, TypeError):
+                print(f"  WARNING: Could not parse TOR value for master item {master_id}.")
+
+    plp_links_to_add = set()
+
+    # 1. Process Jumpstart
+    jumpstart_canvas_id = SPECIAL_COURSE_CANVAS_IDS.get("Jumpstart")
+    if jumpstart_canvas_id:
+        print(f"  Processing Jumpstart enrollment, section: {tor_last_name}")
+        if not dry_run:
+            enroll_student(jumpstart_canvas_id, tor_last_name, student_details)
+        jumpstart_item_id = SPECIAL_COURSE_MONDAY_IDS.get("Jumpstart")
+        if jumpstart_item_id: plp_links_to_add.add(jumpstart_item_id)
+
+    # 2. Process Study Hall
+    sh_section_name = get_study_hall_section_from_grade(grade_text)
+    
+    # This logic assumes a single "Study Hall" course is determined by the ACE/Connect/etc. courses.
+    # You will need to define which Study Hall is the target.
+    # For this example, we will assume "ACE Study Hall" is the default if no other rule matches.
+    target_sh_name = "ACE Study Hall" # Replace with your logic to determine which study hall
+    
+    target_sh_canvas_id = SPECIAL_COURSE_CANVAS_IDS.get(target_sh_name)
+    if target_sh_canvas_id:
+        print(f"  Processing {target_sh_name} enrollment, section: {sh_section_name}")
+        if not dry_run:
+            enroll_student(target_sh_canvas_id, sh_section_name, student_details)
+        sh_item_id = SPECIAL_COURSE_MONDAY_IDS.get(target_sh_name)
+        if sh_item_id: plp_links_to_add.add(sh_item_id)
+    
+    # 3. Update the PLP connect column
+    if plp_links_to_add:
+        print(f"  Action: Linking {len(plp_links_to_add)} special courses to PLP column {PLP_JUMPSTART_SH_CONNECT_COLUMN}.")
+        if not dry_run:
+            bulk_add_to_connect_column(plp_item_id, int(PLP_BOARD_ID), PLP_JUMPSTART_SH_CONNECT_COLUMN, plp_links_to_add)
+            
 def get_all_board_items(board_id, item_ids=None):
     all_items = []
     cursor = None
@@ -567,10 +677,11 @@ if __name__ == '__main__':
         for i, plp_item in enumerate(items_to_process, 1):
             plp_item_id = int(plp_item['id'])
             print(f"\n===== Processing Student {i}/{total_to_process} (PLP ID: {plp_item_id}) =====")
-
-            if PERFORM_INITIAL_CLEANUP:
-                print(f"--- Performing initial subitem cleanup for item {plp_item_id} ---")
-                clear_subitems_by_creator(plp_item_id, creator_id)
+            
+            try:
+                # --- NEW PHASE ---
+                print("--- Phase 0: Syncing Special Enrollments (Jumpstart/Study Hall) ---")
+                process_student_special_enrollments(plp_item, dry_run=DRY_RUN)
                 
             try:
                 print("--- Phase 1: Checking for and syncing HS Roster ---")
