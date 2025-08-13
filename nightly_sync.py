@@ -643,40 +643,66 @@ def run_plp_sync_for_student(plp_item_id, creator_id, dry_run=True):
             manage_class_enrollment("enroll", plp_item_id, class_item_id, student_details, category_name, creator_id, subitem_cols=curriculum_change_values)
 # Place this function inside Section 3: CORE SYNC LOGIC
 
-def clear_subitems_by_creator(parent_item_id, creator_id_to_delete, dry_run=True):
-    """Fetches and deletes subitems created by a specific user."""
-    if not creator_id_to_delete:
-        print("ERROR: No creator ID provided. Skipping deletion.")
-        return
+# This function replaces clear_subitems_by_creator
+def reconcile_subitems(plp_item_id, creator_id, dry_run=True):
+    """
+    Intelligently reconciles subitems. It compares the subitems that SHOULD
+    exist with what DOES exist, and only deletes the outdated ones.
+    """
+    print(f"--- Performing intelligent subitem reconciliation for item {plp_item_id} ---")
+    
+    # 1. Determine the set of subitems that SHOULD exist based on current data.
+    # This requires re-creating the logic that generates subitem names.
+    desired_subitems = set()
+    student_details = get_student_details_from_plp(plp_item_id)
+    if not student_details:
+        return # Cannot determine desired state without student details
 
-    query = f'query {{ items (ids: [{parent_item_id}]) {{ subitems {{ id creator {{ id }} }} }} }}'
+    # Logic for curriculum subitems
+    class_id_to_category_map = {}
+    for category, column_id in PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.items():
+        for class_id in get_linked_items_from_board_relation(plp_item_id, int(PLP_BOARD_ID), column_id):
+            class_id_to_category_map[class_id] = category
+
+    for class_item_id, category_name in class_id_to_category_map.items():
+        class_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)) or f"Item {class_item_id}"
+        # This assumes a single section and a "Success" status for comparison purposes.
+        # This format must exactly match the one used in manage_class_enrollment.
+        desired_subitems.add(f"SYNC: {class_name} ({class_item_id}) - Success")
+
+    # 2. Get all existing subitems created by the script.
+    query = f'query {{ items(ids:[{plp_item_id}]) {{ subitems {{ id name creator {{ id }} }} }} }}'
     result = execute_monday_graphql(query)
-    subitems_to_delete = []
+    existing_subitems = {}
     try:
         subitems = result['data']['items'][0]['subitems']
         for subitem in subitems:
-            if subitem.get('creator') and str(subitem['creator'].get('id')) == str(creator_id_to_delete):
-                subitems_to_delete.append(subitem['id'])
+            creator = subitem.get('creator')
+            if creator and str(creator.get('id')) == str(creator_id):
+                existing_subitems[subitem['name']] = subitem['id']
     except (KeyError, IndexError, TypeError):
-        # This is not an error, just means no subitems were found.
-        print(f"INFO: No script-generated subitems found to clear for item {parent_item_id}.")
-        return
+        pass # No subitems found
+
+    # 3. Compare the two sets and determine which subitems to delete.
+    subitems_to_delete = []
+    for subitem_name, subitem_id in existing_subitems.items():
+        if subitem_name not in desired_subitems:
+            subitems_to_delete.append(subitem_id)
 
     if not subitems_to_delete:
-        print(f"INFO: No script-generated subitems found to clear for item {parent_item_id}.")
+        print("  INFO: No outdated subitems to delete.")
         return
 
-    print(f"INFO: Found {len(subitems_to_delete)} script-generated subitem(s) to clear for item {parent_item_id}.")
-
+    print(f"  INFO: Found {len(subitems_to_delete)} outdated subitem(s) to delete.")
     if dry_run:
-        print("DRY RUN: Would delete the subitems listed above.")
+        print("  DRY RUN: Would delete the subitems listed above.")
         return
 
     for subitem_id in subitems_to_delete:
-        print(f"DELETING subitem {subitem_id}...")
+        print(f"  DELETING outdated subitem {subitem_id}...")
         delete_item(subitem_id)
-        # It's good practice to have a small sleep when deleting many items
         time.sleep(0.5)
+        
 # ==============================================================================
 # 4. SCRIPT EXECUTION
 # ==============================================================================
@@ -739,8 +765,8 @@ if __name__ == '__main__':
             # This is the main try/except for each individual student
             try:
                 if PERFORM_INITIAL_CLEANUP:
-                    print(f"--- Performing initial subitem cleanup for item {plp_item_id} ---")
-                    clear_subitems_by_creator(plp_item_id, creator_id, dry_run=DRY_RUN)
+                    # This now calls the new, smarter function
+                      reconcile_subitems(plp_item_id, creator_id, dry_run=DRY_RUN)
 
                 print("--- Phase 0: Syncing Special Enrollments (Jumpstart/Study Hall) ---")
                 process_student_special_enrollments(plp_item, dry_run=DRY_RUN)
