@@ -557,7 +557,14 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details,
     pass
 
 def run_plp_sync_for_student(plp_item_id, creator_id, dry_run=True):
+    """
+    The main sync logic for a single PLP item.
+    """
+    # The cleanup logic is now handled by the PERFORM_INITIAL_CLEANUP switch
+    # in the main execution block, so we no longer need it here.
+
     print(f"\n--- Processing PLP Item: {plp_item_id} ---")
+    # ... rest of the function continues ...
     student_details = get_student_details_from_plp(plp_item_id)
     if not student_details: return
     master_student_id = student_details.get('master_id')
