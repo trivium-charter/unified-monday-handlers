@@ -396,6 +396,60 @@ def enroll_or_create_and_enroll(course_id, section_id, student_details):
 # 3. CORE SYNC LOGIC (Functions from both scripts)
 # ==============================================================================
 
+# Place this function inside Section 3: CORE SYNC LOGIC
+
+def get_student_details_from_plp(plp_item_id):
+    """Fetches comprehensive student details via the PLP item connection."""
+    query = f"""
+    query {{
+        items (ids: [{plp_item_id}]) {{
+            column_values (ids: ["{PLP_TO_MASTER_STUDENT_CONNECT_COLUMN}"]) {{
+                value
+            }}
+        }}
+    }}
+    """
+    result = execute_monday_graphql(query)
+    try:
+        connect_column_value = json.loads(result['data']['items'][0]['column_values'][0]['value'])
+        linked_ids = [item['linkedPulseId'] for item in connect_column_value.get('linkedPulseIds', [])]
+        if not linked_ids:
+            return None
+        master_student_id = linked_ids[0]
+
+        details_query = f"""
+        query {{
+            items (ids: [{master_student_id}]) {{
+                id
+                name
+                column_values(ids: ["{MASTER_STUDENT_SSID_COLUMN}", "{MASTER_STUDENT_EMAIL_COLUMN}", "{MASTER_STUDENT_CANVAS_ID_COLUMN}"]) {{
+                    id
+                    text
+                }}
+            }}
+        }}
+        """
+        details_result = execute_monday_graphql(details_query)
+        item_details = details_result['data']['items'][0]
+        student_name = item_details['name']
+
+        column_map = {cv['id']: cv.get('text') for cv in item_details.get('column_values', []) if isinstance(cv, dict)}
+
+        ssid = column_map.get(MASTER_STUDENT_SSID_COLUMN, '')
+        
+        # Clean the email to prevent matching errors
+        raw_email = column_map.get(MASTER_STUDENT_EMAIL_COLUMN, '')
+        email = unicodedata.normalize('NFKC', raw_email).strip()
+        canvas_id = column_map.get(MASTER_STUDENT_CANVAS_ID_COLUMN, '')
+
+        if not all([student_name, email]):
+            return None
+
+        return {'name': student_name, 'ssid': ssid, 'email': email, 'canvas_id': canvas_id, 'master_id': item_details['id']}
+    except (TypeError, KeyError, IndexError, json.JSONDecodeError) as e:
+        print(f"ERROR: Could not parse student details from Monday.com response for PLP {plp_item_id}: {e}")
+        return None
+        
 def run_hs_roster_sync_for_student(hs_roster_item, dry_run=True):
     parent_item_id = hs_roster_item['id']
     parent_item_name = hs_roster_item['name']
