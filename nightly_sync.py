@@ -746,7 +746,7 @@ def reconcile_subitems(plp_item_id, creator_id, dry_run=True):
 
 if __name__ == '__main__':
     # ---! CONFIGURATION !---
-    PERFORM_INITIAL_CLEANUP = True  # SET TO False AFTER THE FIRST RUN
+    PERFORM_INITIAL_CLEANUP = False  # SET TO False AFTER THE FIRST RUN
     DRY_RUN = False
     TARGET_USER_NAME = "Sarah Bruce"
     # ---!  END CONFIG   !---
