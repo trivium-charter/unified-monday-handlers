@@ -481,6 +481,7 @@ def run_plp_sync_for_student(plp_item_id, creator_id, dry_run=True):
 # ==============================================================================
 
 if __name__ == '__main__':
+    PERFORM_INITIAL_CLEANUP = True  # SET TO False AFTER THE FIRST RUN
     DRY_RUN = False
     TARGET_USER_NAME = "Sarah Bruce"
 
@@ -531,7 +532,11 @@ if __name__ == '__main__':
         for i, plp_item in enumerate(items_to_process, 1):
             plp_item_id = int(plp_item['id'])
             print(f"\n===== Processing Student {i}/{total_to_process} (PLP ID: {plp_item_id}) =====")
-            
+
+            if PERFORM_INITIAL_CLEANUP:
+                print(f"--- Performing initial subitem cleanup for item {plp_item_id} ---")
+                clear_subitems_by_creator(plp_item_id, creator_id)
+                
             try:
                 print("--- Phase 1: Checking for and syncing HS Roster ---")
                 hs_roster_connect_val = get_column_value(plp_item_id, int(PLP_BOARD_ID), PLP_TO_HS_ROSTER_CONNECT_COLUMN)
