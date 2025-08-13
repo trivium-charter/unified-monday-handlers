@@ -552,7 +552,7 @@ if __name__ == '__main__':
         for item in all_hs_roster_items:
             item_id = int(item['id'])
             updated_at_str = item['updated_at'].split('.')[0]
-            updated_at = datetime.strptime(updated_at_str, '%Y-%m-%dT%H:%M:%S').replace(tzinfo=timezone.utc)
+            updated_at = datetime.strptime(updated_at_str, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)
             
             last_synced = processed_map.get(item_id)
             if last_synced:
