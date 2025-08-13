@@ -671,12 +671,13 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details,
             final_status = "Failed" if "Failed" in all_statuses else "Success"
             # MODIFIED: Use the category name in the subitem log
             subitem_title = f"Added {category_name} '{class_name}' (Sections: {section_names}): {final_status}"
-            create_subitem(plp_item_id, subitem_title, subitem_cols)
+            create_subitem(plp_item_id, f"Added {category_name} '{all_courses_item_name}'", column_values=subitem_cols)
 
     elif action == "unenroll":
         result = unenroll_student_from_course(canvas_course_id, student_details)
         # MODIFIED: Use the category name in the subitem log
-        create_subitem(plp_item_id, f"Removed {category_name} '{class_name}': {'Success' if result else 'Failed'}", subitem_cols)
+        create_subitem(plp_item_id, f"Removed {category_name} '{all_courses_item_name}'", column_values=subitem_cols)
+
 
 @celery_app.task
 def process_canvas_full_sync_from_status(event_data):
