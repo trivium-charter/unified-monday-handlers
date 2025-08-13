@@ -110,18 +110,25 @@ def execute_monday_graphql(query):
                 return None
     return None
 
-def get_all_board_items(board_id, columns_to_fetch=None):
+def get_all_board_items(board_id, item_ids=None):
+    """
+    Fetches all items from a board, or specific items if item_ids are provided.
+    Handles pagination.
+    """
     all_items = []
     cursor = None
-    column_query = " ".join(columns_to_fetch) if columns_to_fetch else ""
+    
+    # If specific item IDs are requested, format them for the query
+    id_filter = f'query_params: {{ids: {item_ids}}}' if item_ids else ""
+    
     while True:
         cursor_str = f'cursor: "{cursor}"' if cursor else ""
         query = f"""
             query {{
                 boards(ids: {board_id}) {{
-                    items_page (limit: 50, {cursor_str}) {{
+                    items_page (limit: 50, {id_filter}, {cursor_str}) {{
                         cursor
-                        items {{ id name updated_at {column_query} }}
+                        items {{ id name updated_at }}
                     }}
                 }}
             }}"""
@@ -131,7 +138,9 @@ def get_all_board_items(board_id, columns_to_fetch=None):
             page_info = result['data']['boards'][0]['items_page']
             all_items.extend(page_info['items'])
             cursor = page_info.get('cursor')
-            if not cursor: break
+            # If we were fetching specific IDs, we don't need to paginate
+            if not cursor or item_ids:
+                break
             print(f"  Fetched {len(all_items)} items from board {board_id}...")
         except (KeyError, IndexError):
             print(f"ERROR: Could not parse items from board {board_id}.")
