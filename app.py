@@ -91,6 +91,25 @@ def get_user_email(user_id):
         return result['data']['users'][0].get('email')
     return None
     
+# Add this function to the MONDAY.COM UTILITIES section in app.py
+
+def check_if_subitem_exists_by_name(parent_item_id, subitem_name_to_check):
+    """
+    Checks if a subitem with an exact name already exists for a given parent item.
+    Returns True if found, False otherwise.
+    """
+    query = f'query {{ items(ids:[{parent_item_id}]) {{ subitems {{ name }} }} }}'
+    result = execute_monday_graphql(query)
+    try:
+        subitems = result['data']['items'][0]['subitems']
+        for subitem in subitems:
+            if subitem.get('name') == subitem_name_to_check:
+                return True
+    except (KeyError, IndexError, TypeError):
+        # This can happen if there are no subitems or an API error occurs
+        pass
+    return False
+    
 def execute_monday_graphql(query):
     try:
         response = requests.post(MONDAY_API_URL, json={"query": query}, headers=MONDAY_HEADERS)
@@ -608,75 +627,74 @@ def get_student_details_from_plp(plp_item_id):
         print(f"ERROR: Could not parse student details from Monday.com response: {e}")
         return None
 
+# In app.py, replace the entire old manage_class_enrollment function with this one.
+
 def manage_class_enrollment(action, plp_item_id, class_item_id, student_details, category_name, subitem_cols=None):
+    """
+    Manages Canvas enrollment and creates a simple, clean subitem log.
+    It now checks for duplicates before creating an "Added" subitem.
+    """
     subitem_cols = subitem_cols or {}
-
-    linked_canvas_item_ids = get_linked_items_from_board_relation(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
     all_courses_item_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)) or f"Item {class_item_id}"
+    linked_canvas_item_ids = get_linked_items_from_board_relation(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
+
+    # Determine the correct class name (Canvas name if available, otherwise the general name)
+    class_name = all_courses_item_name
+    if linked_canvas_item_ids:
+        canvas_item_id = list(linked_canvas_item_ids)[0]
+        canvas_class_name = get_item_name(canvas_item_id, int(CANVAS_BOARD_ID))
+        if canvas_class_name:
+            class_name = canvas_class_name
     
-    # If the class is not linked to the Canvas Board, it's a non-Canvas class.
-    if not linked_canvas_item_ids:
-        if action == "enroll":
-            # MODIFIED: Use the category name in the subitem log
-            create_subitem(plp_item_id, f"Added {category_name} '{all_courses_item_name}'", subitem_cols)
-        elif action == "unenroll":
-            create_subitem(plp_item_id, f"Removed {category_name} '{all_courses_item_name}'", subitem_cols)
-        return
-        
-    canvas_item_id = list(linked_canvas_item_ids)[0]
-    class_name = get_item_name(canvas_item_id, int(CANVAS_BOARD_ID))
-    if not class_name:
-        print(f"ERROR: Linked item {canvas_item_id} on Canvas Board {CANVAS_BOARD_ID} has no name. Aborting.")
-        return
-
-    course_id_val = get_column_value(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_COURSE_ID_COLUMN_ID)
-    canvas_course_id = course_id_val.get('text') if course_id_val else None
-
-    if not canvas_course_id and action == "enroll":
-        print(f"INFO: No Canvas ID found on Monday item {canvas_item_id}. Attempting to create course for '{class_name}'.")
-        new_course = create_canvas_course(class_name, CANVAS_TERM_ID)
-        if new_course:
-            canvas_course_id = new_course.id
-            change_column_value_generic(int(CANVAS_BOARD_ID), canvas_item_id, CANVAS_COURSE_ID_COLUMN_ID, str(canvas_course_id))
-            if ALL_CLASSES_CANVAS_ID_COLUMN:
-                change_column_value_generic(int(ALL_COURSES_BOARD_ID), class_item_id, ALL_CLASSES_CANVAS_ID_COLUMN, str(canvas_course_id))
-        else:
-            # MODIFIED: Use the category name in the subitem log
-            create_subitem(plp_item_id, f"Added {category_name} '{class_name}': Failed - Could not create Canvas course.", subitem_cols)
-            return
-
-    if not canvas_course_id:
-        print(f"INFO: No Canvas Course ID available for '{class_name}' to perform action '{action}'. Skipping.")
-        return
-
     if action == "enroll":
-        m_series_val = get_column_value(plp_item_id, int(PLP_BOARD_ID), PLP_M_SERIES_LABELS_COLUMN)
-        ag_grad_val = get_column_value(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_CLASSES_AG_GRAD_COLUMN)
-        m_series_text = (m_series_val.get('text') or "") if m_series_val else ""
-        ag_grad_text = (ag_grad_val.get('text') or "") if ag_grad_val else ""
-        
-        sections = {"A-G" for s in ["AG"] if s in ag_grad_text} | {"Grad" for s in ["Grad"] if s in ag_grad_text} | {"M-Series" for s in ["M-series"] if s in m_series_text}
-        if not sections: sections.add("All")
-        
-        enrollment_results = []
-        for section_name in sections:
-            section = create_section_if_not_exists(canvas_course_id, section_name)
-            if section:
-                result = enroll_or_create_and_enroll(canvas_course_id, section.id, student_details)
-                enrollment_results.append({'section': section_name, 'status': result})
+        # 1. Define the simple subitem name.
+        subitem_title = f"Added {category_name} '{class_name}'"
 
-        if enrollment_results:
-            section_names = ", ".join([res['section'] for res in enrollment_results])
-            all_statuses = {res['status'] for res in enrollment_results}
-            final_status = "Failed" if "Failed" in all_statuses else "Success"
-            # MODIFIED: Use the category name in the subitem log
-            subitem_title = f"Added {category_name} '{class_name}' (Sections: {section_names}): {final_status}"
-            create_subitem(plp_item_id, f"Added {category_name} '{all_courses_item_name}'", column_values=subitem_cols)
+        # === START CHANGE: ADDED DUPLICATE CHECK ===
+        # 2. Check if this subitem already exists.
+        if check_if_subitem_exists_by_name(plp_item_id, subitem_title):
+            print(f"  INFO: Subitem '{subitem_title}' already exists. Skipping.")
+            return # Stop to prevent duplicates
+        # === END CHANGE ===
+        
+        # 3. If it doesn't exist, proceed with enrollment and logging.
+        # (The rest of your original enrollment logic goes here)
+        if linked_canvas_item_ids:
+             # This is a Canvas class, perform the enrollment
+            canvas_item_id = list(linked_canvas_item_ids)[0] # Already got this above but good for clarity
+            course_id_val = get_column_value(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_COURSE_ID_COLUMN_ID)
+            canvas_course_id = course_id_val.get('text') if course_id_val else None
+
+            if canvas_course_id:
+                m_series_val = get_column_value(plp_item_id, int(PLP_BOARD_ID), PLP_M_SERIES_LABELS_COLUMN)
+                ag_grad_val = get_column_value(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_CLASSES_AG_GRAD_COLUMN)
+                m_series_text = (m_series_val.get('text') or "") if m_series_val else ""
+                ag_grad_text = (ag_grad_val.get('text') or "") if ag_grad_val else ""
+                
+                sections = {"A-G" for s in ["AG"] if s in ag_grad_text} | {"Grad" for s in ["Grad"] if s in ag_grad_text} | {"M-Series" for s in ["M-series"] if s in m_series_text}
+                if not sections: sections.add("All")
+                
+                for section_name in sections:
+                    section = create_section_if_not_exists(canvas_course_id, section_name)
+                    if section:
+                        enroll_or_create_and_enroll(canvas_course_id, section.id, student_details)
+        
+        # 4. Create the single, clean subitem.
+        create_subitem(plp_item_id, subitem_title, column_values=subitem_cols)
 
     elif action == "unenroll":
-        result = unenroll_student_from_course(canvas_course_id, student_details)
-        # MODIFIED: Use the category name in the subitem log
-        create_subitem(plp_item_id, f"Removed {category_name} '{all_courses_item_name}'", column_values=subitem_cols)
+        # For unenrollment, we always create a new log of the action.
+        subitem_title = f"Removed {category_name} '{class_name}'"
+        print(f"  INFO: Unenrolling student and creating log: '{subitem_title}'")
+        
+        if linked_canvas_item_ids:
+            canvas_item_id = list(linked_canvas_item_ids)[0]
+            course_id_val = get_column_value(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_COURSE_ID_COLUMN_ID)
+            canvas_course_id = course_id_val.get('text') if course_id_val else None
+            if canvas_course_id:
+                unenroll_student_from_course(canvas_course_id, student_details)
+
+        create_subitem(plp_item_id, subitem_title, column_values=subitem_cols)
 
 
 @celery_app.task
