@@ -102,6 +102,21 @@ except (json.JSONDecodeError, TypeError):
 
 MONDAY_HEADERS = { "Authorization": MONDAY_API_KEY, "Content-Type": "application/json", "API-Version": "2023-10" }
 
+# Place this function inside Section 2: UTILITIES
+
+def get_people_ids_from_value(value_data):
+    """Extracts a set of person IDs from a Monday.com person column value."""
+    if not value_data:
+        return set()
+    if isinstance(value_data, str):
+        try:
+            value_data = json.loads(value_data)
+        except json.JSONDecodeError:
+            return set()
+    
+    persons_and_teams = value_data.get('personsAndTeams', [])
+    return {person['id'] for person in persons_and_teams if 'id' in person and person.get('kind') == 'person'}
+    
 def execute_monday_graphql(query):
     max_retries = 4
     delay = 2
