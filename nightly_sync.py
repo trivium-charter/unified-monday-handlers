@@ -475,7 +475,42 @@ def run_plp_sync_for_student(plp_item_id, creator_id, dry_run=True):
         print(f"INFO: Processing class: '{class_name}'")
         if not dry_run:
             manage_class_enrollment("enroll", plp_item_id, class_item_id, student_details, category_name, creator_id, subitem_cols=curriculum_change_values)
+# Place this function inside Section 3: CORE SYNC LOGIC
 
+def clear_subitems_by_creator(parent_item_id, creator_id_to_delete, dry_run=True):
+    """Fetches and deletes subitems created by a specific user."""
+    if not creator_id_to_delete:
+        print("ERROR: No creator ID provided. Skipping deletion.")
+        return
+
+    query = f'query {{ items (ids: [{parent_item_id}]) {{ subitems {{ id creator {{ id }} }} }} }}'
+    result = execute_monday_graphql(query)
+    subitems_to_delete = []
+    try:
+        subitems = result['data']['items'][0]['subitems']
+        for subitem in subitems:
+            if subitem.get('creator') and str(subitem['creator'].get('id')) == str(creator_id_to_delete):
+                subitems_to_delete.append(subitem['id'])
+    except (KeyError, IndexError, TypeError):
+        # This is not an error, just means no subitems were found.
+        print(f"INFO: No script-generated subitems found to clear for item {parent_item_id}.")
+        return
+
+    if not subitems_to_delete:
+        print(f"INFO: No script-generated subitems found to clear for item {parent_item_id}.")
+        return
+
+    print(f"INFO: Found {len(subitems_to_delete)} script-generated subitem(s) to clear for item {parent_item_id}.")
+
+    if dry_run:
+        print("DRY RUN: Would delete the subitems listed above.")
+        return
+
+    for subitem_id in subitems_to_delete:
+        print(f"DELETING subitem {subitem_id}...")
+        delete_item(subitem_id)
+        # It's good practice to have a small sleep when deleting many items
+        time.sleep(0.5)
 # ==============================================================================
 # 4. SCRIPT EXECUTION
 # ==============================================================================
