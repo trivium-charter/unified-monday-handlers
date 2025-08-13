@@ -158,6 +158,17 @@ def check_if_subitem_exists(parent_item_id, subitem_name_to_check, creator_id):
     
 # --- ALL OTHER UTILITY FUNCTIONS FROM YOUR SCRIPTS ---
 
+def parse_flexible_timestamp(ts_string):
+    """
+    Parses a timestamp from Monday.com that may or may not have milliseconds.
+    """
+    # First, try the format WITH milliseconds
+    try:
+        return datetime.strptime(ts_string, '%Y-%m-%dT%H:%M:%S.%fZ').replace(tzinfo=timezone.utc)
+    except ValueError:
+        # If that fails, try the format WITHOUT milliseconds
+        return datetime.strptime(ts_string, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)
+        
 def get_item_name(item_id, board_id):
     query = f"query {{ boards(ids: {board_id}) {{ items_page(query_params: {{ids: [{item_id}]}}) {{ items {{ name }} }} }} }}"
     result = execute_monday_graphql(query)
@@ -707,7 +718,7 @@ if __name__ == '__main__':
         for item in all_plp_items:
             item_id = int(item['id'])
             updated_at_str = item['updated_at']
-            updated_at = datetime.strptime(updated_at_str, '%Y-%m-%dT%H:%M:%S.%fZ').replace(tzinfo=timezone.utc)
+            updated_at = parse_flexible_timestamp(item['updated_at'])
             
             last_synced = processed_map.get(item_id)
             if last_synced:
