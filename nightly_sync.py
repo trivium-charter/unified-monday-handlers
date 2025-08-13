@@ -520,31 +520,68 @@ def enroll_or_create_and_enroll(course_id, section_id, student_details):
 # 3. CORE SYNC LOGIC
 # ==============================================================================
 
+# This function replaces your old get_student_details_from_plp
 def get_student_details_from_plp(plp_item_id):
-    query = f'query {{ items (ids: [{plp_item_id}]) {{ column_values (ids: ["{PLP_TO_MASTER_STUDENT_CONNECT_COLUMN}"]) {{ value }} }} }}'
-    result = execute_monday_graphql(query)
+    """
+    Fetches comprehensive student details with detailed logging to diagnose failures.
+    """
+    print(f"  [DIAGNOSTIC] Starting detail fetch for PLP item: {plp_item_id}")
+    
+    # Step 1: Get the link to the Master Student board
     try:
-        linked_ids = get_linked_ids_from_connect_column_value(result['data']['items'][0]['column_values'][0]['value'])
-        if not linked_ids: return None
-        master_student_id = list(linked_ids)[0]
+        query = f'query {{ items (ids: [{plp_item_id}]) {{ column_values (ids: ["{PLP_TO_MASTER_STUDENT_CONNECT_COLUMN}"]) {{ value }} }} }}'
+        result = execute_monday_graphql(query)
+        
+        column_value = result['data']['items'][0]['column_values'][0]['value']
+        if not column_value:
+            print("  [DIAGNOSTIC] FAILED: 'Connect to Master' column is empty.")
+            return None
+
+        connect_column_value = json.loads(column_value)
+        linked_ids = [item['linkedPulseId'] for item in connect_column_value.get('linkedPulseIds', [])]
+        
+        if not linked_ids:
+            print("  [DIAGNOSTIC] FAILED: 'Connect to Master' column is linked, but the linked item list is empty (the item may have been deleted or archived).")
+            return None
+            
+        master_student_id = linked_ids[0]
+        print(f"  [DIAGNOSTIC] Found Master Student ID: {master_student_id}")
+
+    except (TypeError, KeyError, IndexError, json.JSONDecodeError) as e:
+        print(f"  [DIAGNOSTIC] FAILED: Could not get the Master Student ID from the PLP board. The board link may be broken. Error: {e}")
+        return None
+
+    # Step 2: Get the details from the Master Student item
+    try:
         details_query = f'query {{ items (ids: [{master_student_id}]) {{ id name column_values(ids: ["{MASTER_STUDENT_SSID_COLUMN}", "{MASTER_STUDENT_EMAIL_COLUMN}", "{MASTER_STUDENT_CANVAS_ID_COLUMN}"]) {{ id text }} }} }}'
         details_result = execute_monday_graphql(details_query)
         item_details = details_result['data']['items'][0]
-        column_map = {cv['id']: cv.get('text', '') for cv in item_details['column_values']}
-        raw_email = column_map.get(MASTER_STUDENT_EMAIL_COLUMN, '')
-        student_details = {
-            'name': item_details['name'],
-            'master_id': item_details['id'],
-            'ssid': column_map.get(MASTER_STUDENT_SSID_COLUMN, ''),
-            'email': unicodedata.normalize('NFKC', raw_email).strip(),
-            'canvas_id': column_map.get(MASTER_STUDENT_CANVAS_ID_COLUMN, '')
-        }
-        if not all([student_details['name'], student_details['email']]): return None
-        return student_details
-    except (TypeError, KeyError, IndexError, json.JSONDecodeError) as e:
-        print(f"ERROR: Could not parse student details for PLP {plp_item_id}: {e}")
-        return None
+        
+        student_name = item_details.get('name')
+        if not student_name:
+            print(f"  [DIAGNOSTIC] FAILED: Master Student item {master_student_id} has no name.")
+            return None
+        print(f"  [DIAGNOSTIC] Found Name: {student_name}")
+            
+        column_map = {cv['id']: cv.get('text', '') for cv in item_details.get('column_values', [])}
+        
+        raw_email = column_map.get(MASTER_STUDENT_EMAIL_COLUMN)
+        if not raw_email:
+            print(f"  [DIAGNOSTIC] FAILED: Master Student item {master_student_id} is missing an email address.")
+            return None
+        print(f"  [DIAGNOSTIC] Found Email: {raw_email}")
 
+        email = unicodedata.normalize('NFKC', raw_email).strip()
+        ssid = column_map.get(MASTER_STUDENT_SSID_COLUMN, '')
+        canvas_id = column_map.get(MASTER_STUDENT_CANVAS_ID_COLUMN, '')
+
+        print("  [DIAGNOSTIC] Successfully gathered all required details.")
+        return {'name': student_name, 'ssid': ssid, 'email': email, 'canvas_id': canvas_id, 'master_id': item_details['id']}
+        
+    except (TypeError, KeyError, IndexError) as e:
+        print(f"  [DIAGNOSTIC] FAILED: Could not parse details from the Master Student board item. The item might be corrupted or missing columns. Error: {e}")
+        return None
+        
 def run_hs_roster_sync_for_student(hs_roster_item, dry_run=True):
     parent_item_id = int(hs_roster_item['id'])
     print(f"\n--- Processing HS Roster for: {hs_roster_item['name']} (ID: {parent_item_id}) ---")
