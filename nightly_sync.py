@@ -517,7 +517,7 @@ def clear_subitems_by_creator(parent_item_id, creator_id_to_delete, dry_run=True
 
 if __name__ == '__main__':
     PERFORM_INITIAL_CLEANUP = True  # SET TO False AFTER THE FIRST RUN
-    DRY_RUN = True
+    DRY_RUN = False
     TARGET_USER_NAME = "Sarah Bruce"
 
     print("======================================================")
