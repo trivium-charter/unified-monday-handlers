@@ -597,7 +597,8 @@ def get_student_details_from_plp(plp_item_id):
         if not all([student_name, email]):
             return None
 
-        return {'name': student_name, 'ssid': ssid, 'email': email, 'canvas_id': canvas_id}
+        # In app.py -> get_student_details_from_plp
+        return {'name': student_name, 'ssid': ssid, 'email': email, 'canvas_id': canvas_id, 'master_id': master_student_id}
 
     except (TypeError, KeyError, IndexError, json.JSONDecodeError) as e:
         print(f"ERROR: Could not parse student details from Monday.com response: {e}")
