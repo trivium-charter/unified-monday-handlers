@@ -633,9 +633,11 @@ def clear_subitems_by_creator(parent_item_id, creator_id_to_delete, dry_run=True
 # ==============================================================================
 
 if __name__ == '__main__':
+    # ---! CONFIGURATION !---
     PERFORM_INITIAL_CLEANUP = True  # SET TO False AFTER THE FIRST RUN
     DRY_RUN = False
     TARGET_USER_NAME = "Sarah Bruce"
+    # ---!  END CONFIG   !---
 
     print("======================================================")
     print("=== STARTING NIGHTLY DELTA SYNC SCRIPT           ===")
@@ -644,6 +646,7 @@ if __name__ == '__main__':
     db = None
     cursor = None
     try:
+        # --- 1. Database Connection ---
         print("INFO: Connecting to the database...")
         ssl_opts = {'ssl_ca': 'ca.pem', 'ssl_verify_cert': True}
         db = mysql.connector.connect(
@@ -652,6 +655,7 @@ if __name__ == '__main__':
         )
         cursor = db.cursor()
 
+        # --- 2. Fetch last sync times for all previously processed students ---
         print("INFO: Fetching last sync times for processed students...")
         cursor.execute("SELECT student_id, last_synced_at FROM processed_students")
         processed_map = {row[0]: row[1] for row in cursor.fetchall()}
@@ -662,9 +666,11 @@ if __name__ == '__main__':
         if not creator_id:
             raise Exception(f"Halting script: Target user '{TARGET_USER_NAME}' could not be found.")
 
+        # --- 3. Fetch all PLP board items from Monday.com ---
         print("INFO: Fetching all PLP board items from Monday.com...")
         all_plp_items = get_all_board_items(PLP_BOARD_ID)
 
+        # --- 4. Filter for only new or updated PLP students ---
         print("INFO: Filtering for new or updated students on PLP Board...")
         items_to_process = []
         for item in all_plp_items:
@@ -681,16 +687,20 @@ if __name__ == '__main__':
         total_to_process = len(items_to_process)
         print(f"INFO: Found {total_to_process} PLP students that are new or have been updated.")
 
+        # --- 5. Process each changed student ---
         for i, plp_item in enumerate(items_to_process, 1):
             plp_item_id = int(plp_item['id'])
             print(f"\n===== Processing Student {i}/{total_to_process} (PLP ID: {plp_item_id}) =====")
             
+            # This is the main try/except for each individual student
             try:
-                # --- NEW PHASE ---
+                if PERFORM_INITIAL_CLEANUP:
+                    print(f"--- Performing initial subitem cleanup for item {plp_item_id} ---")
+                    clear_subitems_by_creator(plp_item_id, creator_id, dry_run=DRY_RUN)
+
                 print("--- Phase 0: Syncing Special Enrollments (Jumpstart/Study Hall) ---")
                 process_student_special_enrollments(plp_item, dry_run=DRY_RUN)
-                
-            try:
+
                 print("--- Phase 1: Checking for and syncing HS Roster ---")
                 hs_roster_connect_val = get_column_value(plp_item_id, int(PLP_BOARD_ID), PLP_TO_HS_ROSTER_CONNECT_COLUMN)
                 hs_roster_ids = get_linked_ids_from_connect_column_value(hs_roster_connect_val.get('value'))
