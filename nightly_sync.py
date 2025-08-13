@@ -642,7 +642,7 @@ def run_plp_sync_for_student(plp_item_id, dry_run=True):
             manage_class_enrollment("enroll", plp_item_id, class_item_id, student_details, category_name, subitem_cols=curriculum_change_values)
 
 # ==============================================================================
-# 4. SCRIPT EXECUTION (New change-detection logic)
+# 4. SCRIPT EXECUTION (Corrected to start from PLP Board)
 # ==============================================================================
 
 if __name__ == '__main__':
@@ -664,23 +664,23 @@ if __name__ == '__main__':
         )
         cursor = db.cursor()
 
-        # --- 2. Fetch last sync times for all previously processed students ---
+        # --- 2. Fetch last sync times for all previously processed PLP students ---
         print("INFO: Fetching last sync times for processed students...")
         cursor.execute("SELECT student_id, last_synced_at FROM processed_students")
         processed_map = {row[0]: row[1] for row in cursor.fetchall()}
         print(f"INFO: Found {len(processed_map)} students in the database.")
 
-        # --- 3. Fetch all HS Roster items from Monday.com with their last update time ---
-        print("INFO: Fetching all HS Roster board items from Monday.com...")
-        all_hs_roster_items = get_all_board_items(HS_ROSTER_BOARD_ID)
+        # --- 3. Fetch all PLP board items from Monday.com with their last update time ---
+        print("INFO: Fetching all PLP board items from Monday.com...")
+        all_plp_items = get_all_board_items(PLP_BOARD_ID)
 
-        # --- 4. Filter for only new or updated students ---
-        print("INFO: Filtering for new or updated students on HS Roster...")
+        # --- 4. Filter for only new or updated PLP students ---
+        print("INFO: Filtering for new or updated students on PLP Board...")
         items_to_process = []
-        for item in all_hs_roster_items:
+        for item in all_plp_items:
             item_id = int(item['id'])
-            updated_at_str = item['updated_at'].split('.')[0]
-            updated_at = datetime.strptime(updated_at_str, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)
+            updated_at_str = item['updated_at']
+            updated_at = datetime.strptime(updated_at_str, '%Y-%m-%dT%H:%M:%S.%fZ').replace(tzinfo=timezone.utc)
             
             last_synced = processed_map.get(item_id)
             if last_synced:
@@ -690,44 +690,51 @@ if __name__ == '__main__':
                 items_to_process.append(item)
         
         total_to_process = len(items_to_process)
-        print(f"INFO: Found {total_to_process} HS Roster students that are new or have been updated.")
+        print(f"INFO: Found {total_to_process} PLP students that are new or have been updated.")
 
         # --- 5. Process each changed student ---
-        for i, hs_roster_item in enumerate(items_to_process, 1):
-            hs_roster_item_id = int(hs_roster_item['id'])
-            print(f"\n===== Processing Student {i}/{total_to_process} (HS Roster ID: {hs_roster_item_id}) =====")
+        for i, plp_item in enumerate(items_to_process, 1):
+            plp_item_id = int(plp_item['id'])
+            print(f"\n===== Processing Student {i}/{total_to_process} (PLP ID: {plp_item_id}) =====")
             
             try:
-                # Find the linked PLP item ID from the HS Roster item
-                plp_connect_val = get_column_value(hs_roster_item_id, int(HS_ROSTER_BOARD_ID), HS_ROSTER_MAIN_ITEM_to_PLP_CONNECT_COLUMN_ID)
-                plp_ids = get_linked_ids_from_connect_column_value(plp_connect_val.get('value'))
-
-                if not plp_ids:
-                    print(f"WARNING: HS Roster Item {hs_roster_item_id} is not linked to a PLP item. Skipping.")
-                    continue
+                # --- Phase 1: Syncing HS Roster to PLP (if applicable) ---
+                print("--- Phase 1: Checking for and syncing HS Roster ---")
+                hs_roster_connect_val = get_column_value(plp_item_id, int(PLP_BOARD_ID), PLP_TO_HS_ROSTER_CONNECT_COLUMN)
+                hs_roster_ids = get_linked_ids_from_connect_column_value(hs_roster_connect_val.get('value'))
                 
-                plp_item_id = list(plp_ids)[0]
+                if hs_roster_ids:
+                    hs_roster_item_id = list(hs_roster_ids)[0]
+                    # We need the full HS Roster item object to pass to the function
+                    hs_roster_item_result = get_all_board_items(HS_ROSTER_BOARD_ID, columns_to_fetch=[f'items(ids:[{hs_roster_item_id}])'])
+                    if hs_roster_item_result:
+                         # This query syntax is a bit simplified; fetching single item might need adjustment
+                         # For now, assuming get_all_board_items can filter by ID
+                        hs_roster_item_object = next((item for item in hs_roster_item_result if int(item['id']) == hs_roster_item_id), None)
+                        if hs_roster_item_object:
+                            run_hs_roster_sync_for_student(hs_roster_item_object, dry_run=DRY_RUN)
+                        else:
+                            print(f"WARNING: Could not fetch HS Roster item object for ID {hs_roster_item_id}")
+                else:
+                    print("INFO: No HS Roster item linked. Skipping Phase 1.")
 
-                print("--- Phase 1: Syncing HS Roster to PLP ---")
-                run_hs_roster_sync_for_student(hs_roster_item, dry_run=DRY_RUN)
-                
+                # --- Phase 2: Syncing PLP to Canvas ---
                 print("--- Phase 2: Syncing PLP to Canvas ---")
                 run_plp_sync_for_student(plp_item_id, dry_run=DRY_RUN)
 
                 # --- 6. If successful, update the timestamp in the database ---
                 if not DRY_RUN:
-                    print(f"INFO: Sync successful. Updating timestamp for student.")
-                    # We use the HS Roster ID as the key, since that's our starting point.
+                    print(f"INFO: Sync successful. Updating timestamp for PLP item {plp_item_id}.")
                     update_query = """
                         INSERT INTO processed_students (student_id, last_synced_at)
                         VALUES (%s, NOW())
                         ON DUPLICATE KEY UPDATE last_synced_at = NOW()
                     """
-                    cursor.execute(update_query, (hs_roster_item_id,))
+                    cursor.execute(update_query, (plp_item_id,))
                     db.commit()
 
             except Exception as e:
-                print(f"FATAL ERROR processing HS Roster item {hs_roster_item_id}: {e}")
+                print(f"FATAL ERROR processing PLP item {plp_item_id}: {e}")
         
     except Exception as e:
         print(f"A critical error occurred: {e}")
