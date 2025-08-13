@@ -866,7 +866,7 @@ if __name__ == '__main__':
         
         total_to_process = len(items_to_process)
         print(f"INFO: Found {total_to_process} PLP students that are new or have been updated.")
-
+        """
         for i, plp_item in enumerate(items_to_process, 1):
             plp_item_id = int(plp_item['id'])
             print(f"\n===== Processing Student {i}/{total_to_process} (PLP ID: {plp_item_id}) =====")
@@ -910,7 +910,7 @@ if __name__ == '__main__':
 
             except Exception as e:
                 print(f"FATAL ERROR processing PLP item {plp_item_id}: {e}")
-        
+        """
     except Exception as e:
         print(f"A critical error occurred: {e}")
     finally:
