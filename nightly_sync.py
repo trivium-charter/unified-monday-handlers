@@ -737,64 +737,89 @@ def run_plp_sync_for_student(plp_item_id, creator_id, dry_run=True):
 # Place this function inside Section 3: CORE SYNC LOGIC
 
 # This function replaces clear_subitems_by_creator
+# In nightly_sync.py, replace your old reconcile_subitems function with this new one.
+
 def reconcile_subitems(plp_item_id, creator_id, dry_run=True):
     """
-    Intelligently reconciles subitems. It compares the subitems that SHOULD
-    exist with what DOES exist, and only deletes the outdated ones.
+    Performs a true and full reconciliation for a student.
+    1.  For Courses: Force-syncs every enrollment to Canvas and creates a simple "Added..." 
+        subitem log only if it's missing.
+    2.  For Staff: Checks current key staff assignments and creates a simple "Role: Name" 
+        subitem log only if it's missing.
+    This function does not delete any subitems.
     """
-    print(f"--- Performing intelligent subitem reconciliation for item {plp_item_id} ---")
+    print(f"--- Reconciling All Subitems & Enrollments for PLP Item: {plp_item_id} ---")
     
-    # 1. Determine the set of subitems that SHOULD exist based on current data.
-    # This requires re-creating the logic that generates subitem names.
-    desired_subitems = set()
     student_details = get_student_details_from_plp(plp_item_id)
-    if not student_details:
-        return # Cannot determine desired state without student details
+    if not student_details or not student_details.get('master_id'):
+        print("  SKIPPING: Could not get complete student details for reconciliation.")
+        return
 
-    # Logic for curriculum subitems
+    # ===================================================================
+    #  Part 1: Reconciling Curriculum Enrollments and Subitems
+    # ===================================================================
+    print("  -> Reconciling course enrollments...")
     class_id_to_category_map = {}
     for category, column_id in PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.items():
         for class_id in get_linked_items_from_board_relation(plp_item_id, int(PLP_BOARD_ID), column_id):
             class_id_to_category_map[class_id] = category
 
-    for class_item_id, category_name in class_id_to_category_map.items():
-        class_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)) or f"Item {class_item_id}"
-        # This assumes a single section and a "Success" status for comparison purposes.
-        # This format must exactly match the one used in manage_class_enrollment.
-        desired_subitems.add(f"SYNC: {class_name} ({class_item_id}) - Success")
+    if not class_id_to_category_map:
+        print("    INFO: No classes are linked.")
+    else:
+        for class_item_id, category_name in class_id_to_category_map.items():
+            class_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)) or f"Item {class_item_id}"
+            
+            # Action: Always push the enrollment to Canvas to fix any discrepancies.
+            print(f"    ACTION: Force-syncing enrollment for '{class_name}' to Canvas.")
+            if not dry_run:
+                linked_canvas_item_ids = get_linked_items_from_board_relation(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
+                if linked_canvas_item_ids:
+                    canvas_item_id = list(linked_canvas_item_ids)[0]
+                    course_id_val = get_column_value(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_COURSE_ID_COLUMN_ID)
+                    canvas_course_id = course_id_val.get('text') if course_id_val else None
+                    if canvas_course_id:
+                        section = create_section_if_not_exists(canvas_course_id, "All") 
+                        if section:
+                            enroll_or_create_and_enroll(canvas_course_id, section.id, student_details)
 
-    # 2. Get all existing subitems created by the script.
-    query = f'query {{ items(ids:[{plp_item_id}]) {{ subitems {{ id name creator {{ id }} }} }} }}'
-    result = execute_monday_graphql(query)
-    existing_subitems = {}
-    try:
-        subitems = result['data']['items'][0]['subitems']
-        for subitem in subitems:
-            creator = subitem.get('creator')
-            if creator and str(creator.get('id')) == str(creator_id):
-                existing_subitems[subitem['name']] = subitem['id']
-    except (KeyError, IndexError, TypeError):
-        pass # No subitems found
+            # Logging: Conditionally create the subitem to prevent duplicates.
+            expected_subitem_name = f"Added {category_name} '{class_name}'"
+            if not check_if_subitem_exists(plp_item_id, expected_subitem_name, creator_id):
+                print(f"    INFO: Subitem '{expected_subitem_name}' is missing. Creating it.")
+                if not dry_run:
+                    create_subitem(plp_item_id, expected_subitem_name, column_values={PLP_SUBITEM_ENTRY_TYPE_COLUMN_ID: {"labels": ["Curriculum Change"]}})
+            else:
+                print(f"    INFO: Subitem '{expected_subitem_name}' already exists.")
 
-    # 3. Compare the two sets and determine which subitems to delete.
-    subitems_to_delete = []
-    for subitem_name, subitem_id in existing_subitems.items():
-        if subitem_name not in desired_subitems:
-            subitems_to_delete.append(subitem_id)
+    # ===================================================================
+    #  Part 2: Reconciling Staff Assignment Subitems
+    # ===================================================================
+    print("  -> Reconciling staff assignments...")
+    master_student_id = student_details['master_id']
+    
+    for trigger_col, mapping in MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS.items():
+        staff_role_name = mapping.get("name", "Staff") # e.g., "ACE Teacher"
+        master_person_val = get_column_value(master_student_id, int(MASTER_STUDENT_BOARD_ID), trigger_col)
+        
+        if master_person_val and master_person_val.get('value'):
+            person_ids = get_people_ids_from_value(master_person_val.get('value'))
+            if person_ids:
+                # Assuming only one person per role for reconciliation logging
+                person_id = list(person_ids)[0]
+                person_name = get_user_name(person_id)
+                
+                if person_name:
+                    # Define a simple, clean state-based subitem name
+                    expected_staff_subitem = f"{staff_role_name}: {person_name}"
 
-    if not subitems_to_delete:
-        print("  INFO: No outdated subitems to delete.")
-        return
-
-    print(f"  INFO: Found {len(subitems_to_delete)} outdated subitem(s) to delete.")
-    if dry_run:
-        print("  DRY RUN: Would delete the subitems listed above.")
-        return
-
-    for subitem_id in subitems_to_delete:
-        print(f"  DELETING outdated subitem {subitem_id}...")
-        delete_item(subitem_id)
-        time.sleep(0.5)
+                    # Conditionally create the subitem to prevent duplicates
+                    if not check_if_subitem_exists(plp_item_id, expected_staff_subitem, creator_id):
+                        print(f"    INFO: Subitem '{expected_staff_subitem}' is missing. Creating it.")
+                        if not dry_run:
+                            create_subitem(plp_item_id, expected_staff_subitem, column_values={PLP_SUBITEM_ENTRY_TYPE_COLUMN_ID: {"labels": ["Staff Change"]}})
+                    else:
+                        print(f"    INFO: Subitem '{expected_staff_subitem}' already exists.")
         
 # ==============================================================================
 # 4. SCRIPT EXECUTION
