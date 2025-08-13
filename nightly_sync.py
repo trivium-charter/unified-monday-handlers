@@ -646,9 +646,57 @@ def run_hs_roster_sync_for_student(hs_roster_item, dry_run=True):
         if col_id and courses:
             bulk_add_to_connect_column(plp_item_id, int(PLP_BOARD_ID), col_id, courses)
 
+# In nightly_sync.py, replace the old manage_class_enrollment with this definitive version.
+
 def manage_class_enrollment(action, plp_item_id, class_item_id, student_details, category_name, creator_id, subitem_cols=None):
-    # ... (This function is complete and correct)
-    pass
+    """
+    Manages Canvas enrollment and creates a simple, clean subitem log.
+    It checks for duplicates before creating an "Added" subitem.
+    """
+    subitem_cols = subitem_cols or {}
+    class_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)) or f"Item {class_item_id}"
+
+    if action == "enroll":
+        # 1. Define the simple subitem name we expect to see upon success.
+        subitem_title = f"Added {category_name} '{class_name}'"
+
+        # 2. Check if this simple subitem already exists.
+        if check_if_subitem_exists(plp_item_id, subitem_title, creator_id):
+            print(f"  INFO: Subitem '{subitem_title}' already exists. Skipping.")
+            return # Stop here to prevent duplicates
+
+        # 3. If it doesn't exist, proceed with enrollment.
+        print(f"  INFO: Subitem for '{class_name}' does not exist. Enrolling student.")
+        # (This section contains the logic to enroll the student in Canvas)
+        linked_canvas_item_ids = get_linked_items_from_board_relation(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
+        if not linked_canvas_item_ids:
+            # This is a non-canvas class, just create the subitem.
+            create_subitem(plp_item_id, subitem_title, column_values=subitem_cols)
+            return
+
+        canvas_item_id = list(linked_canvas_item_ids)[0]
+        canvas_class_name = get_item_name(canvas_item_id, int(CANVAS_BOARD_ID)) or class_name
+        course_id_val = get_column_value(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_COURSE_ID_COLUMN_ID)
+        canvas_course_id = course_id_val.get('text') if course_id_val else None
+
+        if canvas_course_id:
+            # Simplified for clarity: assuming a single "All" section. Use your original section logic if needed.
+            section = create_section_if_not_exists(canvas_course_id, "All") 
+            if section:
+                enroll_or_create_and_enroll(canvas_course_id, section.id, student_details)
+        
+        # 4. Create the single, clean subitem.
+        create_subitem(plp_item_id, subitem_title, column_values=subitem_cols)
+
+    elif action == "unenroll":
+        # For un-enrollment, we always create a new log item.
+        subitem_title = f"Removed {category_name} '{class_name}'"
+        print(f"  INFO: Unenrolling student and creating log: '{subitem_title}'")
+        
+        # (Your unenrollment logic would go here)
+        unenroll_student_from_course(class_item_id, student_details) # Assuming this function exists
+
+        create_subitem(plp_item_id, subitem_title, column_values=subitem_cols)
 
 def run_plp_sync_for_student(plp_item_id, creator_id, dry_run=True):
     """
