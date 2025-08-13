@@ -138,6 +138,24 @@ def get_all_board_items(board_id, columns_to_fetch=None):
             break
     return all_items
 
+def check_if_subitem_exists(parent_item_id, subitem_name_to_check, creator_id):
+    """
+    Checks if a subitem with an exact name, created by the automation user,
+    already exists for a given parent item.
+    """
+    query = f'query {{ items(ids:[{parent_item_id}]) {{ subitems {{ name creator {{ id }} }} }} }}'
+    result = execute_monday_graphql(query)
+    try:
+        subitems = result['data']['items'][0]['subitems']
+        for subitem in subitems:
+            creator = subitem.get('creator')
+            if (subitem.get('name') == subitem_name_to_check and
+                    creator and str(creator.get('id')) == str(creator_id)):
+                return True # Found a match
+    except (KeyError, IndexError, TypeError):
+        pass # No subitems or error parsing
+    return False # No match found
+    
 # --- ALL OTHER UTILITY FUNCTIONS FROM YOUR SCRIPTS ---
 
 def get_item_name(item_id, board_id):
@@ -539,7 +557,7 @@ def get_teacher_person_value_from_canvas_board(canvas_item_id):
     return person_col_val.get('value')
 
 
-def manage_class_enrollment(action, plp_item_id, class_item_id, student_details, category_name, subitem_cols=None):
+def manage_class_enrollment(action, plp_item_id, class_item_id, student_details, category_name, creator_id, subitem_cols=None):
     """Manages class enrollment and creates verbose subitems about its actions."""
     subitem_cols = subitem_cols or {}
     all_courses_item_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)) or f"Item {class_item_id}"
@@ -586,6 +604,15 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details,
 
         enrollment_results = []
         for section_name in sections:
+            # --- START OF NEW CODE ---
+            # First, determine the exact subitem name we would create on success
+            # This must exactly match the format you use later
+            expected_subitem_name = f"Added {category_name} '{class_name}' (Sections: {section_name}): Success"
+
+            # Now, check if this subitem already exists
+            if check_if_subitem_exists(plp_item_id, expected_subitem_name, creator_id):
+                print(f"INFO: Subitem '{expected_subitem_name}' already exists. Skipping enrollment.")
+                continue # Skip to the next section
             print(f"INFO: Enrolling student in '{class_name}', section '{section_name}'...")
             section = create_section_if_not_exists(canvas_course_id, section_name)
             if section:
@@ -599,7 +626,7 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details,
             subitem_title = f"Added {category_name} '{class_name}' (Sections: {section_names}): {final_status}"
             create_subitem(plp_item_id, subitem_title, subitem_cols)
             
-def run_plp_sync_for_student(plp_item_id, dry_run=True):
+def run_plp_sync_for_student(plp_item_id, creator_id, dry_run=True):
     print(f"\n--- Processing PLP Item: {plp_item_id} ---")
     student_details = get_student_details_from_plp(plp_item_id)
     if not student_details:
@@ -639,7 +666,7 @@ def run_plp_sync_for_student(plp_item_id, dry_run=True):
         print(f"INFO: Processing class: '{class_name}'")
         category_name = class_id_to_category_map.get(class_item_id, "Course")
         if not dry_run:
-            manage_class_enrollment("enroll", plp_item_id, class_item_id, student_details, category_name, subitem_cols=curriculum_change_values)
+            manage_class_enrollment("enroll", plp_item_id, class_item_id, student_details, category_name, creator_id, subitem_cols=curriculum_change_values)
 
 # ==============================================================================
 # 4. SCRIPT EXECUTION (Corrected to start from PLP Board)
@@ -720,7 +747,7 @@ if __name__ == '__main__':
 
                 # --- Phase 2: Syncing PLP to Canvas ---
                 print("--- Phase 2: Syncing PLP to Canvas ---")
-                run_plp_sync_for_student(plp_item_id, dry_run=DRY_RUN)
+                run_plp_sync_for_student(plp_item_id, creator_id, dry_run=DRY_RUN)
 
                 # --- 6. If successful, update the timestamp in the database ---
                 if not DRY_RUN:
