@@ -261,11 +261,13 @@ def process_student_special_enrollments(plp_item, dry_run=True):
         sh_item_id = SPECIAL_COURSE_MONDAY_IDS.get(target_sh_name)
         if sh_item_id: plp_links_to_add.add(sh_item_id)
     
+    # in process_student_special_enrollments function
+
     # 3. Update the PLP connect column
-    if plp_links_to_add:
-        print(f"  Action: Linking {len(plp_links_to_add)} special courses to PLP column {PLP_JUMPSTART_SH_CONNECT_COLUMN}.")
-        if not dry_run:
-            bulk_add_to_connect_column(plp_item_id, int(PLP_BOARD_ID), PLP_JUMPSTART_SH_CONNECT_COLUMN, plp_links_to_add)
+    # if plp_links_to_add:
+    #     print(f"  Action: Linking {len(plp_links_to_add)} special courses to PLP column {PLP_JUMPSTART_SH_CONNECT_COLUMN}.")
+    #     if not dry_run:
+    #         bulk_add_to_connect_column(plp_item_id, int(PLP_BOARD_ID), PLP_JUMPSTART_SH_CONNECT_COLUMN, plp_links_to_add)
             
 def get_all_board_items(board_id, item_ids=None):
     all_items = []
@@ -408,28 +410,34 @@ def initialize_canvas_api():
 def find_canvas_user(student_details):
     canvas_api = initialize_canvas_api()
     if not canvas_api: return None
-    id_from_monday = student_details.get('canvas_id')
-    if id_from_monday:
+
+    if student_details.get('canvas_id'):
         try:
-            return canvas_api.get_user(int(id_from_monday))
-        except (ValueError, TypeError):
-            try:
-                return canvas_api.get_user(id_from_monday, 'sis_user_id')
-            except ResourceDoesNotExist: pass
-        except ResourceDoesNotExist: pass
+            return canvas_api.get_user(student_details['canvas_id'])
+        except (ResourceDoesNotExist, ValueError):
+            pass
+
     if student_details.get('email'):
         try:
             return canvas_api.get_user(student_details['email'], 'login_id')
-        except ResourceDoesNotExist: pass
-    if student_details.get('ssid') and student_details.get('ssid') != id_from_monday:
+        except ResourceDoesNotExist:
+            pass
+
+    if student_details.get('ssid'):
         try:
             return canvas_api.get_user(student_details['ssid'], 'sis_user_id')
-        except ResourceDoesNotExist: pass
+        except ResourceDoesNotExist:
+            pass
+
     if student_details.get('email'):
         try:
-            users = [u for u in canvas_api.get_account(1).get_users(search_term=student_details['email'])]
-            if len(users) == 1: return users[0]
-        except (ResourceDoesNotExist, CanvasException): pass
+            search_results = canvas_api.get_account(1).get_users(search_term=student_details['email'])
+            users = [u for u in search_results]
+            if len(users) == 1:
+                return users[0]
+        except (ResourceDoesNotExist, CanvasException):
+             pass
+
     return None
 
 def create_canvas_user(student_details):
