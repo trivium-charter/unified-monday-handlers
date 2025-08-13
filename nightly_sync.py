@@ -708,7 +708,16 @@ if __name__ == '__main__':
         processed_map = {row[0]: row[1] for row in cursor.fetchall()}
         print(f"INFO: Found {len(processed_map)} students in the database.")
 
-        # --- 3. Fetch all PLP board items from Monday.com with their last update time ---
+        print("INFO: Finding creator ID for subitem management...")
+        creator_id = get_user_id(TARGET_USER_NAME)
+        if not creator_id:
+            # We raise an exception to stop the script if the user isn't found
+            raise Exception(f"Halting script: Target user '{TARGET_USER_NAME}' could not be found.")
+
+# --- The rest of your script continues here ---
+print("INFO: Fetching all PLP board items from Monday.com...")
+all_plp_items = get_all_board_items(PLP_BOARD_ID)
+# --- 3. Fetch all PLP board items from Monday.com with their last update time ---
         print("INFO: Fetching all PLP board items from Monday.com...")
         all_plp_items = get_all_board_items(PLP_BOARD_ID)
 
