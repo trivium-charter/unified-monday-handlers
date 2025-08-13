@@ -699,7 +699,7 @@ def process_canvas_full_sync_from_status(event_data):
     for class_item_id in all_class_ids:
         manage_class_enrollment("enroll", plp_item_id, class_item_id, student_details, subitem_cols)
 
-@celery_app.task
+@celery_app.task(name='app.process_canvas_delta_sync_from_course_change')
 def process_canvas_delta_sync_from_course_change(event_data):
     plp_item_id, user_id, trigger_column_id = event_data.get('pulseId'), event_data.get('userId'), event_data.get('columnId')
     student_details = get_student_details_from_plp(plp_item_id)
