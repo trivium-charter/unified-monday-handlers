@@ -650,7 +650,7 @@ def run_hs_roster_sync_for_student(hs_roster_item, dry_run=True):
 
 # In nightly_sync.py, replace the existing manage_class_enrollment function with this corrected version.
 
-def manage_class_enrollment(action, plp_item_id, class_item_id, student_details, category_name, creator_id, subitem_cols=None):
+def manage_class_enrollment(action, plp_item_id, class_item_id, student_details, category_name, creator_id, subitem_cols=None, dry_run=True):
     """
     Manages Canvas enrollment and creates a simple, clean subitem log.
     1. ALWAYS pushes the enrollment to Canvas.
