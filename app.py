@@ -465,10 +465,19 @@ def enroll_or_create_and_enroll(course_id, section_id, student_details):
     if not user:
         user = create_canvas_user(student_details)
 
+    # In app.py -> enroll_or_create_and_enroll
+
     if user:
-        if student_details.get('ssid') and hasattr(user, 'sis_user_id') and user.sis_user_id != student_details['ssid']:
-            update_user_ssid(user, student_details['ssid'])
-        return enroll_student_in_section(course_id, user.id, section_id)
+        # === START CHANGE: Re-fetch the full user object ===
+        try:
+            full_user = canvas_api.get_user(user.id)
+            if student_details.get('ssid') and hasattr(full_user, 'sis_user_id') and full_user.sis_user_id != student_details['ssid']:
+                update_user_ssid(full_user, student_details['ssid'])
+            return enroll_student_in_section(course_id, full_user.id, section_id)
+        except CanvasException as e:
+            print(f"ERROR: Could not retrieve full user object for ID {user.id}: {e}")
+            return "Failed: Could not retrieve full user"
+    # === END CHANGE ===
 
     return "Failed: User not found/created"
 
