@@ -698,25 +698,51 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details,
 
 
 @celery_app.task
+# In app.py, replace the entire old process_canvas_full_sync_from_status function with this one.
+
+@celery_app.task(name='app.process_canvas_full_sync_from_status')
 def process_canvas_full_sync_from_status(event_data):
-    if event_data.get('value', {}).get('label', {}).get('text', '') != PLP_CANVAS_SYNC_STATUS_VALUE: return
+    """
+    Performs a full sync for a single student when a status column is changed.
+    It now correctly identifies the category for each course.
+    """
+    if event_data.get('value', {}).get('label', {}).get('text', '') != PLP_CANVAS_SYNC_STATUS_VALUE:
+        return
+        
     plp_item_id = event_data.get('pulseId')
     student_details = get_student_details_from_plp(plp_item_id)
-    if not student_details: return
+    if not student_details:
+        return
+        
     subitem_cols = {}
+    # This logic correctly determines the subitem column values (e.g., "Curriculum Change")
     first_rule = next((rule for rule in LOG_CONFIGS if str(rule.get("trigger_board_id")) == PLP_BOARD_ID and rule.get("log_type") == "ConnectBoardChange"), None)
     if first_rule and "params" in first_rule:
         params = first_rule["params"]
         if params.get("entry_type_column_id") and params.get("subitem_entry_type"):
             subitem_cols[params["entry_type_column_id"]] = {"labels": [str(params["subitem_entry_type"])]}
-    course_column_ids = [c.strip() for c in PLP_ALL_CLASSES_CONNECT_COLUMNS_STR.split(',') if c.strip()]
-    all_class_ids = set()
-    for col_id in course_column_ids:
-        class_links = get_column_value(plp_item_id, int(PLP_BOARD_ID), col_id)
-        if class_links and class_links.get('value'):
-            all_class_ids.update(get_linked_ids_from_connect_column_value(class_links['value']))
-    for class_item_id in all_class_ids:
-        manage_class_enrollment("enroll", plp_item_id, class_item_id, student_details, subitem_cols)
+    
+    # === START CHANGE: Use a dictionary to store courses and their categories ===
+    class_id_to_category_map = {}
+    for category, column_id in PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.items():
+        for class_id in get_linked_items_from_board_relation(plp_item_id, int(PLP_BOARD_ID), column_id):
+            class_id_to_category_map[class_id] = category
+
+    if not class_id_to_category_map:
+        print(f"INFO: No classes to sync for PLP item {plp_item_id}.")
+        return
+    # === END CHANGE ===
+
+    # Loop through the dictionary, passing the correct category name for each course
+    for class_item_id, category_name in class_id_to_category_map.items():
+        manage_class_enrollment(
+            "enroll", 
+            plp_item_id, 
+            class_item_id, 
+            student_details, 
+            category_name,          # <-- This now correctly passes "Math", "ELA", etc.
+            subitem_cols=subitem_cols
+        )
 
 @celery_app.task(name='app.process_canvas_delta_sync_from_course_change')
 def process_canvas_delta_sync_from_course_change(event_data):
