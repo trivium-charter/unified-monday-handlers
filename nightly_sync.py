@@ -104,6 +104,40 @@ MONDAY_HEADERS = { "Authorization": MONDAY_API_KEY, "Content-Type": "application
 
 # Place this function inside Section 2: UTILITIES
 
+# Place this function inside Section 2: UTILITIES
+
+def enroll_student(canvas_course_id, section_name, student_details):
+    """
+    Finds or creates a student and enrolls them in a specific course and section.
+    """
+    canvas_api = initialize_canvas_api()
+    if not canvas_api:
+        print("  ERROR: Canvas API not initialized.")
+        return
+    
+    user = find_canvas_user(student_details)
+    if not user:
+        print(f"  INFO: Canvas user not found for {student_details.get('email', 'N/A')}. Creating new user.")
+        user = create_canvas_user(student_details)
+    
+    if not user:
+        print(f"  ERROR: Could not find or create Canvas user for {student_details.get('name')}")
+        return
+
+    try:
+        # Get the full user object to ensure all methods are available
+        full_user = canvas_api.get_user(user.id)
+
+        course = canvas_api.get_course(canvas_course_id)
+        section = create_section_if_not_exists(course, section_name)
+        if section:
+            result = enroll_student_in_section(course.id, full_user.id, section.id)
+            print(f"  Enrollment in '{course.name}' (Section: {section_name}): {result}")
+    except ResourceDoesNotExist:
+        print(f"  ERROR: Canvas course with ID {canvas_course_id} not found.")
+    except CanvasException as e:
+        print(f"  ERROR: A Canvas API error occurred during special enrollment: {e}")
+        
 def get_people_ids_from_value(value_data):
     """Extracts a set of person IDs from a Monday.com person column value."""
     if not value_data:
