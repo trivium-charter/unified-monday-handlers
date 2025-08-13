@@ -525,6 +525,80 @@ def run_hs_roster_sync_for_student(hs_roster_item, dry_run=True):
     for col_id, courses in plp_updates.items():
         bulk_add_to_connect_column(plp_item_id, int(PLP_BOARD_ID), col_id, courses)
 
+# Place these functions inside Section 3: CORE SYNC LOGIC
+
+def get_teacher_person_value_from_canvas_board(canvas_item_id):
+    """Finds the teacher's 'Person' value from the Canvas and Staff boards."""
+    linked_staff_ids = get_linked_items_from_board_relation(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_TO_STAFF_CONNECT_COLUMN_ID)
+    if not linked_staff_ids:
+        return None
+    staff_item_id = list(linked_staff_ids)[0]
+    person_col_val = get_column_value(staff_item_id, int(ALL_STAFF_BOARD_ID), ALL_STAFF_PERSON_COLUMN_ID) # This was missing a variable name
+    if not person_col_val:
+        return None
+    return person_col_val.get('value')
+
+
+def manage_class_enrollment(action, plp_item_id, class_item_id, student_details, category_name, subitem_cols=None):
+    """Manages class enrollment and creates verbose subitems about its actions."""
+    subitem_cols = subitem_cols or {}
+    all_courses_item_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)) or f"Item {class_item_id}"
+
+    linked_canvas_item_ids = get_linked_items_from_board_relation(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
+    
+    if not linked_canvas_item_ids:
+        print(f"INFO: No Canvas course linked for '{all_courses_item_name}'. Creating log subitem.")
+        if action == "enroll":
+            create_subitem(plp_item_id, f"Added {category_name} '{all_courses_item_name}' (Non-Canvas)", subitem_cols)
+        return
+
+    canvas_item_id = list(linked_canvas_item_ids)[0]
+    class_name = get_item_name(canvas_item_id, int(CANVAS_BOARD_ID))
+    if not class_name:
+        print(f"ERROR: Linked item {canvas_item_id} has no name. Aborting.")
+        return
+
+    course_id_val = get_column_value(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_COURSE_ID_COLUMN_ID)
+    canvas_course_id = course_id_val.get('text') if course_id_val else None
+
+    if not canvas_course_id and action == "enroll":
+        print(f"INFO: No Canvas ID found for '{class_name}'. Attempting to create course.")
+        new_course = create_canvas_course(class_name, CANVAS_TERM_ID)
+        if new_course:
+            canvas_course_id = new_course.id
+            change_column_value_generic(int(CANVAS_BOARD_ID), canvas_item_id, CANVAS_COURSE_ID_COLUMN_ID, str(canvas_course_id))
+            if ALL_CLASSES_CANVAS_ID_COLUMN:
+                change_column_value_generic(int(ALL_COURSES_BOARD_ID), class_item_id, ALL_CLASSES_CANVAS_ID_COLUMN, str(canvas_course_id))
+        else:
+            create_subitem(plp_item_id, f"Added {category_name} '{class_name}': FAILED - Could not create Canvas course.", subitem_cols)
+            return
+
+    if not canvas_course_id:
+        print(f"INFO: No Canvas Course ID for '{class_name}'. Skipping {action}.")
+        return
+
+    if action == "enroll":
+        m_series_val = get_column_value(plp_item_id, int(PLP_BOARD_ID), PLP_M_SERIES_LABELS_COLUMN)
+        ag_grad_val = get_column_value(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_CLASSES_AG_GRAD_COLUMN)
+        m_series_text = (m_series_val.get('text') or "") if m_series_val else ""
+        ag_grad_text = (ag_grad_val.get('text') or "") if ag_grad_val else ""
+        sections = {"A-G" for s in ["AG"] if s in ag_grad_text} | {"Grad" for s in ["Grad"] if s in ag_grad_text} | {"M-Series" for s in ["M-series"] if s in m_series_text} or {"All"}
+
+        enrollment_results = []
+        for section_name in sections:
+            print(f"INFO: Enrolling student in '{class_name}', section '{section_name}'...")
+            section = create_section_if_not_exists(canvas_course_id, section_name)
+            if section:
+                result = enroll_or_create_and_enroll(canvas_course_id, section.id, student_details)
+                enrollment_results.append({'section': section_name, 'status': result})
+
+        if enrollment_results:
+            section_names = ", ".join([res['section'] for res in enrollment_results])
+            all_statuses = {res['status'] for res in enrollment_results}
+            final_status = "Failed" if "Failed" in all_statuses else "Success"
+            subitem_title = f"Added {category_name} '{class_name}' (Sections: {section_names}): {final_status}"
+            create_subitem(plp_item_id, subitem_title, subitem_cols)
+            
 def run_plp_sync_for_student(plp_item_id, dry_run=True):
     print(f"\n--- Processing PLP Item: {plp_item_id} ---")
     student_details = get_student_details_from_plp(plp_item_id)
