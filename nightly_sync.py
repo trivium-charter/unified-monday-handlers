@@ -818,7 +818,7 @@ def reconcile_subitems(plp_item_id, creator_id, dry_run=True):
 
 if __name__ == '__main__':
     # ---! CONFIGURATION !---
-    PERFORM_INITIAL_CLEANUP = False  # SET TO False AFTER THE FIRST RUN
+    PERFORM_INITIAL_CLEANUP = False  # This is now permanently disabled.
     DRY_RUN = False
     TARGET_USER_NAME = "Sarah Bruce"
     # ---!  END CONFIG   !---
@@ -866,6 +866,11 @@ if __name__ == '__main__':
         
         total_to_process = len(items_to_process)
         print(f"INFO: Found {total_to_process} PLP students that are new or have been updated.")
+
+        # =================================================================
+        # MAIN PROCESSING LOOP - TEMPORARILY DISABLED FOR FULL SYNC
+        # 🚨 IMPORTANT: REMOVE THE TRIPLE QUOTES (""") AFTER THIS RUN IS COMPLETE
+        # =================================================================
         """
         for i, plp_item in enumerate(items_to_process, 1):
             plp_item_id = int(plp_item['id'])
@@ -873,10 +878,6 @@ if __name__ == '__main__':
             
             # This is the main try/except for each individual student
             try:
-                if PERFORM_INITIAL_CLEANUP:
-                    # This now calls the new, smarter function
-                      reconcile_subitems(plp_item_id, creator_id, dry_run=DRY_RUN)
-
                 print("--- Phase 0: Syncing Special Enrollments (Jumpstart/Study Hall) ---")
                 process_student_special_enrollments(plp_item, dry_run=DRY_RUN)
 
@@ -900,17 +901,48 @@ if __name__ == '__main__':
 
                 if not DRY_RUN:
                     print(f"INFO: Sync successful. Updating timestamp for PLP item {plp_item_id}.")
-                    update_query = """
+                    update_query = '''
                         INSERT INTO processed_students (student_id, last_synced_at)
                         VALUES (%s, NOW())
                         ON DUPLICATE KEY UPDATE last_synced_at = NOW()
-                    """
+                    '''
                     cursor.execute(update_query, (plp_item_id,))
                     db.commit()
 
             except Exception as e:
                 print(f"FATAL ERROR processing PLP item {plp_item_id}: {e}")
         """
+        # =================================================================
+        # FINAL RECONCILIATION LOOP
+        # =================================================================
+        print("\n======================================================")
+        print("=== STARTING FINAL RECONCILIATION RUN          ===")
+        print("======================================================")
+
+        total_all_students = len(all_plp_items)
+        print(f"INFO: Reconciling subitems for all {total_all_students} students...")
+
+        for i, plp_item in enumerate(all_plp_items, 1):
+            plp_item_id = int(plp_item['id'])
+            print(f"\n===== Reconciling Student {i}/{total_all_students} (PLP ID: {plp_item_id}) =====")
+            try:
+                # For the full sync, we use DRY_RUN from the config at the top
+                reconcile_subitems(plp_item_id, creator_id, dry_run=DRY_RUN)
+                
+                # We still need to update the timestamp after a successful reconciliation
+                if not DRY_RUN:
+                    print(f"INFO: Reconciliation successful. Updating timestamp for PLP item {plp_item_id}.")
+                    update_query = '''
+                        INSERT INTO processed_students (student_id, last_synced_at)
+                        VALUES (%s, NOW())
+                        ON DUPLICATE KEY UPDATE last_synced_at = NOW()
+                    '''
+                    cursor.execute(update_query, (plp_item_id,))
+                    db.commit()
+                    
+            except Exception as e:
+                print(f"FATAL ERROR during reconciliation for PLP item {plp_item_id}: {e}")
+        
     except Exception as e:
         print(f"A critical error occurred: {e}")
     finally:
