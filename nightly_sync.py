@@ -776,7 +776,13 @@ def reconcile_subitems(plp_item_id, creator_id, dry_run=True):
                     # This is a Canvas course, so enroll in Canvas.
                     canvas_item_id = list(linked_canvas_item_ids)[0]
                     course_id_val = get_column_value(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_COURSE_ID_COLUMN_ID)
-                    canvas_course_id = course_id_val.get('text') if course_id_val else None
+                    canvas_course_id = None
+                    if course_id_val:
+                        # First, try to get the ID from the .text property (for Text columns)
+                        canvas_course_id = course_id_val.get('text')
+                        # If that's empty, try to get it from the .value property (for Numbers columns)
+                        if not canvas_course_id:
+                            canvas_course_id = course_id_val.get('value')
                     if canvas_course_id:
                         section = create_section_if_not_exists(canvas_course_id, "All") 
                         if section:
