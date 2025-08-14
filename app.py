@@ -110,14 +110,34 @@ def check_if_subitem_exists_by_name(parent_item_id, subitem_name_to_check):
         pass
     return False
     
+# In app.py, replace the entire execute_monday_graphql function
+
 def execute_monday_graphql(query):
-    try:
-        response = requests.post(MONDAY_API_URL, json={"query": query}, headers=MONDAY_HEADERS)
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        print(f"ERROR: Monday.com API Error: {e}")
-        return None
+    max_retries = 4
+    delay = 2
+    for attempt in range(max_retries):
+        try:
+            response = requests.post(MONDAY_API_URL, json={"query": query}, headers=MONDAY_HEADERS, timeout=30)
+            if response.status_code == 429:
+                print(f"WARNING: Rate limit hit. Waiting {delay} seconds...")
+                time.sleep(delay)
+                delay *= 2
+                continue
+            response.raise_for_status()
+            json_response = response.json()
+            if "errors" in json_response:
+                print(f"ERROR: Monday GraphQL Error: {json_response['errors']}")
+                return None
+            return json_response
+        except requests.exceptions.RequestException as e:
+            print(f"WARNING: Monday HTTP Request Error: {e}. Retrying...")
+            if attempt < max_retries - 1:
+                time.sleep(delay)
+                delay *= 2
+            else:
+                print("ERROR: Final retry failed.")
+                return None
+    return None
 
 def get_item_name(item_id, board_id):
     query = f"query {{ boards(ids: {board_id}) {{ items_page(query_params: {{ids: [{item_id}]}}) {{ items {{ name }} }} }} }}"
@@ -455,6 +475,8 @@ def enroll_student_in_section(course_id, user_id, section_id):
         print(f"ERROR: Failed to enroll user {user_id} in section {section_id}. Details: {e}")
         return "Failed"
 
+# In app.py, replace the entire enroll_or_create_and_enroll function
+
 def enroll_or_create_and_enroll(course_id, section_id, student_details):
     canvas_api = initialize_canvas_api()
     if not canvas_api:
@@ -465,10 +487,8 @@ def enroll_or_create_and_enroll(course_id, section_id, student_details):
     if not user:
         user = create_canvas_user(student_details)
 
-    # In app.py -> enroll_or_create_and_enroll
-
     if user:
-        # === START CHANGE: Re-fetch the full user object ===
+        # === START FIX: Re-fetch the full user object to prevent errors ===
         try:
             full_user = canvas_api.get_user(user.id)
             if student_details.get('ssid') and hasattr(full_user, 'sis_user_id') and full_user.sis_user_id != student_details['ssid']:
@@ -477,7 +497,7 @@ def enroll_or_create_and_enroll(course_id, section_id, student_details):
         except CanvasException as e:
             print(f"ERROR: Could not retrieve full user object for ID {user.id}: {e}")
             return "Failed: Could not retrieve full user"
-    # === END CHANGE ===
+        # === END FIX ===
 
     return "Failed: User not found/created"
 
