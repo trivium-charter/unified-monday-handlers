@@ -730,6 +730,8 @@ def run_plp_sync_for_student(plp_item_id, creator_id, dry_run=True):
 # This function replaces clear_subitems_by_creator
 # In nightly_sync.py, replace your old reconcile_subitems function with this new one.
 
+# In nightly_sync.py, replace the reconcile_subitems function with this final version.
+
 def reconcile_subitems(plp_item_id, creator_id, dry_run=True):
     """
     Performs a true and full reconciliation for a student.
@@ -761,11 +763,17 @@ def reconcile_subitems(plp_item_id, creator_id, dry_run=True):
         for class_item_id, category_name in class_id_to_category_map.items():
             class_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)) or f"Item {class_item_id}"
             
-            # Action: Always push the enrollment to Canvas to fix any discrepancies.
-            print(f"    ACTION: Force-syncing enrollment for '{class_name}' to Canvas.")
+            print(f"    ACTION: Processing enrollment for '{class_name}'.")
+            
+            # This is the expected subitem name. We check for it at the end.
+            expected_subitem_name = f"Added {category_name} '{class_name}'"
+
             if not dry_run:
                 linked_canvas_item_ids = get_linked_items_from_board_relation(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
+                
+                # === START CHANGE: ADDED LOGIC FOR NON-CANVAS COURSES ===
                 if linked_canvas_item_ids:
+                    # This is a Canvas course, so enroll in Canvas.
                     canvas_item_id = list(linked_canvas_item_ids)[0]
                     course_id_val = get_column_value(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_COURSE_ID_COLUMN_ID)
                     canvas_course_id = course_id_val.get('text') if course_id_val else None
@@ -773,9 +781,13 @@ def reconcile_subitems(plp_item_id, creator_id, dry_run=True):
                         section = create_section_if_not_exists(canvas_course_id, "All") 
                         if section:
                             enroll_or_create_and_enroll(canvas_course_id, section.id, student_details)
+                # This 'else' block was missing.
+                else:
+                    # This is a non-Canvas course. No Canvas action is needed, but we still need to log it.
+                    print(f"    INFO: '{class_name}' is a non-Canvas course.")
+                # === END CHANGE ===
 
-            # Logging: Conditionally create the subitem to prevent duplicates.
-            expected_subitem_name = f"Added {category_name} '{class_name}'"
+            # Conditionally create the subitem log to prevent duplicates for ALL course types.
             if not check_if_subitem_exists(plp_item_id, expected_subitem_name, creator_id):
                 print(f"    INFO: Subitem '{expected_subitem_name}' is missing. Creating it.")
                 if not dry_run:
@@ -786,25 +798,19 @@ def reconcile_subitems(plp_item_id, creator_id, dry_run=True):
     # ===================================================================
     #  Part 2: Reconciling Staff Assignment Subitems
     # ===================================================================
+    # (This part of the function remains the same and is correct)
     print("  -> Reconciling staff assignments...")
     master_student_id = student_details['master_id']
-    
     for trigger_col, mapping in MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS.items():
-        staff_role_name = mapping.get("name", "Staff") # e.g., "ACE Teacher"
+        staff_role_name = mapping.get("name", "Staff")
         master_person_val = get_column_value(master_student_id, int(MASTER_STUDENT_BOARD_ID), trigger_col)
-        
         if master_person_val and master_person_val.get('value'):
             person_ids = get_people_ids_from_value(master_person_val.get('value'))
             if person_ids:
-                # Assuming only one person per role for reconciliation logging
                 person_id = list(person_ids)[0]
                 person_name = get_user_name(person_id)
-                
                 if person_name:
-                    # Define a simple, clean state-based subitem name
                     expected_staff_subitem = f"{staff_role_name}: {person_name}"
-
-                    # Conditionally create the subitem to prevent duplicates
                     if not check_if_subitem_exists(plp_item_id, expected_staff_subitem, creator_id):
                         print(f"    INFO: Subitem '{expected_staff_subitem}' is missing. Creating it.")
                         if not dry_run:
