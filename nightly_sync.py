@@ -503,6 +503,8 @@ def sync_teacher_assignments(master_student_id, plp_item_id, dry_run=True):
 
 # Add this entire function to Section 3 of nightly_sync.py
 
+# In nightly_sync.py, replace the entire process_student_special_enrollments function
+
 def process_student_special_enrollments(plp_item, dry_run=True):
     plp_item_id = int(plp_item['id'])
     print(f"\n--- Processing Special Enrollments for: {plp_item['name']} (PLP ID: {plp_item_id}) ---")
@@ -513,11 +515,11 @@ def process_student_special_enrollments(plp_item, dry_run=True):
         return
 
     master_id = student_details['master_id']
-
+    
     # Get TOR and Grade Level from Master Student Item
     master_details_query = f'query {{ items(ids:[{master_id}]) {{ column_values(ids:["{MASTER_STUDENT_TOR_COLUMN_ID}", "{MASTER_STUDENT_GRADE_COLUMN_ID}"]) {{ id text value }} }} }}'
     master_result = execute_monday_graphql(master_details_query)
-
+    
     tor_last_name = "Orientation"
     grade_text = ""
     if master_result and master_result.get('data', {}).get('items'):
@@ -532,6 +534,30 @@ def process_student_special_enrollments(plp_item, dry_run=True):
                     if tor_full_name: tor_last_name = tor_full_name.split()[-1]
             except (json.JSONDecodeError, TypeError):
                 print(f"  WARNING: Could not parse TOR value for master item {master_id}.")
+
+    # --- START FIX: This section now correctly calls the main enrollment function ---
+    
+    # 1. Process Jumpstart
+    jumpstart_canvas_id = SPECIAL_COURSE_CANVAS_IDS.get("Jumpstart")
+    if jumpstart_canvas_id:
+        print(f"  Processing Jumpstart enrollment, section: {tor_last_name}")
+        if not dry_run:
+            section = create_section_if_not_exists(jumpstart_canvas_id, tor_last_name)
+            if section:
+                enroll_or_create_and_enroll(jumpstart_canvas_id, section.id, student_details)
+
+    # 2. Process Study Hall
+    sh_section_name = get_study_hall_section_from_grade(grade_text)
+    target_sh_name = "ACE Study Hall" # Default study hall
+    target_sh_canvas_id = SPECIAL_COURSE_CANVAS_IDS.get(target_sh_name)
+    if target_sh_canvas_id:
+        print(f"  Processing {target_sh_name} enrollment, section: {sh_section_name}")
+        if not dry_run:
+            section = create_section_if_not_exists(target_sh_canvas_id, sh_section_name)
+            if section:
+                enroll_or_create_and_enroll(target_sh_canvas_id, section.id, student_details)
+    
+    # --- END FIX ---
 
     # This helper function was also missing and is now included
     def enroll_student(canvas_course_id, section_name, student_details):
