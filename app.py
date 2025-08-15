@@ -4,13 +4,13 @@
 import os
 import json
 import requests
-import time # <-- FIX: Imported the time module for retry delays
+import time
 from datetime import datetime
 from flask import Flask, request, jsonify
 from celery import Celery
 from canvasapi import Canvas
 from canvasapi.exceptions import CanvasException, Conflict, ResourceDoesNotExist
-from collections import defaultdict # <-- FIX: Imported defaultdict for cleaner logic
+from collections import defaultdict
 
 # ==============================================================================
 # CENTRALIZED CONFIGURATION
@@ -217,26 +217,21 @@ def create_monday_update(item_id, update_text):
     mutation = f"mutation {{ create_update (item_id: {item_id}, body: {formatted_text}) {{ id }} }}"
     return execute_monday_graphql(mutation)
 
-# In app.py, replace the entire check_if_subitem_exists_by_name function
-
 def check_if_subitem_exists_by_name(parent_item_id, subitem_name_to_check):
     """
     Checks if a subitem for a specific course already exists,
     regardless of its category prefix (e.g., 'Added Math' vs 'Added ACE').
     """
-    # Extracts the core course name from the full subitem title
-    # Example: "Added Math 'Algebra 1'" becomes "'Algebra 1'"
     try:
         course_part = "'" + subitem_name_to_check.split("'", 1)[1]
     except IndexError:
-        course_part = subitem_name_to_check # Fallback for unexpected formats
+        course_part = subitem_name_to_check
 
     query = f'query {{ items(ids:[{parent_item_id}]) {{ subitems {{ name }} }} }}'
     result = execute_monday_graphql(query)
     try:
         subitems = result['data']['items'][0]['subitems']
         for subitem in subitems:
-            # Check if any existing subitem ENDS WITH the same course part
             if subitem.get('name', '').endswith(course_part):
                 return True
     except (KeyError, IndexError, TypeError):
@@ -304,8 +299,6 @@ def create_canvas_user(student_details):
 
 def update_user_ssid(user, new_ssid):
     try:
-        # Correctly get the logins using the main canvas instance or from the user object if available
-        # This is a more robust way to handle the API call.
         canvas_api = initialize_canvas_api()
         logins = canvas_api.get_user(user.id).get_logins()
         if logins:
@@ -586,10 +579,6 @@ def process_canvas_delta_sync_from_course_change(event_data):
     for class_id in removed_ids:
         manage_class_enrollment("unenroll", plp_item_id, class_id, student_details, category_name, subitem_cols=curriculum_change_values)
 
-# In app.py, replace the entire process_plp_course_sync_webhook function
-
-# In app.py, replace the entire process_plp_course_sync_webhook function
-
 @celery_app.task(name='app.process_plp_course_sync_webhook')
 def process_plp_course_sync_webhook(event_data):
     subitem_id, parent_item_id = event_data.get('pulseId'), event_data.get('parentItemId')
@@ -623,7 +612,10 @@ def process_plp_course_sync_webhook(event_data):
         return
     plp_item_id = list(plp_linked_ids)[0]
     
-    # Get secondary categories for all added courses to make a single API call
+    # Stores the target column for each course
+    course_to_final_cols = defaultdict(set)
+    
+    # 1. Get secondary categories for all added courses to make a single API call
     secondary_category_col_id = "dropdown_mkq0r2av"
     if added_courses:
         course_ids_to_query = list(added_courses)
@@ -633,43 +625,43 @@ def process_plp_course_sync_webhook(event_data):
     else:
         secondary_category_map = {}
 
-    # Build a map of courses to their final destination columns based on the rules
-    course_to_final_cols = defaultdict(set)
+    # 2. Process primary tags and determine final columns for each added course
     for course_id in added_courses:
         course_secondary = secondary_category_map.get(course_id, '')
         
-        # Rule: If secondary is ACE, it takes precedence over History/Science
-        if course_secondary == "ACE":
+        is_ace_course = course_secondary == "ACE"
+
+        if is_ace_course:
             ace_col_id = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get("ACE")
-            if ace_col_id: course_to_final_cols[course_id].add(ace_col_id)
+            if ace_col_id:
+                course_to_final_cols[course_id].add(ace_col_id)
             
-            # Add other categories if they are ELA or Other/Elective
-            for tag in tag_labels:
-                if tag in ["ELA", "Other/Elective"]:
-                    primary_col = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get(tag)
-                    if primary_col: course_to_final_cols[course_id].add(primary_col)
+            for category in tag_labels:
+                if category in ["ELA", "Other/Elective"]:
+                    primary_col = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get(category)
+                    if primary_col:
+                        course_to_final_cols[course_id].add(primary_col)
         
-        # Rule: If not an ACE course, process primary tags normally
-        else:
-            for tag in tag_labels:
-                target_col = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get(tag)
+        else: # Not an ACE course, process primary tags normally
+            for category in tag_labels:
+                target_col = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get(category)
                 
                 if target_col:
                     course_to_final_cols[course_id].add(target_col)
                 else:
-                    # Fallback to Other/Elective for unmapped tags
                     other_col = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get("Other/Elective")
                     if other_col:
-                        print(f"WARNING: Tag '{tag}' doesn't map to a PLP column. Routing to 'Other/Elective'.")
+                        print(f"WARNING: Tag '{category}' doesn't map to a PLP column. Routing to 'Other/Elective'.")
                         course_to_final_cols[course_id].add(other_col)
                     else:
-                        print(f"WARNING: Tag '{tag}' not mapped and 'Other/Elective' is not configured. Skipping.")
+                        print(f"WARNING: Tag '{category}' not mapped and 'Other/Elective' is not configured. Skipping.")
     
-    # Perform the updates
+    # 3. Add courses to the determined columns
     for course_id, col_ids in course_to_final_cols.items():
-        for col_id in col_ids:
+        for col_id in set(col_ids):
             update_connect_board_column(plp_item_id, int(PLP_BOARD_ID), col_id, course_id, "add")
 
+    # 4. Handle removed courses
     for course_id in removed_courses:
         possible_cols = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.values()
         for col_id in possible_cols:
@@ -677,6 +669,66 @@ def process_plp_course_sync_webhook(event_data):
 
     downstream_event = {'pulseId': plp_item_id, 'userId': event_data.get('userId')}
     process_canvas_delta_sync_from_course_change.delay(downstream_event)
+
+@celery_app.task(name='app.process_master_student_person_sync_webhook')
+def process_master_student_person_sync_webhook(event_data):
+    master_item_id, trigger_column_id, user_id = event_data.get('pulseId'), event_data.get('columnId'), event_data.get('userId')
+    current_value_raw, previous_value_raw = event_data.get('value'), event_data.get('previousValue')
+    current_ids = get_people_ids_from_value(current_value_raw)
+    previous_ids = get_people_ids_from_value(previous_value_raw)
+    if current_ids == previous_ids:
+        print(f"INFO: People column for item {master_item_id} was updated, but no change was made. Skipping.")
+        return
+    mappings = MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS.get(trigger_column_id)
+    if not mappings: return
+    for target in mappings["targets"]:
+        linked_ids = get_linked_items_from_board_relation(master_item_id, int(MASTER_STUDENT_BOARD_ID), target["connect_column_id"])
+        for linked_id in linked_ids:
+            update_people_column(linked_id, int(target["board_id"]), target["target_column_id"], current_value_raw, target["target_column_type"])
+    plp_target = next((t for t in mappings["targets"] if str(t.get("board_id")) == str(PLP_BOARD_ID)), None)
+    if not plp_target: return
+    plp_linked_ids = get_linked_items_from_board_relation(master_item_id, int(MASTER_STUDENT_BOARD_ID), plp_target["connect_column_id"])
+    if not plp_linked_ids: return
+    plp_item_id = list(plp_linked_ids)[0]
+    ENTRY_TYPE_COLUMN_ID = "entry_type__1"
+    staff_change_values = {ENTRY_TYPE_COLUMN_ID: {"labels": ["Staff Change"]}}
+    col_name, changer, date = mappings.get("name", "Staff"), get_user_name(user_id) or "automation", datetime.now().strftime('%Y-%m-%d')
+    for p_id in (current_ids - previous_ids):
+        name = get_user_name(p_id)
+        if name: create_subitem(plp_item_id, f"{col_name} changed to {name} on {date} by {changer}", column_values=staff_change_values)
+    for p_id in (previous_ids - current_ids):
+        name = get_user_name(p_id)
+        if name: create_subitem(plp_item_id, f"Removed {name} from {col_name} on {date} by {changer}", column_values=staff_change_values)
+
+@celery_app.task(name='app.process_teacher_enrollment_webhook')
+def process_teacher_enrollment_webhook(event_data):
+    course_item_id = event_data.get('pulseId')
+    board_id = event_data.get('boardId')
+    canvas_course_id_val = get_column_value(course_item_id, board_id, CANVAS_COURSE_ID_COLUMN_ID)
+    canvas_course_id = canvas_course_id_val.get('text') if canvas_course_id_val else None
+    if not canvas_course_id:
+        create_monday_update(course_item_id, "Enrollment Failed: Canvas Course ID is missing on the course item.")
+        return
+    added_staff_item_ids = get_linked_ids_from_connect_column_value(event_data.get('value')) - get_linked_ids_from_connect_column_value(event_data.get('previousValue'))
+    if not added_staff_item_ids: return
+    for staff_item_id in added_staff_item_ids:
+        teacher_name = get_item_name(staff_item_id, int(ALL_STAFF_BOARD_ID)) or f"Staff Item {staff_item_id}"
+        email_val = get_column_value(staff_item_id, int(ALL_STAFF_BOARD_ID), ALL_STAFF_EMAIL_COLUMN_ID)
+        sis_id_val = get_column_value(staff_item_id, int(ALL_STAFF_BOARD_ID), ALL_STAFF_SIS_ID_COLUMN_ID)
+        canvas_id_val = get_column_value(staff_item_id, int(ALL_STAFF_BOARD_ID), ALL_STAFF_CANVAS_ID_COLUMN)
+        internal_id_val = get_column_value(staff_item_id, int(ALL_STAFF_BOARD_ID), ALL_STAFF_INTERNAL_ID_COLUMN)
+        teacher_details = { 'name': teacher_name, 'email': email_val.get('text') if email_val else None, 'sis_id': sis_id_val.get('text') if sis_id_val else None, 'canvas_id': canvas_id_val.get('text') if canvas_id_val else None, 'internal_id': internal_id_val.get('text') if internal_id_val else None, }
+        result = enroll_teacher_in_course(canvas_course_id, teacher_details)
+        create_monday_update(course_item_id, f"Enrollment attempt for '{teacher_name}': {result}")
+
+@celery_app.task(name='app.process_sped_students_person_sync_webhook')
+def process_sped_students_person_sync_webhook(event_data):
+    source_item_id, col_id, col_val = event_data.get('pulseId'), event_data.get('columnId'), event_data.get('value')
+    config = SPED_STUDENTS_PEOPLE_COLUMN_MAPPING.get(col_id)
+    if not config: return
+    linked_ids = get_linked_items_from_board_relation(source_item_id, int(SPED_STUDENTS_BOARD_ID), SPED_TO_IEPAP_CONNECT_COLUMN_ID)
+    for linked_id in linked_ids:
+        update_people_column(linked_id, int(IEP_AP_BOARD_ID), config["target_column_id"], col_val, config["target_column_type"])
 
 # ==============================================================================
 # FLASK WEB APP
