@@ -326,6 +326,26 @@ def update_user_ssid(user, new_ssid):
         print(f"ERROR: API error updating SSID for user '{user.name}': {e}")
     return False
 
+def create_canvas_course(course_name, term_id):
+    canvas_api = initialize_canvas_api()
+    if not all([canvas_api, CANVAS_SUBACCOUNT_ID, CANVAS_TEMPLATE_COURSE_ID]): return None
+    try: account = canvas_api.get_account(CANVAS_SUBACCOUNT_ID)
+    except ResourceDoesNotExist: return None
+    base_sis_name = ''.join(e for e in course_name if e.isalnum()).replace(' ', '_').lower()
+    base_sis_id = f"{base_sis_name}_{term_id}"
+    max_attempts = 10
+    for attempt in range(max_attempts):
+        sis_id_to_try = base_sis_id if attempt == 0 else f"{base_sis_id}_{attempt}"
+        course_data = { 'name': course_name, 'course_code': course_name, 'enrollment_term_id': f"sis_term_id:{term_id}", 'sis_course_id': sis_id_to_try, 'source_course_id': CANVAS_TEMPLATE_COURSE_ID }
+        try:
+            new_course = account.create_course(course=course_data)
+            return new_course
+        except CanvasException as e:
+            if hasattr(e, 'status_code') and e.status_code == 400 and 'is already in use' in str(e).lower():
+                continue
+            else: return None
+    return None
+
 def create_section_if_not_exists(course_id, section_name):
     canvas_api = initialize_canvas_api()
     if not canvas_api: return None
@@ -364,7 +384,7 @@ def unenroll_student_from_course(course_id, student_details):
         print(f"ERROR: Canvas unenrollment failed: {e}")
         return False
 
-def enroll_teacher_in_course(course_id, teacher_details):
+def enroll_teacher_in_course(course_id, teacher_details, role='TeacherEnrollment'):
     canvas_api = initialize_canvas_api()
     if not canvas_api: return "Failed: Canvas API not initialized"
     teacher_name = teacher_details.get('name', teacher_details.get('email', 'Unknown'))
@@ -372,7 +392,7 @@ def enroll_teacher_in_course(course_id, teacher_details):
     if not user_to_enroll: return f"Failed: User '{teacher_name}' not found in Canvas with provided IDs."
     try:
         course = canvas_api.get_course(course_id)
-        course.enroll_user(user_to_enroll, 'TeacherEnrollment', enrollment_state='active', notify=False)
+        course.enroll_user(user_to_enroll, role, enrollment_state='active', notify=False)
         return "Success"
     except ResourceDoesNotExist: return f"Failed: Course with ID '{course_id}' not found in Canvas."
     except Conflict: return "Already Enrolled"
@@ -388,6 +408,7 @@ def get_teacher_person_value_from_canvas_board(canvas_item_id):
 # ==============================================================================
 # CORE LOGIC FUNCTIONS
 # ==============================================================================
+
 def enroll_or_create_and_enroll(course_id, section_id, student_details):
     canvas_api = initialize_canvas_api()
     if not canvas_api: return "Failed"
@@ -487,6 +508,99 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details,
             if canvas_course_id: unenroll_student_from_course(canvas_course_id, student_details)
         create_subitem(plp_item_id, subitem_title, column_values=subitem_cols)
 
+# ==============================================================================
+# CELERY APP DEFINITION & TASKS
+# ==============================================================================
+broker_use_ssl_config = {'ssl_cert_reqs': 'required'} if CELERY_BROKER_URL.startswith('rediss://') else {}
+celery_app = Celery('tasks', broker=CELERY_BROKER_URL, backend=CELERY_RESULT_BACKEND, include=[__name__])
+if broker_use_ssl_config:
+    celery_app.conf.broker_use_ssl = broker_use_ssl_config
+    celery_app.conf.redis_backend_use_ssl = broker_use_ssl_config
+celery_app.conf.timezone = 'America/Los_Angeles'
+celery_app.conf.broker_transport_options = { 'health_check_interval': 30, 'socket_keepalive': True, }
+celery_app.conf.broker_connection_retry_on_startup = True
+
+@celery_app.task(name='app.process_general_webhook')
+def process_general_webhook(event_data, config_rule):
+    log_type, params = config_rule.get("log_type"), config_rule.get("params", {})
+    board_id, item_id = event_data.get('boardId'), event_data.get('pulseId')
+    if log_type == "NameReformat":
+        target_col_id, current_name = params.get('target_text_column_id'), get_item_name(item_id, board_id)
+        if not all([target_col_id, current_name]): return
+        parts = current_name.strip().split()
+        if len(parts) >= 2: change_column_value_generic(board_id, item_id, target_col_id, f"{parts[-1]}, {' '.join(parts[:-1])}")
+    elif log_type == "CopyToItemName":
+        source_col_id = params.get('source_column_id')
+        if not source_col_id: return
+        column_data = get_column_value(item_id, board_id, source_col_id)
+        if column_data and column_data.get('text'): update_item_name(item_id, board_id, column_data['text'])
+    elif log_type == "ConnectBoardChange":
+        current_ids, previous_ids = get_linked_ids_from_connect_column_value(event_data.get('value')), get_linked_ids_from_connect_column_value(event_data.get('previousValue'))
+        changer, date, prefix, linked_board_id = get_user_name(event_data.get('userId')) or "automation", datetime.now().strftime('%Y-%m-%d'), params.get('subitem_name_prefix', ''), params.get('linked_board_id')
+        subitem_cols = {params['entry_type_column_id']: {"labels": [str(params['subitem_entry_type'])]}} if params.get('entry_type_column_id') and params.get('subitem_entry_type') else {}
+        for link_id in (current_ids - previous_ids):
+            name = get_item_name(link_id, linked_board_id)
+            if name: create_subitem(item_id, f"Added {prefix} '{name}' on {date} by {changer}", subitem_cols)
+        for link_id in (previous_ids - current_ids):
+            name = get_item_name(link_id, linked_board_id)
+            if name: create_subitem(item_id, f"Removed {prefix} '{name}' on {date} by {changer}", subitem_cols)
+
+@celery_app.task(name='app.process_canvas_full_sync_from_status')
+def process_canvas_full_sync_from_status(event_data):
+    if event_data.get('value', {}).get('label', {}).get('text', '') != PLP_CANVAS_SYNC_STATUS_VALUE: return
+    plp_item_id = event_data.get('pulseId')
+    student_details = get_student_details_from_plp(plp_item_id)
+    if not student_details: return
+    subitem_cols = {}
+    first_rule = next((rule for rule in LOG_CONFIGS if str(rule.get("trigger_board_id")) == PLP_BOARD_ID and rule.get("log_type") == "ConnectBoardChange"), None)
+    if first_rule and "params" in first_rule:
+        params = first_rule["params"]
+        if params.get("entry_type_column_id") and params.get("subitem_entry_type"):
+            subitem_cols[params["entry_type_column_id"]] = {"labels": [str(params["subitem_entry_type"])]}
+    class_id_to_category_map = {}
+    for category, column_id in PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.items():
+        for class_id in get_linked_items_from_board_relation(plp_item_id, int(PLP_BOARD_ID), column_id):
+            class_id_to_category_map[class_id] = category
+    if not class_id_to_category_map: return
+    for class_item_id, category_name in class_id_to_category_map.items():
+        manage_class_enrollment("enroll", plp_item_id, class_item_id, student_details, category_name, subitem_cols=subitem_cols)
+
+@celery_app.task(name='app.process_canvas_delta_sync_from_course_change')
+def process_canvas_delta_sync_from_course_change(event_data):
+    plp_item_id, user_id, trigger_column_id = event_data.get('pulseId'), event_data.get('userId'), event_data.get('columnId')
+    student_details = get_student_details_from_plp(plp_item_id)
+    if not student_details: return
+    master_student_id = student_details.get('master_id')
+    if not master_student_id:
+        print(f"ERROR: Could not find Master Student ID for PLP {plp_item_id}. Cannot sync teacher.")
+        return
+    ENTRY_TYPE_COLUMN_ID = "entry_type__1"
+    curriculum_change_values = {ENTRY_TYPE_COLUMN_ID: {"labels": ["Curriculum Change"]}}
+    current_ids, previous_ids = get_linked_ids_from_connect_column_value(event_data.get('value')), get_linked_ids_from_connect_column_value(event_data.get('previousValue'))
+    added_ids, removed_ids = current_ids - previous_ids, previous_ids - current_ids
+    category_name = {v: k for k, v in PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.items()}.get(trigger_column_id, "Course")
+    CANVAS_BOARD_CLASS_TYPE_COLUMN_ID = "status__1"
+    ACE_TEACHER_COLUMN_ID_ON_MASTER = "multiple_person_mks1wrfv"
+    CONNECT_TEACHER_COLUMN_ID_ON_MASTER = "multiple_person_mks11jeg"
+    for class_id in added_ids:
+        manage_class_enrollment("enroll", plp_item_id, class_id, student_details, category_name, subitem_cols=curriculum_change_values)
+        linked_canvas_item_ids = get_linked_items_from_board_relation(class_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
+        if linked_canvas_item_ids:
+            canvas_item_id = list(linked_canvas_item_ids)[0]
+            class_type_val = get_column_value(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_BOARD_CLASS_TYPE_COLUMN_ID)
+            class_type_text = class_type_val.get('text', '').lower() if class_type_val and class_type_val.get('text') else ''
+            target_master_col_id = None
+            if 'ace' in class_type_text: target_master_col_id = ACE_TEACHER_COLUMN_ID_ON_MASTER
+            elif 'connect' in class_type_text: target_master_col_id = CONNECT_TEACHER_COLUMN_ID_ON_MASTER
+            if target_master_col_id:
+                teacher_person_value = get_teacher_person_value_from_canvas_board(canvas_item_id)
+                if teacher_person_value:
+                    update_people_column(master_student_id, int(MASTER_STUDENT_BOARD_ID), target_master_col_id, teacher_person_value, "multiple-person")
+                else:
+                    print(f"WARNING: Could not find linked teacher for course item {class_id}.")
+    for class_id in removed_ids:
+        manage_class_enrollment("unenroll", plp_item_id, class_id, student_details, category_name, subitem_cols=curriculum_change_values)
+
 @celery_app.task(name='app.process_plp_course_sync_webhook')
 def process_plp_course_sync_webhook(event_data):
     subitem_id, parent_item_id = event_data.get('pulseId'), event_data.get('parentItemId')
@@ -512,7 +626,7 @@ def process_plp_course_sync_webhook(event_data):
     removed_courses = previous_courses - current_courses
 
     if not added_courses and not removed_courses:
-        return
+        return # No change in linked courses
 
     plp_linked_ids = get_linked_items_from_board_relation(parent_item_id, int(HS_ROSTER_BOARD_ID), HS_ROSTER_MAIN_ITEM_to_PLP_CONNECT_COLUMN_ID)
     if not plp_linked_ids:
@@ -520,7 +634,10 @@ def process_plp_course_sync_webhook(event_data):
         return
     plp_item_id = list(plp_linked_ids)[0]
     
+    # Stores the target column for each course
     course_to_final_cols = defaultdict(set)
+    
+    # 1. Get secondary categories for all added courses to make a single API call
     secondary_category_col_id = "dropdown_mkq0r2av"
     if added_courses:
         course_ids_to_query = list(added_courses)
@@ -530,6 +647,7 @@ def process_plp_course_sync_webhook(event_data):
     else:
         secondary_category_map = {}
 
+    # 2. Process primary tags and determine final columns for each added course
     for course_id in added_courses:
         course_secondary = secondary_category_map.get(course_id, '')
         
@@ -560,10 +678,12 @@ def process_plp_course_sync_webhook(event_data):
                     else:
                         print(f"WARNING: Tag '{category}' not mapped and 'Other/Elective' is not configured. Skipping.")
     
+    # 3. Add courses to the determined columns
     for course_id, col_ids in course_to_final_cols.items():
         for col_id in set(col_ids):
             update_connect_board_column(plp_item_id, int(PLP_BOARD_ID), col_id, course_id, "add")
 
+    # 4. Handle removed courses
     for course_id in removed_courses:
         possible_cols = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.values()
         for col_id in possible_cols:
