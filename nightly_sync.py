@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 # ==============================================================================
-# NIGHTLY PLP & HS ROSTER SYNC SCRIPT (CORRECTED)
+# NIGHTLY PLP & HS ROSTER SYNC SCRIPT (FINAL CORRECTED VERSION)
 # ==============================================================================
-
 import os
 import json
 import requests
@@ -17,7 +16,6 @@ import re
 
 # ==============================================================================
 # 1. CENTRALIZED CONFIGURATION
-# (No changes needed here)
 # ==============================================================================
 MONDAY_API_KEY = os.environ.get("MONDAY_API_KEY")
 CANVAS_API_KEY = os.environ.get("CANVAS_API_KEY")
@@ -69,10 +67,8 @@ except (json.JSONDecodeError, TypeError):
 # ==============================================================================
 # 2. MONDAY.COM & CANVAS UTILITIES
 # ==============================================================================
-
 MONDAY_HEADERS = { "Authorization": MONDAY_API_KEY, "Content-Type": "application/json", "API-Version": "2023-10" }
 
-# === FIX #1: UPGRADED MONDAY API CALLS WITH FULL RETRY LOGIC ===
 def execute_monday_graphql(query):
     max_retries = 4
     delay = 2
@@ -193,6 +189,19 @@ def bulk_add_to_connect_column(item_id, board_id, connect_column_id, course_ids_
     print(f"    SYNCING: Adding {len(course_ids_to_add - current_linked_items)} courses to column {connect_column_id} on PLP item {item_id}.")
     return execute_monday_graphql(mutation) is not None
 
+def update_people_column(item_id, board_id, people_column_id, new_people_value, target_column_type):
+    parsed_new_value = new_people_value if isinstance(new_people_value, dict) else json.loads(new_people_value) if isinstance(new_people_value, str) else {}
+    persons_and_teams = parsed_new_value.get('personsAndTeams', [])
+    if target_column_type == "person":
+        person_id = persons_and_teams[0].get('id') if persons_and_teams else None
+        graphql_value = json.dumps(json.dumps({"personId": person_id} if person_id else {}))
+    elif target_column_type == "multiple-person":
+        people_list = [{"id": p.get('id'), "kind": "person"} for p in persons_and_teams if 'id' in p]
+        graphql_value = json.dumps(json.dumps({"personsAndTeams": people_list}))
+    else: return False
+    mutation = f"""mutation {{ change_column_value(board_id: {board_id}, item_id: {item_id}, column_id: "{people_column_id}", value: {graphql_value}) {{ id }} }}"""
+    return execute_monday_graphql(mutation) is not None
+
 def initialize_canvas_api():
     return Canvas(CANVAS_API_URL, CANVAS_API_KEY) if CANVAS_API_URL and CANVAS_API_KEY else None
 
@@ -299,7 +308,6 @@ def parse_flexible_timestamp(ts_string):
 # 3. CORE LOGIC FUNCTIONS
 # ==============================================================================
 
-# === FIX: REPLACED enroll_or_create_and_enroll WITH THE CORRECT, ROBUST VERSION ===
 def enroll_or_create_and_enroll(course_id, section_id, student_details):
     canvas_api = initialize_canvas_api()
     if not canvas_api: return "Failed"
@@ -309,7 +317,7 @@ def enroll_or_create_and_enroll(course_id, section_id, student_details):
         user = create_canvas_user(student_details)
     if user:
         try:
-            full_user = canvas_api.get_user(user.id) # This re-fetches the full user object
+            full_user = canvas_api.get_user(user.id)
             if student_details.get('ssid') and hasattr(full_user, 'sis_user_id') and full_user.sis_user_id != student_details['ssid']:
                 update_user_ssid(full_user, student_details['ssid'])
             return enroll_student_in_section(course_id, full_user.id, section_id)
@@ -445,12 +453,6 @@ def run_plp_sync_for_student(plp_item_id, creator_id, dry_run=True):
     master_student_id = student_details.get('master_id')
     if not master_student_id: return
     curriculum_change_values = {PLP_SUBITEM_ENTRY_TYPE_COLUMN_ID: {"labels": ["Curriculum Change"]}}
-    if not dry_run:
-        print("ACTION: Syncing teacher assignments from Master Student board to PLP...")
-        for trigger_col, mapping in MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS.items():
-            master_person_val = get_column_value(master_student_id, int(MASTER_STUDENT_BOARD_ID), trigger_col)
-            plp_target_mapping = next((t for t in mapping.get("targets", []) if str(t.get("board_id")) == str(PLP_BOARD_ID)), None)
-            if plp_target_mapping and master_person_val and master_person_val.get('value'): pass
     print("INFO: Syncing class enrollments...")
     class_id_to_category_map = {}
     for category, column_id in PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.items():
@@ -462,9 +464,30 @@ def run_plp_sync_for_student(plp_item_id, creator_id, dry_run=True):
     for class_item_id, category_name in class_id_to_category_map.items():
         class_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)) or f"Item {class_item_id}"
         print(f"INFO: Processing class: '{class_name}'")
-        if not dry_run: manage_class_enrollment("enroll", plp_item_id, class_item_id, student_details, category_name, creator_id, subitem_cols=curriculum_change_values, dry_run=dry_run)
+        manage_class_enrollment("enroll", plp_item_id, class_item_id, student_details, category_name, creator_id, subitem_cols=curriculum_change_values, dry_run=dry_run)
 
-# === FIX: REPLACED THE RECONCILIATION LOGIC WITH THE NEW, ROBUST VERSION ===
+# === FIX: NEW, SMARTER TEACHER SYNC FUNCTION ===
+def sync_teacher_assignments(master_student_id, plp_item_id, dry_run=True):
+    print("ACTION: Syncing teacher assignments from Master Student board to PLP...")
+    for source_col_id, mapping in MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS.items():
+        master_person_val = get_column_value(master_student_id, int(MASTER_STUDENT_BOARD_ID), source_col_id)
+        source_person_ids = get_people_ids_from_value(master_person_val.get('value')) if master_person_val else set()
+        
+        plp_target_mapping = next((t for t in mapping.get("targets", []) if str(t.get("board_id")) == str(PLP_BOARD_ID)), None)
+        if plp_target_mapping:
+            target_col_id = plp_target_mapping.get("target_column_id")
+            target_col_type = plp_target_mapping.get("target_column_type")
+            
+            current_plp_val = get_column_value(plp_item_id, int(PLP_BOARD_ID), target_col_id)
+            current_person_ids = get_people_ids_from_value(current_plp_val.get('value')) if current_plp_val else set()
+
+            if source_person_ids != current_person_ids:
+                print(f"  -> Change detected for {mapping.get('name', 'Staff')}. Updating PLP column {target_col_id}.")
+                if not dry_run:
+                    update_people_column(plp_item_id, int(PLP_BOARD_ID), target_col_id, master_person_val.get('value'), target_col_type)
+            else:
+                print(f"  -> No change needed for {mapping.get('name', 'Staff')}. Values are already in sync.")
+
 def reconcile_subitems(plp_item_id, creator_id, dry_run=True):
     print(f"--- Reconciling All Subitems & Enrollments for PLP Item: {plp_item_id} ---")
     student_details = get_student_details_from_plp(plp_item_id)
@@ -519,7 +542,6 @@ def reconcile_subitems(plp_item_id, creator_id, dry_run=True):
                         if not dry_run: create_subitem(plp_item_id, expected_staff_subitem, column_values={PLP_SUBITEM_ENTRY_TYPE_COLUMN_ID: {"labels": ["Staff Change"]}})
                     else:
                         print(f"    INFO: Subitem '{expected_staff_subitem}' already exists.")
-
 # ==============================================================================
 # 4. SCRIPT EXECUTION
 # ==============================================================================
@@ -534,6 +556,7 @@ if __name__ == '__main__':
     cursor = None
     try:
         print("INFO: Connecting to the database...")
+        # Use a dictionary for SSL options for clarity
         ssl_opts = {'ssl_ca': 'ca.pem', 'ssl_verify_cert': True}
         db = mysql.connector.connect( host=DB_HOST, user=DB_USER, password=DB_PASSWORD, database=DB_NAME, port=int(DB_PORT), **ssl_opts )
         cursor = db.cursor()
@@ -562,11 +585,13 @@ if __name__ == '__main__':
             plp_item_id = int(plp_item['id'])
             print(f"\n===== Processing Student {i}/{total_to_process} (PLP ID: {plp_item_id}) =====")
             try:
+                # === FIX: Teacher sync is now the last step ===
                 print("--- Phase 0: Syncing Special Enrollments (Jumpstart/Study Hall) ---")
                 process_student_special_enrollments(plp_item, dry_run=DRY_RUN)
+                
                 print("--- Phase 1: Checking for and syncing HS Roster ---")
                 hs_roster_connect_val = get_column_value(plp_item_id, int(PLP_BOARD_ID), PLP_TO_HS_ROSTER_CONNECT_COLUMN)
-                hs_roster_ids = get_linked_ids_from_connect_column_value(hs_roster_connect_val.get('value'))
+                hs_roster_ids = get_linked_ids_from_connect_column_value(hs_roster_connect_val.get('value')) if hs_roster_connect_val else set()
                 if hs_roster_ids:
                     hs_roster_item_id = list(hs_roster_ids)[0]
                     hs_roster_item_result = get_all_board_items(HS_ROSTER_BOARD_ID, item_ids=[hs_roster_item_id])
@@ -577,8 +602,17 @@ if __name__ == '__main__':
                         print(f"WARNING: Could not fetch HS Roster item object for ID {hs_roster_item_id}")
                 else:
                     print("INFO: No HS Roster item linked. Skipping Phase 1.")
+                    
                 print("--- Phase 2: Syncing PLP to Canvas ---")
                 run_plp_sync_for_student(plp_item_id, creator_id, dry_run=DRY_RUN)
+
+                print("--- Phase 3: Syncing Teacher Assignments ---")
+                student_details = get_student_details_from_plp(plp_item_id)
+                if student_details and student_details.get('master_id'):
+                    sync_teacher_assignments(student_details['master_id'], plp_item_id, dry_run=DRY_RUN)
+                else:
+                    print("WARNING: Cannot sync teachers because student details could not be fully loaded.")
+                
                 if not DRY_RUN:
                     print(f"INFO: Sync successful. Updating timestamp for PLP item {plp_item_id}.")
                     update_query = ''' INSERT INTO processed_students (student_id, last_synced_at) VALUES (%s, NOW()) ON DUPLICATE KEY UPDATE last_synced_at = NOW() '''
