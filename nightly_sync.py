@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+run#!/usr/bin/env python3
 # ==============================================================================
 # NIGHTLY PLP & HS ROSTER SYNC SCRIPT (FINAL, COMPLETE, AND CORRECTED)
 # ==============================================================================
@@ -425,6 +425,8 @@ def process_student_special_enrollments(plp_item, db_cursor, dry_run=True):
                 result = enroll_or_create_and_enroll(target_sh_canvas_id, section.id, student_details, db_cursor)
                 print(f"  -> Enrollment status: {result}")
 
+# In nightly_sync (1).py, replace the entire run_hs_roster_sync_for_student function
+
 def run_hs_roster_sync_for_student(hs_roster_item, dry_run=True):
     parent_item_id = int(hs_roster_item['id'])
     print(f"\n--- Processing HS Roster for: {hs_roster_item['name']} (ID: {parent_item_id}) ---")
@@ -440,18 +442,23 @@ def run_hs_roster_sync_for_student(hs_roster_item, dry_run=True):
     subitems_query = f'query {{ items (ids: [{parent_item_id}]) {{ subitems {{ id name column_values(ids: ["{HS_ROSTER_SUBITEM_DROPDOWN_COLUMN_ID}", "{HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID}", "{HS_ROSTER_SUBITEM_TERM_COLUMN_ID}"]) {{ id text value }} }} }} }}'
     subitems_result = execute_monday_graphql(subitems_query)
     
-    # Store courses by their raw dropdown labels
+    # Stores all course IDs found in a dictionary, keyed by their category label.
     course_ids_by_label = defaultdict(set)
     try:
         subitems = subitems_result['data']['items'][0]['subitems']
         for subitem in subitems:
             subitem_cols = {cv['id']: cv for cv in subitem['column_values']}
-            # Skip any subitem marked as "Spring"
-            if subitem_cols.get(HS_ROSTER_SUBITEM_TERM_COLUMN_ID, {}).get('text') == "Spring": continue
-                
+            
+            # Check the Term column first. If it's "Spring", skip this entire subitem.
+            term_val = subitem_cols.get(HS_ROSTER_SUBITEM_TERM_COLUMN_ID, {}).get('text')
+            if term_val == "Spring":
+                print(f"  SKIPPING: Subitem '{subitem['name']}' is marked as Spring.")
+                continue # Move to the next subitem
+            
+            # If the subitem is not Spring, process it.
             category_text = subitem_cols.get(HS_ROSTER_SUBITEM_DROPDOWN_COLUMN_ID, {}).get('text', '')
             courses_val = subitem_cols.get(HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID, {}).get('value')
-            
+
             if category_text and courses_val:
                 # Handle multiple subjects in a single dropdown by splitting the text
                 labels = [label.strip() for label in category_text.split(',')]
@@ -459,12 +466,13 @@ def run_hs_roster_sync_for_student(hs_roster_item, dry_run=True):
                 for label in labels:
                     if label:
                         course_ids_by_label[label].update(course_ids)
+
     except (TypeError, KeyError, IndexError):
         print("  ERROR: Could not process subitems.")
         return
-    
+
     all_course_ids = set().union(*course_ids_by_label.values())
-    if not all_course_ids: 
+    if not all_course_ids:
         print("  INFO: No non-Spring courses found to process.")
         return
 
@@ -493,28 +501,27 @@ def run_hs_roster_sync_for_student(hs_roster_item, dry_run=True):
         # Add all courses for this label to the determined column
         plp_updates[target_col_id].update(course_ids)
         
-        # Handle secondary category for each course
-        for course_id in course_ids:
-            secondary_category = secondary_category_map.get(course_id)
-            if secondary_category == "ACE":
-                ace_col_id = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get("ACE")
-                if ace_col_id: plp_updates[ace_col_id].add(course_id)
-            if secondary_category not in ["ACE", "Connect"]:
-                other_col_id = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get("Other/Elective")
-                if other_col_id: plp_updates[other_col_id].add(course_id)
+    # Corrected logic: Iterate through all found courses and add them to the secondary category columns if applicable.
+    for course_id in all_course_ids:
+        secondary_category = secondary_category_map.get(course_id)
+        if secondary_category == "ACE":
+            ace_col_id = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get("ACE")
+            if ace_col_id: plp_updates[ace_col_id].add(course_id)
 
     if not plp_updates:
         print("  INFO: No valid courses found to sync after categorization.")
         return
         
     print(f"  Found courses to sync for PLP item {plp_item_id}.")
-    if dry_run: 
+    if dry_run:
         for col_id, courses in plp_updates.items():
             print(f"    DRY RUN: Would add {len(courses)} courses to PLP column {col_id}.")
         return
 
     for col_id, courses in plp_updates.items():
-        bulk_add_to_connect_column(plp_item_id, int(PLP_BOARD_ID), col_id, courses)
+        if col_id and courses:
+            bulk_add_to_connect_column(plp_item_id, int(PLP_BOARD_ID), col_id, courses)
+            time.sleep(1)
 
 def manage_class_enrollment(action, plp_item_id, class_item_id, student_details, category_name, creator_id, db_cursor, subitem_cols=None, dry_run=True):
     subitem_cols = subitem_cols or {}
