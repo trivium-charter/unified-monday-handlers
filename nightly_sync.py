@@ -67,6 +67,12 @@ except (json.JSONDecodeError, TypeError):
     PLP_CATEGORY_TO_CONNECT_COLUMN_MAP = {}
     MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS = {}
 
+# The 10 special courses
+ROSTER_ONLY_COURSES = {10298, 10297, 10299, 10300, 10301}
+ROSTER_AND_CREDIT_COURSES = {10097, 10002, 10092, 10164, 10198}
+ALL_SPECIAL_COURSES = ROSTER_ONLY_COURSES.union(ROSTER_AND_CREDIT_COURSES)
+
+
 # ==============================================================================
 # 2. MONDAY.COM & CANVAS UTILITIES (ALL DEFINED FIRST)
 # ==============================================================================
@@ -631,45 +637,72 @@ def run_hs_roster_sync_for_student(hs_roster_item, dry_run=True):
             bulk_add_to_connect_column(plp_item_id, int(PLP_BOARD_ID), col_id, courses)
             time.sleep(1)
 
-def manage_class_enrollment(action, plp_item_id, class_item_id, student_details, category_name, creator_id, db_cursor, subitem_cols=None, dry_run=True):
-    subitem_cols = subitem_cols or {}
+def manage_class_enrollment(action, plp_item_id, class_item_id, student_details, category_name, creator_id, db_cursor, dry_run=True):
     class_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)) or f"Item {class_item_id}"
+    linked_canvas_item_ids = get_linked_items_from_board_relation(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
+    
+    if not linked_canvas_item_ids:
+        print(f"  INFO: '{class_name}' is a non-Canvas course or no link exists. Skipping enrollment action.")
+        return
+
+    canvas_item_id = list(linked_canvas_item_ids)[0]
+    course_id_val = get_column_value(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_COURSE_ID_COLUMN_ID)
+    canvas_course_id = course_id_val.get('text') if course_id_val else None
+
+    if not canvas_course_id:
+        print(f"  WARNING: Canvas Course ID not found for course '{class_name}'. Skipping enrollment action.")
+        return
+
     if action == "enroll":
         print(f"  ACTION: Pushing enrollment for '{class_name}' to Canvas.")
-        if not dry_run:
-            linked_canvas_item_ids = get_linked_items_from_board_relation(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
-            if linked_canvas_item_ids:
-                canvas_item_id = list(linked_canvas_item_ids)[0]
-                course_id_val = get_column_value(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_COURSE_ID_COLUMN_ID)
-                canvas_course_id = None
-                if course_id_val:
-                    canvas_course_id = course_id_val.get('text')
-                    if not canvas_course_id: canvas_course_id = course_id_val.get('value')
-                if canvas_course_id:
-                    section = create_section_if_not_exists(canvas_course_id, "All")
-                    if section: enroll_or_create_and_enroll(canvas_course_id, section.id, student_details, db_cursor)
-                else:
-                    print(f"    INFO: '{class_name}' has no Canvas course linked.")
-            else:
-                print(f"    INFO: '{class_name}' is a non-Canvas course.")
-        subitem_title = f"Added {category_name} '{class_name}'"
-        if not check_if_subitem_exists(plp_item_id, subitem_title, creator_id):
-            print(f"  INFO: Subitem log is missing. Creating it.")
-            if not dry_run: create_subitem(plp_item_id, subitem_title, column_values=subitem_cols)
+        canvas_api = initialize_canvas_api()
+        canvas_course = canvas_api.get_course(canvas_course_id)
+
+        # --- NEW LOGIC FOR SPECIAL SECTIONS ---
+        if class_item_id in ALL_SPECIAL_COURSES:
+            print("    -> Applying special section logic.")
+            student_master_id = student_details.get('master_id')
+            student_canvas_user = find_canvas_user(student_details, db_cursor)
+            
+            if not student_master_id or not student_canvas_user:
+                print("    -> SKIPPING: Could not get student details or find Canvas user for special section logic.")
+                return
+
+            roster_teacher_name = get_roster_teacher_name(student_master_id)
+            if not roster_teacher_name:
+                print("    -> WARNING: Could not determine Roster Teacher. Defaulting to 'Unassigned'.")
+                roster_teacher_name = "Unassigned"
+            
+            section_teacher = create_section_if_not_exists(canvas_course_id, roster_teacher_name)
+            if section_teacher:
+                if not dry_run: enroll_student_in_section(canvas_course_id, student_canvas_user.id, section_teacher.id)
+
+            if class_item_id in ROSTER_AND_CREDIT_COURSES:
+                course_item_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)) or ""
+                credit_section_name = "2.5 Credits" if "2.5" in course_item_name else "5 Credits"
+                
+                section_credit = create_section_if_not_exists(canvas_course_id, credit_section_name)
+                if section_credit:
+                    if not dry_run: enroll_student_in_section(canvas_course_id, student_canvas_user.id, section_credit.id)
         else:
-            print(f"  INFO: Subitem log already exists.")
+            # --- ORIGINAL LOGIC FOR NORMAL COURSES ---
+            m_series_val = get_column_value(plp_item_id, int(PLP_BOARD_ID), PLP_M_SERIES_LABELS_COLUMN)
+            ag_grad_val = get_column_value(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_CLASSES_AG_GRAD_COLUMN)
+            m_series_text = (m_series_val.get('text') or "") if m_series_val else ""
+            ag_grad_text = (ag_grad_val.get('text') or "") if ag_grad_val else ""
+            sections = {"A-G" for s in ["AG"] if s in ag_grad_text} | {"Grad" for s in ["Grad"] if s in ag_grad_text} | {"M-Series" for s in ["M-series"] if s in m_series_text}
+            if not sections: sections.add("All")
+            for section_name in sections:
+                section = create_section_if_not_exists(canvas_course_id, section_name)
+                if section:
+                    if not dry_run: enroll_or_create_and_enroll(canvas_course_id, section.id, student_details, db_cursor)
+
     elif action == "unenroll":
         subitem_title = f"Removed {category_name} '{class_name}'"
         print(f"  INFO: Unenrolling student and creating log: '{subitem_title}'")
         if not dry_run:
-            linked_canvas_item_ids = get_linked_items_from_board_relation(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
-            if linked_canvas_item_ids:
-                canvas_item_id = list(linked_canvas_item_ids)[0]
-                course_id_val = get_column_value(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_COURSE_ID_COLUMN_ID)
-                canvas_course_id = course_id_val.get('text') if course_id_val else None
-                if canvas_course_id:
-                    unenroll_student_from_course(canvas_course_id, student_details)
-            create_subitem(plp_item_id, subitem_title, column_values=subitem_cols)
+            unenroll_student_from_course(canvas_course_id, student_details)
+            create_subitem(plp_item_id, subitem_title)
 
 
 def sync_teacher_assignments(master_student_id, plp_item_id, dry_run=True):
@@ -707,7 +740,7 @@ def run_plp_sync_for_student(plp_item_id, creator_id, db_cursor, dry_run=True):
     for class_item_id, category_name in class_id_to_category_map.items():
         class_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)) or f"Item {class_item_id}"
         print(f"INFO: Processing class: '{class_name}'")
-        manage_class_enrollment("enroll", plp_item_id, class_item_id, student_details, category_name, creator_id, db_cursor, subitem_cols=curriculum_change_values, dry_run=dry_run)
+        manage_class_enrollment("enroll", plp_item_id, class_item_id, student_details, category_name, creator_id, db_cursor, dry_run=dry_run)
     sync_teacher_assignments(master_student_id, plp_item_id, dry_run=dry_run)
 
 def reconcile_subitems(plp_item_id, creator_id, db_cursor, dry_run=True):
@@ -855,7 +888,7 @@ def sync_canvas_teachers_and_tas(db_cursor, dry_run=True):
             for ta_user in universal_ta_users:
                 if not dry_run:
                     enroll_status = enroll_user_in_course(canvas_course_id, ta_user.id, role='TaEnrollment')
-                    print(f"    -> Universal TA {ta_user.name} ({ta_user.id}) enrollment status: {enroll_status}")
+                    print(f"    -> Enrollment status for {ta_user.name} ({ta_user.id}) in course {canvas_course_id}: {enroll_status}")
                 else:
                     print(f"  DRY RUN: Would enroll universal TA {ta_user.name} ({ta_user.id}) in course {canvas_course_id} as TA.")
 
