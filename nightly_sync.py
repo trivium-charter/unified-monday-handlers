@@ -428,51 +428,93 @@ def process_student_special_enrollments(plp_item, db_cursor, dry_run=True):
 def run_hs_roster_sync_for_student(hs_roster_item, dry_run=True):
     parent_item_id = int(hs_roster_item['id'])
     print(f"\n--- Processing HS Roster for: {hs_roster_item['name']} (ID: {parent_item_id}) ---")
+    
     plp_query = f'query {{ items(ids:[{parent_item_id}]) {{ column_values(ids:["{HS_ROSTER_MAIN_ITEM_to_PLP_CONNECT_COLUMN_ID}"]) {{ value }} }} }}'
     plp_result = execute_monday_graphql(plp_query)
     try: plp_item_id = list(get_linked_ids_from_connect_column_value(plp_result['data']['items'][0]['column_values'][0]['value']))[0]
     except (TypeError, KeyError, IndexError):
         print("  SKIPPING: Could not find linked PLP item.")
         return
+        
     HS_ROSTER_SUBITEM_TERM_COLUMN_ID = "color6"
     subitems_query = f'query {{ items (ids: [{parent_item_id}]) {{ subitems {{ id name column_values(ids: ["{HS_ROSTER_SUBITEM_DROPDOWN_COLUMN_ID}", "{HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID}", "{HS_ROSTER_SUBITEM_TERM_COLUMN_ID}"]) {{ id text value }} }} }} }}'
     subitems_result = execute_monday_graphql(subitems_query)
-    initial_course_categories = {}
+    
+    # Store courses by their raw dropdown labels
+    course_ids_by_label = defaultdict(set)
     try:
-        for subitem in subitems_result['data']['items'][0]['subitems']:
+        subitems = subitems_result['data']['items'][0]['subitems']
+        for subitem in subitems:
             subitem_cols = {cv['id']: cv for cv in subitem['column_values']}
+            # Skip any subitem marked as "Spring"
             if subitem_cols.get(HS_ROSTER_SUBITEM_TERM_COLUMN_ID, {}).get('text') == "Spring": continue
-            category = subitem_cols.get(HS_ROSTER_SUBITEM_DROPDOWN_COLUMN_ID, {}).get('text')
+                
+            category_text = subitem_cols.get(HS_ROSTER_SUBITEM_DROPDOWN_COLUMN_ID, {}).get('text', '')
             courses_val = subitem_cols.get(HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID, {}).get('value')
-            if category and courses_val:
-                for course_id in get_linked_ids_from_connect_column_value(courses_val):
-                    initial_course_categories[course_id] = category
+            
+            if category_text and courses_val:
+                # Handle multiple subjects in a single dropdown by splitting the text
+                labels = [label.strip() for label in category_text.split(',')]
+                course_ids = get_linked_ids_from_connect_column_value(courses_val)
+                for label in labels:
+                    if label:
+                        course_ids_by_label[label].update(course_ids)
     except (TypeError, KeyError, IndexError):
         print("  ERROR: Could not process subitems.")
         return
-    all_course_ids = list(initial_course_categories.keys())
-    if not all_course_ids: return
+    
+    all_course_ids = set().union(*course_ids_by_label.values())
+    if not all_course_ids: 
+        print("  INFO: No non-Spring courses found to process.")
+        return
+
+    # Efficiently query the secondary category for all courses at once
     secondary_category_col_id = "dropdown_mkq0r2av"
-    secondary_category_query = f"query {{ items (ids: {all_course_ids}) {{ id column_values(ids: [\"{secondary_category_col_id}\"]) {{ text }} }} }}"
+    secondary_category_query = f"query {{ items (ids: {list(all_course_ids)}) {{ id column_values(ids: [\"{secondary_category_col_id}\"]) {{ text }} }} }}"
     secondary_category_results = execute_monday_graphql(secondary_category_query)
-    secondary_category_map = {}
-    try:
-        for item in secondary_category_results['data']['items']:
-            if item.get('column_values'): secondary_category_map[int(item['id'])] = item['column_values'][0].get('text')
-    except (TypeError, KeyError, IndexError): pass
+    secondary_category_map = {int(item['id']): item['column_values'][0].get('text') for item in secondary_category_results.get('data', {}).get('items', []) if item.get('column_values')}
+    
     plp_updates = defaultdict(set)
-    for course_id, initial_category in initial_course_categories.items():
-        if initial_category == "Math": plp_updates[PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get("Math")].add(course_id)
-        if initial_category == "English": plp_updates[PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get("ELA")].add(course_id)
-        secondary_category = secondary_category_map.get(course_id)
-        if secondary_category == "ACE": plp_updates[PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get("ACE")].add(course_id)
-        if secondary_category not in ["ACE", "Connect"]: plp_updates[PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get("Other/Elective")].add(course_id)
-    if not plp_updates: return
+    # Process courses based on both primary and secondary categories
+    for category_label, course_ids in course_ids_by_label.items():
+        # Get the primary column ID from the map
+        target_col_id = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get(category_label)
+        
+        # Route unmapped subjects to "Other/Elective"
+        if not target_col_id:
+            other_col_id = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get("Other/Elective")
+            if other_col_id:
+                print(f"  WARNING: Subject '{category_label}' doesn't map to a PLP column. Routing to 'Other/Elective'.")
+                target_col_id = other_col_id
+            else:
+                print(f"  WARNING: Subject '{category_label}' not mapped and 'Other/Elective' is not configured. Skipping.")
+                continue
+        
+        # Add all courses for this label to the determined column
+        plp_updates[target_col_id].update(course_ids)
+        
+        # Handle secondary category for each course
+        for course_id in course_ids:
+            secondary_category = secondary_category_map.get(course_id)
+            if secondary_category == "ACE":
+                ace_col_id = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get("ACE")
+                if ace_col_id: plp_updates[ace_col_id].add(course_id)
+            if secondary_category not in ["ACE", "Connect"]:
+                other_col_id = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get("Other/Elective")
+                if other_col_id: plp_updates[other_col_id].add(course_id)
+
+    if not plp_updates:
+        print("  INFO: No valid courses found to sync after categorization.")
+        return
+        
     print(f"  Found courses to sync for PLP item {plp_item_id}.")
-    if dry_run: return
+    if dry_run: 
+        for col_id, courses in plp_updates.items():
+            print(f"    DRY RUN: Would add {len(courses)} courses to PLP column {col_id}.")
+        return
+
     for col_id, courses in plp_updates.items():
-        if col_id and courses:
-            bulk_add_to_connect_column(plp_item_id, int(PLP_BOARD_ID), col_id, courses)
+        bulk_add_to_connect_column(plp_item_id, int(PLP_BOARD_ID), col_id, courses)
 
 def manage_class_enrollment(action, plp_item_id, class_item_id, student_details, category_name, creator_id, db_cursor, subitem_cols=None, dry_run=True):
     subitem_cols = subitem_cols or {}
