@@ -304,7 +304,10 @@ def create_canvas_user(student_details):
 
 def update_user_ssid(user, new_ssid):
     try:
-        logins = user.get_logins()
+        # Correctly get the logins using the main canvas instance or from the user object if available
+        # This is a more robust way to handle the API call.
+        canvas_api = initialize_canvas_api()
+        logins = canvas_api.get_user(user.id).get_logins()
         if logins:
             login_to_update = logins[0]
             login_to_update.edit(login={'sis_user_id': new_ssid})
@@ -585,19 +588,19 @@ def process_canvas_delta_sync_from_course_change(event_data):
 
 # In app.py, replace the entire process_plp_course_sync_webhook function
 
+# In app.py, replace the entire process_plp_course_sync_webhook function
+
 @celery_app.task(name='app.process_plp_course_sync_webhook')
 def process_plp_course_sync_webhook(event_data):
     subitem_id, parent_item_id = event_data.get('pulseId'), event_data.get('parentItemId')
     
-    # Get the raw value of the tags column, which contains IDs
     tags_column_value = get_column_value(subitem_id, int(event_data.get('boardId')), HS_ROSTER_SUBITEM_DROPDOWN_COLUMN_ID)
     if not tags_column_value or not tags_column_value.get('text'):
         print("INFO: No subject tags found on the HS Roster subitem. Skipping.")
         return
     
-    # Extract the text labels for each tag
     try:
-        tag_labels = [tag.strip() for tag in tags_column_value.get('text', '').split(',')]
+        tag_labels = {tag.strip() for tag in tags_column_value.get('text', '').split(',')}
     except (AttributeError, KeyError):
         print("ERROR: Could not parse tags from the Subject column.")
         return
@@ -606,73 +609,74 @@ def process_plp_course_sync_webhook(event_data):
         print("INFO: No subject tag labels found. Skipping.")
         return
 
-    # Get the courses linked in the subitem
     current_courses = get_linked_ids_from_connect_column_value(event_data.get('value'))
     previous_courses = get_linked_ids_from_connect_column_value(event_data.get('previousValue'))
     added_courses = current_courses - previous_courses
     removed_courses = previous_courses - current_courses
 
     if not added_courses and not removed_courses:
-        return # No change in linked courses
+        return
 
-    # Get the linked PLP item
     plp_linked_ids = get_linked_items_from_board_relation(parent_item_id, int(HS_ROSTER_BOARD_ID), HS_ROSTER_MAIN_ITEM_to_PLP_CONNECT_COLUMN_ID)
     if not plp_linked_ids:
         print(f"ERROR: Could not find a PLP item linked to HS Roster item {parent_item_id}.")
         return
     plp_item_id = list(plp_linked_ids)[0]
     
-    # Stores the target column for each course
-    course_to_col_map = defaultdict(list)
-    
-    # 1. Get secondary categories for all added courses
-    added_course_ids = list(added_courses)
+    # Get secondary categories for all added courses to make a single API call
     secondary_category_col_id = "dropdown_mkq0r2av"
-    secondary_category_query = f"query {{ items (ids: {added_course_ids}) {{ id column_values(ids: [\"{secondary_category_col_id}\"]) {{ text }} }} }}"
-    secondary_category_results = execute_monday_graphql(secondary_category_query)
-    secondary_category_map = {int(item['id']): item['column_values'][0].get('text') for item in secondary_category_results.get('data', {}).get('items', []) if item.get('column_values')}
-    
-    # 2. Process primary tags and determine final columns for each added course
+    if added_courses:
+        course_ids_to_query = list(added_courses)
+        secondary_category_query = f"query {{ items (ids: {course_ids_to_query}) {{ id column_values(ids: [\"{secondary_category_col_id}\"]) {{ text }} }} }}"
+        secondary_category_results = execute_monday_graphql(secondary_category_query)
+        secondary_category_map = {int(item['id']): item['column_values'][0].get('text') for item in secondary_category_results.get('data', {}).get('items', []) if item.get('column_values')}
+    else:
+        secondary_category_map = {}
+
+    # Build a map of courses to their final destination columns based on the rules
+    course_to_final_cols = defaultdict(set)
     for course_id in added_courses:
         course_secondary = secondary_category_map.get(course_id, '')
         
-        # Determine primary category from tags
-        for label in tag_labels:
-            if label in ["English", "Math"]: # Primary categories to sync
-                target_col = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get(label)
-                if target_col: course_to_col_map[course_id].append(target_col)
+        # Rule: If secondary is ACE, it takes precedence over History/Science
+        if course_secondary == "ACE":
+            ace_col_id = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get("ACE")
+            if ace_col_id: course_to_final_cols[course_id].add(ace_col_id)
+            
+            # Add other categories if they are ELA or Other/Elective
+            for tag in tag_labels:
+                if tag in ["ELA", "Other/Elective"]:
+                    primary_col = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get(tag)
+                    if primary_col: course_to_final_cols[course_id].add(primary_col)
+        
+        # Rule: If not an ACE course, process primary tags normally
+        else:
+            for tag in tag_labels:
+                target_col = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get(tag)
                 
-            elif label == "ACE":
-                target_col = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get(label)
-                if target_col: course_to_col_map[course_id].append(target_col)
-
-            elif label == "Other/Elective":
-                target_col = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get(label)
-                if target_col: course_to_col_map[course_id].append(target_col)
-
-            elif not PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get(label) and course_secondary != "ACE":
-                other_col = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get("Other/Elective")
-                if other_col:
-                    print(f"WARNING: Tag '{label}' doesn't map to a PLP column. Routing to 'Other/Elective'.")
-                    course_to_col_map[course_id].append(other_col)
-
-    # 3. Add courses to the determined columns
-    for course_id, col_ids in course_to_col_map.items():
-        for col_id in set(col_ids): # Use set to handle multiple identical tags
+                if target_col:
+                    course_to_final_cols[course_id].add(target_col)
+                else:
+                    # Fallback to Other/Elective for unmapped tags
+                    other_col = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get("Other/Elective")
+                    if other_col:
+                        print(f"WARNING: Tag '{tag}' doesn't map to a PLP column. Routing to 'Other/Elective'.")
+                        course_to_final_cols[course_id].add(other_col)
+                    else:
+                        print(f"WARNING: Tag '{tag}' not mapped and 'Other/Elective' is not configured. Skipping.")
+    
+    # Perform the updates
+    for course_id, col_ids in course_to_final_cols.items():
+        for col_id in col_ids:
             update_connect_board_column(plp_item_id, int(PLP_BOARD_ID), col_id, course_id, "add")
 
-    # 4. Handle removed courses (current logic is sufficient as it doesn't need complex rules)
     for course_id in removed_courses:
-        # Get all possible linked columns from the config
         possible_cols = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.values()
         for col_id in possible_cols:
             update_connect_board_column(plp_item_id, int(PLP_BOARD_ID), col_id, course_id, "remove")
 
-    # After all updates, trigger a single delta-sync for the PLP item
     downstream_event = {'pulseId': plp_item_id, 'userId': event_data.get('userId')}
     process_canvas_delta_sync_from_course_change.delay(downstream_event)
-    
-    # === END FIX ===
 
 # ==============================================================================
 # FLASK WEB APP
