@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ==============================================================================
-# NIGHTLY PLP & HS ROSTER SYNC SCRIPT (FINAL, CORRECTED VERSION)
+# NIGHTLY PLP & HS ROSTER SYNC SCRIPT (FINAL, WITH CANVAS ID CACHING)
 # ==============================================================================
 import os
 import json
@@ -78,7 +78,9 @@ def execute_monday_graphql(query):
                 print(f"WARNING: Rate limit hit. Waiting {delay} seconds..."); time.sleep(delay); delay *= 2; continue
             response.raise_for_status()
             json_response = response.json()
-            if "errors" in json_response: print(f"ERROR: Monday GraphQL Error: {json_response['errors']}"); return None
+            if "errors" in json_response:
+                print(f"ERROR: Monday GraphQL Error: {json_response['errors']}")
+                return None
             return json_response
         except requests.exceptions.RequestException as e:
             print(f"WARNING: Monday HTTP Request Error: {e}. Retrying...")
@@ -199,9 +201,23 @@ def update_people_column(item_id, board_id, people_column_id, new_people_value, 
 def initialize_canvas_api():
     return Canvas(CANVAS_API_URL, CANVAS_API_KEY) if CANVAS_API_URL and CANVAS_API_KEY else None
 
-def find_canvas_user(student_details):
+def find_canvas_user(student_details, cursor):
     canvas_api = initialize_canvas_api()
     if not canvas_api: return None
+
+    # === FIX: First, check our database for a cached ID ===
+    plp_item_id = student_details.get('plp_id')
+    if plp_item_id:
+        cursor.execute("SELECT canvas_id FROM processed_students WHERE student_id = %s", (plp_item_id,))
+        result = cursor.fetchone()
+        if result and result[0]:
+            print(f"  INFO: Found cached Canvas ID {result[0]} for student.")
+            try:
+                return canvas_api.get_user(result[0])
+            except ResourceDoesNotExist:
+                print(f"  WARNING: Cached Canvas ID {result[0]} was not found in Canvas. Searching again.")
+    
+    # If no cached ID, proceed with normal search logic
     id_from_monday = student_details.get('canvas_id')
     if id_from_monday:
         try: return canvas_api.get_user(int(id_from_monday))
@@ -301,10 +317,13 @@ def parse_flexible_timestamp(ts_string):
 # ==============================================================================
 # 3. CORE LOGIC FUNCTIONS
 # ==============================================================================
-def enroll_or_create_and_enroll(course_id, section_id, student_details):
+def enroll_or_create_and_enroll(course_id, section_id, student_details, db_cursor):
     canvas_api = initialize_canvas_api()
     if not canvas_api: return "Failed"
-    user = find_canvas_user(student_details)
+    
+    # === FIX: Pass the database cursor to the find function ===
+    user = find_canvas_user(student_details, db_cursor)
+    
     if not user:
         print(f"INFO: Canvas user not found for {student_details['email']}. Attempting to create new user.")
         try:
@@ -312,13 +331,17 @@ def enroll_or_create_and_enroll(course_id, section_id, student_details):
         except CanvasException as e:
             if "sis_user_id" in str(e) and "is already in use" in str(e):
                 print(f"INFO: User creation failed because SIS ID is in use. Searching again for existing user.")
-                user = find_canvas_user(student_details)
+                user = find_canvas_user(student_details, db_cursor)
             else:
                 print(f"ERROR: A critical error occurred during user creation: {e}")
                 user = None
     if user:
         try:
             full_user = canvas_api.get_user(user.id)
+            
+            # === FIX: Cache the successful Canvas ID in the database ===
+            db_cursor.execute("UPDATE processed_students SET canvas_id = %s WHERE student_id = %s", (str(full_user.id), student_details['plp_id']))
+            
             if student_details.get('ssid') and hasattr(full_user, 'sis_user_id') and full_user.sis_user_id != student_details['ssid']:
                 update_user_ssid(full_user, student_details['ssid'])
             return enroll_student_in_section(course_id, full_user.id, section_id)
@@ -366,12 +389,12 @@ def get_student_details_from_plp(plp_item_id):
         ssid = column_map.get(MASTER_STUDENT_SSID_COLUMN, '')
         canvas_id = column_map.get(MASTER_STUDENT_CANVAS_ID_COLUMN, '')
         print("  [DIAGNOSTIC] Successfully gathered all required details.")
-        return {'name': student_name, 'ssid': ssid, 'email': email, 'canvas_id': canvas_id, 'master_id': item_details['id']}
+        return {'name': student_name, 'ssid': ssid, 'email': email, 'canvas_id': canvas_id, 'master_id': item_details['id'], 'plp_id': plp_item_id}
     except (TypeError, KeyError, IndexError) as e:
         print(f"  [DIAGNOSTIC] FAILED: Could not parse details from the Master Student board. Error: {e}")
         return None
 
-def process_student_special_enrollments(plp_item, dry_run=True):
+def process_student_special_enrollments(plp_item, db_cursor, dry_run=True):
     plp_item_id = int(plp_item['id'])
     print(f"\n--- Processing Special Enrollments for: {plp_item['name']} (PLP ID: {plp_item_id}) ---")
     student_details = get_student_details_from_plp(plp_item_id)
@@ -401,7 +424,7 @@ def process_student_special_enrollments(plp_item, dry_run=True):
         if not dry_run:
             section = create_section_if_not_exists(jumpstart_canvas_id, tor_last_name)
             if section:
-                result = enroll_or_create_and_enroll(jumpstart_canvas_id, section.id, student_details)
+                result = enroll_or_create_and_enroll(jumpstart_canvas_id, section.id, student_details, db_cursor)
                 print(f"  -> Enrollment status: {result}")
     sh_section_name = get_study_hall_section_from_grade(grade_text)
     target_sh_name = "ACE Study Hall"
@@ -411,7 +434,7 @@ def process_student_special_enrollments(plp_item, dry_run=True):
         if not dry_run:
             section = create_section_if_not_exists(target_sh_canvas_id, sh_section_name)
             if section:
-                result = enroll_or_create_and_enroll(target_sh_canvas_id, section.id, student_details)
+                result = enroll_or_create_and_enroll(target_sh_canvas_id, section.id, student_details, db_cursor)
                 print(f"  -> Enrollment status: {result}")
 
 def run_hs_roster_sync_for_student(hs_roster_item, dry_run=True):
@@ -463,7 +486,7 @@ def run_hs_roster_sync_for_student(hs_roster_item, dry_run=True):
         if col_id and courses:
             bulk_add_to_connect_column(plp_item_id, int(PLP_BOARD_ID), col_id, courses)
 
-def manage_class_enrollment(action, plp_item_id, class_item_id, student_details, category_name, creator_id, subitem_cols=None, dry_run=True):
+def manage_class_enrollment(action, plp_item_id, class_item_id, student_details, category_name, creator_id, db_cursor, subitem_cols=None, dry_run=True):
     subitem_cols = subitem_cols or {}
     class_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)) or f"Item {class_item_id}"
     if action == "enroll":
@@ -479,7 +502,7 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details,
                     if not canvas_course_id: canvas_course_id = course_id_val.get('value')
                 if canvas_course_id:
                     section = create_section_if_not_exists(canvas_course_id, "All")
-                    if section: enroll_or_create_and_enroll(canvas_course_id, section.id, student_details)
+                    if section: enroll_or_create_and_enroll(canvas_course_id, section.id, student_details, db_cursor)
         subitem_title = f"Added {category_name} '{class_name}'"
         if not check_if_subitem_exists(plp_item_id, subitem_title, creator_id):
             print(f"  INFO: Subitem log is missing. Creating it.")
@@ -509,7 +532,7 @@ def sync_teacher_assignments(master_student_id, plp_item_id, dry_run=True):
             else:
                 print(f"  -> No change needed for {mapping.get('name', 'Staff')}. Values are already in sync.")
 
-def run_plp_sync_for_student(plp_item_id, creator_id, dry_run=True):
+def run_plp_sync_for_student(plp_item_id, creator_id, db_cursor, dry_run=True):
     print(f"\n--- Processing PLP Item: {plp_item_id} ---")
     student_details = get_student_details_from_plp(plp_item_id)
     if not student_details: return
@@ -526,10 +549,10 @@ def run_plp_sync_for_student(plp_item_id, creator_id, dry_run=True):
     for class_item_id, category_name in class_id_to_category_map.items():
         class_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)) or f"Item {class_item_id}"
         print(f"INFO: Processing class: '{class_name}'")
-        manage_class_enrollment("enroll", plp_item_id, class_item_id, student_details, category_name, creator_id, subitem_cols=curriculum_change_values, dry_run=dry_run)
+        manage_class_enrollment("enroll", plp_item_id, class_item_id, student_details, category_name, creator_id, db_cursor, subitem_cols=curriculum_change_values, dry_run=dry_run)
     sync_teacher_assignments(master_student_id, plp_item_id, dry_run=dry_run)
 
-def reconcile_subitems(plp_item_id, creator_id, dry_run=True):
+def reconcile_subitems(plp_item_id, creator_id, db_cursor, dry_run=True):
     print(f"--- Reconciling All Subitems & Enrollments for PLP Item: {plp_item_id} ---")
     student_details = get_student_details_from_plp(plp_item_id)
     if not student_details or not student_details.get('master_id'):
@@ -558,7 +581,7 @@ def reconcile_subitems(plp_item_id, creator_id, dry_run=True):
                         if not canvas_course_id: canvas_course_id = course_id_val.get('value')
                     if canvas_course_id:
                         section = create_section_if_not_exists(canvas_course_id, "All")
-                        if section: enroll_or_create_and_enroll(canvas_course_id, section.id, student_details)
+                        if section: enroll_or_create_and_enroll(canvas_course_id, section.id, student_details, db_cursor)
                 else:
                     print(f"    INFO: '{class_name}' is a non-Canvas course.")
             if not check_if_subitem_exists(plp_item_id, expected_subitem_name, creator_id):
@@ -602,8 +625,8 @@ if __name__ == '__main__':
         db = mysql.connector.connect( host=DB_HOST, user=DB_USER, password=DB_PASSWORD, database=DB_NAME, port=int(DB_PORT), **ssl_opts )
         cursor = db.cursor()
         print("INFO: Fetching last sync times for processed students...")
-        cursor.execute("SELECT student_id, last_synced_at FROM processed_students")
-        processed_map = {row[0]: row[1] for row in cursor.fetchall()}
+        cursor.execute("SELECT student_id, last_synced_at, canvas_id FROM processed_students")
+        processed_map = {row[0]: {'last_synced': row[1], 'canvas_id': row[2]} for row in cursor.fetchall()}
         print(f"INFO: Found {len(processed_map)} students in the database.")
         print("INFO: Finding creator ID for subitem management...")
         creator_id = get_user_id(TARGET_USER_NAME)
@@ -615,7 +638,8 @@ if __name__ == '__main__':
         for item in all_plp_items:
             item_id = int(item['id'])
             updated_at = parse_flexible_timestamp(item['updated_at'])
-            last_synced = processed_map.get(item_id)
+            sync_data = processed_map.get(item_id)
+            last_synced = sync_data['last_synced'] if sync_data else None
             if last_synced: last_synced = last_synced.replace(tzinfo=timezone.utc)
             if not last_synced or updated_at > last_synced:
                 items_to_process.append(item)
@@ -627,7 +651,7 @@ if __name__ == '__main__':
             print(f"\n===== Processing Student {i}/{total_to_process} (PLP ID: {plp_item_id}) =====")
             try:
                 print("--- Phase 0: Syncing Special Enrollments (Jumpstart/Study Hall) ---")
-                process_student_special_enrollments(plp_item, dry_run=DRY_RUN)
+                process_student_special_enrollments(plp_item, cursor, dry_run=DRY_RUN)
                 print("--- Phase 1: Checking for and syncing HS Roster ---")
                 hs_roster_connect_val = get_column_value(plp_item_id, int(PLP_BOARD_ID), PLP_TO_HS_ROSTER_CONNECT_COLUMN)
                 hs_roster_ids = get_linked_ids_from_connect_column_value(hs_roster_connect_val.get('value')) if hs_roster_connect_val else set()
@@ -642,7 +666,7 @@ if __name__ == '__main__':
                 else:
                     print("INFO: No HS Roster item linked. Skipping Phase 1.")
                 print("--- Phase 2: Syncing PLP to Canvas ---")
-                run_plp_sync_for_student(plp_item_id, creator_id, dry_run=DRY_RUN)
+                run_plp_sync_for_student(plp_item_id, creator_id, cursor, dry_run=DRY_RUN)
                 if not DRY_RUN:
                     print(f"INFO: Sync successful. Updating timestamp for PLP item {plp_item_id}.")
                     update_query = ''' INSERT INTO processed_students (student_id, last_synced_at) VALUES (%s, NOW()) ON DUPLICATE KEY UPDATE last_synced_at = NOW() '''
@@ -660,7 +684,7 @@ if __name__ == '__main__':
             plp_item_id = int(plp_item['id'])
             print(f"\n===== Reconciling Student {i}/{total_all_students} (PLP ID: {plp_item_id}) =====")
             try:
-                reconcile_subitems(plp_item_id, creator_id, dry_run=DRY_RUN)
+                reconcile_subitems(plp_item_id, creator_id, cursor, dry_run=DRY_RUN)
                 if not DRY_RUN:
                     print(f"INFO: Reconciliation successful. Updating timestamp for PLP item {plp_item_id}.")
                     update_query = ''' INSERT INTO processed_students (student_id, last_synced_at) VALUES (%s, NOW()) ON DUPLICATE KEY UPDATE last_synced_at = NOW() '''
