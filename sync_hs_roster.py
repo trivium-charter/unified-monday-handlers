@@ -201,23 +201,33 @@ def sync_hs_roster_item(parent_item, dry_run=True):
 
     # 4. Apply the final logic for valid courses only
     plp_updates = defaultdict(set)
-    for course_id, initial_category in initial_course_categories.items():
-        if initial_category == "Math":
-            target_col_id = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get("Math")
-            if target_col_id: plp_updates[target_col_id].add(course_id)
-
-        if initial_category == "English":
-            target_col_id = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get("ELA")
-            if target_col_id: plp_updates[target_col_id].add(course_id)
-
-        secondary_category = secondary_category_map.get(course_id)
-        if secondary_category == "ACE":
-            target_col_id = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get("ACE")
-            if target_col_id: plp_updates[target_col_id].add(course_id)
-        
-        if secondary_category not in ["ACE", "Connect"]:
-            target_col_id = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get("Other/Elective")
-            if target_col_id: plp_updates[target_col_id].add(course_id)
+for course_id, initial_category in initial_course_categories.items():
+    target_col_id = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get(initial_category)
+    secondary_category = secondary_category_map.get(course_id)
+    
+    # Handle the primary category
+    if target_col_id:
+        plp_updates[target_col_id].add(course_id)
+    else:
+        # If the category is not mapped, route it to 'Other/Elective'
+        other_col_id = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get("Other/Elective")
+        if other_col_id:
+            print(f"WARNING: Subject '{initial_category}' not mapped. Routing to 'Other/Elective'.")
+            plp_updates[other_col_id].add(course_id)
+        else:
+            print(f"WARNING: Subject '{initial_category}' not mapped and 'Other/Elective' column is not configured.")
+    
+    # Handle the secondary category
+    if secondary_category == "ACE":
+        ace_col_id = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get("ACE")
+        if ace_col_id:
+            plp_updates[ace_col_id].add(course_id)
+    
+    # Reroute the Other/Elective logic based on the secondary category
+    if secondary_category not in ["ACE", "Connect"] and target_col_id:
+        other_col_id = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get("Other/Elective")
+        if other_col_id:
+            plp_updates[other_col_id].add(course_id)
 
     # 5. Perform the updates on the PLP item
     if not plp_updates:
