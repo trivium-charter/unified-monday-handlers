@@ -57,7 +57,6 @@ CANVAS_TO_STAFF_CONNECT_COLUMN_ID = os.environ.get("CANVAS_TO_STAFF_CONNECT_COLU
 CANVAS_TERM_ID = os.environ.get("CANVAS_TERM_ID")
 CANVAS_SUBACCOUNT_ID = os.environ.get("CANVAS_SUBACCOUNT_ID")
 CANVAS_TEMPLATE_COURSE_ID = os.environ.get("CANVAS_TEMPLATE_COURSE_ID")
-
 try:
     PLP_CATEGORY_TO_CONNECT_COLUMN_MAP = json.loads(os.environ.get("PLP_CATEGORY_TO_CONNECT_COLUMN_MAP", "{}"))
     MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS = json.loads(os.environ.get("MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS", "{}"))
@@ -71,7 +70,6 @@ except json.JSONDecodeError:
     LOG_CONFIGS = []
     MASTER_STUDENT_PEOPLE_COLUMNS = {}
 
-# The 10 special courses that require specific section creation logic
 ROSTER_ONLY_COURSES = {10298, 10297, 10299, 10300, 10301}
 ROSTER_AND_CREDIT_COURSES = {10097, 10002, 10092, 10164, 10198}
 ALL_SPECIAL_COURSES = ROSTER_ONLY_COURSES.union(ROSTER_AND_CREDIT_COURSES)
@@ -230,6 +228,11 @@ def update_people_column(item_id, board_id, people_column_id, new_people_value, 
     graphql_value = json.dumps(json.dumps(final_value))
     mutation = f"mutation {{ change_column_value(board_id: {board_id}, item_id: {item_id}, column_id: \"{people_column_id}\", value: {graphql_value}) {{ id }} }}"
     return execute_monday_graphql(mutation) is not None
+
+def create_monday_update(item_id, update_text):
+    formatted_text = json.dumps(update_text)
+    mutation = f"mutation {{ create_update (item_id: {item_id}, body: {formatted_text}) {{ id }} }}"
+    return execute_monday_graphql(mutation)
 
 def check_if_subitem_exists_by_name(parent_item_id, subitem_name_to_check):
     """
@@ -403,18 +406,19 @@ def get_teacher_person_value_from_canvas_board(canvas_item_id):
 # CORE LOGIC FUNCTIONS
 # ==============================================================================
 
-def enroll_or_create_and_enroll(course_id, section_id, student_details, db_cursor):
+def enroll_or_create_and_enroll(course_id, section_id, student_details):
     canvas_api = initialize_canvas_api()
     if not canvas_api: return "Failed"
-    user = find_canvas_user(student_details, db_cursor)
+    user = find_canvas_user(student_details)
     if not user:
         print(f"INFO: Canvas user not found for {student_details['email']}. Attempting to create new user.")
         try:
             user = create_canvas_user(student_details)
         except CanvasException as e:
-            if ("sis_user_id" in str(e) and "is already in use" in str(e)):
-                print(f"INFO: User creation failed because SIS ID is in use. Searching again for existing user.")
-                user = find_canvas_user(student_details, db_cursor)
+            if ("sis_user_id" in str(e) and "is already in use" in str(e)) or \
+               ("unique_id" in str(e) and "ID already in use" in str(e)):
+                print(f"INFO: User creation failed because ID is in use. Searching again for existing user.")
+                user = find_canvas_user(student_details)
             else:
                 print(f"ERROR: A critical error occurred during user creation: {e}")
                 user = None
@@ -461,6 +465,7 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details,
         canvas_item_id = list(linked_canvas_item_ids)[0]
         canvas_class_name = get_item_name(canvas_item_id, int(CANVAS_BOARD_ID))
         if canvas_class_name: class_name = canvas_class_name
+    
     if action == "enroll":
         subitem_title = f"Added {category_name} '{class_name}'"
         if check_if_subitem_exists_by_name(plp_item_id, subitem_title):
@@ -521,7 +526,6 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details,
                         if section:
                             enroll_or_create_and_enroll(canvas_course_id, section.id, student_details)
         create_subitem(plp_item_id, subitem_title, column_values=subitem_cols)
-
     elif action == "unenroll":
         subitem_title = f"Removed {category_name} '{class_name}'"
         if linked_canvas_item_ids:
@@ -530,6 +534,91 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details,
             canvas_course_id = course_id_val.get('text') if course_id_val else None
             if canvas_course_id: unenroll_student_from_course(canvas_course_id, student_details)
         create_subitem(plp_item_id, subitem_title, column_values=subitem_cols)
+
+@celery_app.task(name='app.process_plp_course_sync_webhook')
+def process_plp_course_sync_webhook(event_data):
+    subitem_id, parent_item_id = event_data.get('pulseId'), event_data.get('parentItemId')
+    
+    tags_column_value = get_column_value(subitem_id, int(event_data.get('boardId')), HS_ROSTER_SUBITEM_DROPDOWN_COLUMN_ID)
+    if not tags_column_value or not tags_column_value.get('text'):
+        print("INFO: No subject tags found on the HS Roster subitem. Skipping.")
+        return
+    
+    try:
+        tag_labels = {tag.strip() for tag in tags_column_value.get('text', '').split(',')}
+    except (AttributeError, KeyError):
+        print("ERROR: Could not parse tags from the Subject column.")
+        return
+
+    if not tag_labels:
+        print("INFO: No subject tag labels found. Skipping.")
+        return
+
+    current_courses = get_linked_ids_from_connect_column_value(event_data.get('value'))
+    previous_courses = get_linked_ids_from_connect_column_value(event_data.get('previousValue'))
+    added_courses = current_courses - previous_courses
+    removed_courses = previous_courses - current_courses
+
+    if not added_courses and not removed_courses:
+        return
+
+    plp_linked_ids = get_linked_items_from_board_relation(parent_item_id, int(HS_ROSTER_BOARD_ID), HS_ROSTER_MAIN_ITEM_to_PLP_CONNECT_COLUMN_ID)
+    if not plp_linked_ids:
+        print(f"ERROR: Could not find a PLP item linked to HS Roster item {parent_item_id}.")
+        return
+    plp_item_id = list(plp_linked_ids)[0]
+    
+    course_to_final_cols = defaultdict(set)
+    secondary_category_col_id = "dropdown_mkq0r2av"
+    if added_courses:
+        course_ids_to_query = list(added_courses)
+        secondary_category_query = f"query {{ items (ids: {course_ids_to_query}) {{ id column_values(ids: [\"{secondary_category_col_id}\"]) {{ text }} }} }}"
+        secondary_category_results = execute_monday_graphql(secondary_category_query)
+        secondary_category_map = {int(item['id']): item['column_values'][0].get('text') for item in secondary_category_results.get('data', {}).get('items', []) if item.get('column_values')}
+    else:
+        secondary_category_map = {}
+
+    for course_id in added_courses:
+        course_secondary = secondary_category_map.get(course_id, '')
+        
+        is_ace_course = course_secondary == "ACE"
+
+        if is_ace_course:
+            ace_col_id = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get("ACE")
+            if ace_col_id:
+                course_to_final_cols[course_id].add(ace_col_id)
+            
+            for category in tag_labels:
+                if category in ["ELA", "Other/Elective"]:
+                    primary_col = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get(category)
+                    if primary_col:
+                        course_to_final_cols[course_id].add(primary_col)
+        
+        else:
+            for category in tag_labels:
+                target_col = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get(category)
+                
+                if target_col:
+                    course_to_final_cols[course_id].add(target_col)
+                else:
+                    other_col = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get("Other/Elective")
+                    if other_col:
+                        print(f"WARNING: Tag '{category}' doesn't map to a PLP column. Routing to 'Other/Elective'.")
+                        course_to_final_cols[course_id].add(other_col)
+                    else:
+                        print(f"WARNING: Tag '{category}' not mapped and 'Other/Elective' is not configured. Skipping.")
+    
+    for course_id, col_ids in course_to_final_cols.items():
+        for col_id in set(col_ids):
+            update_connect_board_column(plp_item_id, int(PLP_BOARD_ID), col_id, course_id, "add")
+
+    for course_id in removed_courses:
+        possible_cols = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.values()
+        for col_id in possible_cols:
+            update_connect_board_column(plp_item_id, int(PLP_BOARD_ID), col_id, course_id, "remove")
+
+    downstream_event = {'pulseId': plp_item_id, 'userId': event_data.get('userId')}
+    process_canvas_delta_sync_from_course_change.delay(downstream_event)
 
 @celery_app.task(name='app.process_master_student_person_sync_webhook')
 def process_master_student_person_sync_webhook(event_data):
@@ -584,7 +673,7 @@ def process_teacher_enrollment_webhook(event_data):
 
 @celery_app.task(name='app.process_sped_students_person_sync_webhook')
 def process_sped_students_person_sync_webhook(event_data):
-    source_item_id, col_id, col_val = event_data.get('pulseId'), event_data.get('columnId'), event.get('value')
+    source_item_id, col_id, col_val = event_data.get('pulseId'), event_data.get('columnId'), event_data.get('value')
     config = SPED_STUDENTS_PEOPLE_COLUMN_MAPPING.get(col_id)
     if not config: return
     linked_ids = get_linked_items_from_board_relation(source_item_id, int(SPED_STUDENTS_BOARD_ID), SPED_TO_IEPAP_CONNECT_COLUMN_ID)
