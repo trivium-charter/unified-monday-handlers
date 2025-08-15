@@ -389,6 +389,8 @@ def get_teacher_person_value_from_canvas_board(canvas_item_id):
 # === FIX #2: REPLACE THE enroll_or_create_and_enroll FUNCTION ===
 # In app.py, replace the entire enroll_or_create_and_enroll function
 
+# In app.py, replace the entire enroll_or_create_and_enroll function
+
 def enroll_or_create_and_enroll(course_id, section_id, student_details):
     """
     Finds or creates a user, handles cases where the user already exists,
@@ -615,6 +617,8 @@ def process_plp_course_sync_webhook(event_data):
     updated_val = (get_column_value(plp_item_id, int(PLP_BOARD_ID), target_plp_col_id) or {}).get('value')
     downstream_event = {'pulseId': plp_item_id, 'columnId': target_plp_col_id, 'value': updated_val, 'previousValue': original_val, 'userId': event_data.get('userId')}
     process_canvas_delta_sync_from_course_change.delay(downstream_event)
+
+# In app.py, replace the entire process_master_student_person_sync_webhook function
 
 # In app.py, replace the entire process_master_student_person_sync_webhook function
 
