@@ -294,7 +294,7 @@ def create_canvas_user(student_details):
         return new_user
     except CanvasException as e:
         print(f"ERROR: Canvas user creation failed: {e}")
-        return None
+        raise # Re-raise exception so the calling function can handle it
 
 def update_user_ssid(user, new_ssid):
     try:
@@ -387,49 +387,31 @@ def get_teacher_person_value_from_canvas_board(canvas_item_id):
     return person_col_val.get('value') if person_col_val else None
 
 # === FIX #2: REPLACE THE enroll_or_create_and_enroll FUNCTION ===
-# In app.py, replace the entire enroll_or_create_and_enroll function
-
-# In app.py, replace the entire enroll_or_create_and_enroll function
-
 def enroll_or_create_and_enroll(course_id, section_id, student_details):
-    """
-    Finds or creates a user, handles cases where the user already exists,
-    ensures the full user object is loaded, and then proceeds with enrollment.
-    """
     canvas_api = initialize_canvas_api()
-    if not canvas_api:
-        return "Failed"
-
+    if not canvas_api: return "Failed"
     user = find_canvas_user(student_details)
-    
     if not user:
         print(f"INFO: Canvas user not found for {student_details['email']}. Attempting to create new user.")
         try:
-            # Attempt to create the user
             user = create_canvas_user(student_details)
         except CanvasException as e:
-            # === START FIX: HANDLE "SIS ID ALREADY IN USE" ERROR ===
-            # If user creation fails because the ID is taken, the user must already exist.
-            # We now immediately try to find them again.
-            if "sis_user_id" in str(e) and "is already in use" in str(e):
-                print(f"INFO: User creation failed because SIS ID is in use. Searching again for existing user.")
+            if ("sis_user_id" in str(e) and "is already in use" in str(e)) or \
+               ("unique_id" in str(e) and "ID already in use" in str(e)):
+                print(f"INFO: User creation failed because ID is in use. Searching again for existing user.")
                 user = find_canvas_user(student_details)
             else:
-                # If it's a different error, we log it and stop.
                 print(f"ERROR: A critical error occurred during user creation: {e}")
                 user = None
-            # === END FIX ===
-
     if user:
         try:
-            full_user = canvas_api.get_user(user.id) # Re-fetch the full user object
+            full_user = canvas_api.get_user(user.id)
             if student_details.get('ssid') and hasattr(full_user, 'sis_user_id') and full_user.sis_user_id != student_details['ssid']:
                 update_user_ssid(full_user, student_details['ssid'])
             return enroll_student_in_section(course_id, full_user.id, section_id)
         except CanvasException as e:
             print(f"ERROR: Could not retrieve full user object or enroll for user ID {user.id}: {e}")
             return "Failed"
-
     print(f"ERROR: Could not find or create a Canvas user for {student_details.get('name')}. Final enrollment failed.")
     return "Failed"
 
@@ -618,51 +600,32 @@ def process_plp_course_sync_webhook(event_data):
     downstream_event = {'pulseId': plp_item_id, 'columnId': target_plp_col_id, 'value': updated_val, 'previousValue': original_val, 'userId': event_data.get('userId')}
     process_canvas_delta_sync_from_course_change.delay(downstream_event)
 
-# In app.py, replace the entire process_master_student_person_sync_webhook function
-
-# In app.py, replace the entire process_master_student_person_sync_webhook function
-
 @celery_app.task(name='app.process_master_student_person_sync_webhook')
 def process_master_student_person_sync_webhook(event_data):
     master_item_id, trigger_column_id, user_id = event_data.get('pulseId'), event_data.get('columnId'), event_data.get('userId')
     current_value_raw, previous_value_raw = event_data.get('value'), event_data.get('previousValue')
-    
-    # === START FIX: CHECK IF THERE WAS AN ACTUAL CHANGE ===
     current_ids = get_people_ids_from_value(current_value_raw)
     previous_ids = get_people_ids_from_value(previous_value_raw)
-
-    # If the set of people is the same as before, do nothing.
     if current_ids == previous_ids:
         print(f"INFO: People column for item {master_item_id} was updated, but no change was made. Skipping.")
         return
-    # === END FIX ===
-
     mappings = MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS.get(trigger_column_id)
     if not mappings: return
-
     for target in mappings["targets"]:
         linked_ids = get_linked_items_from_board_relation(master_item_id, int(MASTER_STUDENT_BOARD_ID), target["connect_column_id"])
         for linked_id in linked_ids:
             update_people_column(linked_id, int(target["board_id"]), target["target_column_id"], current_value_raw, target["target_column_type"])
-    
     plp_target = next((t for t in mappings["targets"] if str(t.get("board_id")) == str(PLP_BOARD_ID)), None)
     if not plp_target: return
-    
     plp_linked_ids = get_linked_items_from_board_relation(master_item_id, int(MASTER_STUDENT_BOARD_ID), plp_target["connect_column_id"])
     if not plp_linked_ids: return
-    
     plp_item_id = list(plp_linked_ids)[0]
-    
     ENTRY_TYPE_COLUMN_ID = "entry_type__1"
     staff_change_values = {ENTRY_TYPE_COLUMN_ID: {"labels": ["Staff Change"]}}
-    
     col_name, changer, date = mappings.get("name", "Staff"), get_user_name(user_id) or "automation", datetime.now().strftime('%Y-%m-%d')
-    
-    # This logic now only runs if there was a real change
     for p_id in (current_ids - previous_ids):
         name = get_user_name(p_id)
         if name: create_subitem(plp_item_id, f"{col_name} changed to {name} on {date} by {changer}", column_values=staff_change_values)
-
     for p_id in (previous_ids - current_ids):
         name = get_user_name(p_id)
         if name: create_subitem(plp_item_id, f"Removed {name} from {col_name} on {date} by {changer}", column_values=staff_change_values)
