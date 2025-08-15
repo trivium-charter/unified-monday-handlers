@@ -627,11 +627,26 @@ def process_plp_course_sync_webhook(event_data):
     plp_item_id = list(plp_linked_ids)[0]
 
     # Process each tag found in the Subject column
+
+    # ... inside process_plp_course_sync_webhook function ...
     for dropdown_label in tag_labels:
         target_plp_col_id = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get(dropdown_label)
+    
+        # If the category is not found in the map, use the 'Other/Elective' column
         if not target_plp_col_id:
-            print(f"WARNING: Tag '{dropdown_label}' does not map to a PLP column. Skipping.")
-            continue
+            target_plp_col_id = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get("Other/Elective")
+            if not target_plp_col_id:
+                print(f"ERROR: No target column found for tag '{dropdown_label}' or 'Other/Elective'. Skipping.")
+                continue
+            print(f"WARNING: Tag '{dropdown_label}' not mapped. Routing to 'Other/Elective' column.")
+    
+        # Add the newly added courses to the correct PLP column
+        for course_id in added_courses:
+            update_connect_board_column(plp_item_id, int(PLP_BOARD_ID), target_plp_col_id, course_id, "add")
+    
+        # Remove the deleted courses from the correct PLP column
+        for course_id in removed_courses:
+            update_connect_board_column(plp_item_id, int(PLP_BOARD_ID), target_plp_col_id, course_id, "remove")
 
         print(f"INFO: Syncing courses to PLP column for category: '{dropdown_label}'")
         
