@@ -475,6 +475,82 @@ def sync_teacher_assignments(master_student_id, plp_item_id, dry_run=True):
             else:
                 print(f"  -> No change needed for {mapping.get('name', 'Staff')}. Values are already in sync.")
 
+# Add this entire function to Section 3 of nightly_sync.py
+
+def process_student_special_enrollments(plp_item, dry_run=True):
+    plp_item_id = int(plp_item['id'])
+    print(f"\n--- Processing Special Enrollments for: {plp_item['name']} (PLP ID: {plp_item_id}) ---")
+
+    student_details = get_student_details_from_plp(plp_item_id)
+    if not student_details:
+        print("  SKIPPING: Could not get student details.")
+        return
+
+    master_id = student_details['master_id']
+
+    # Get TOR and Grade Level from Master Student Item
+    master_details_query = f'query {{ items(ids:[{master_id}]) {{ column_values(ids:["{MASTER_STUDENT_TOR_COLUMN_ID}", "{MASTER_STUDENT_GRADE_COLUMN_ID}"]) {{ id text value }} }} }}'
+    master_result = execute_monday_graphql(master_details_query)
+
+    tor_last_name = "Orientation"
+    grade_text = ""
+    if master_result and master_result.get('data', {}).get('items'):
+        cols = {cv['id']: cv for cv in master_result['data']['items'][0].get('column_values', [])}
+        grade_text = cols.get(MASTER_STUDENT_GRADE_COLUMN_ID, {}).get('text', '')
+        tor_val_str = cols.get(MASTER_STUDENT_TOR_COLUMN_ID, {}).get('value')
+        if tor_val_str:
+            try:
+                tor_ids = get_people_ids_from_value(json.loads(tor_val_str))
+                if tor_ids:
+                    tor_full_name = get_user_name(list(tor_ids)[0])
+                    if tor_full_name: tor_last_name = tor_full_name.split()[-1]
+            except (json.JSONDecodeError, TypeError):
+                print(f"  WARNING: Could not parse TOR value for master item {master_id}.")
+
+    # This helper function was also missing and is now included
+    def enroll_student(canvas_course_id, section_name, student_details):
+        canvas_api = initialize_canvas_api()
+        if not canvas_api:
+            print("  ERROR: Canvas API not initialized.")
+            return
+
+        user = find_canvas_user(student_details)
+        if not user:
+            print(f"  INFO: Canvas user not found for {student_details.get('email', 'N/A')}. Creating new user.")
+            user = create_canvas_user(student_details)
+
+        if not user:
+            print(f"  ERROR: Could not find or create Canvas user for {student_details.get('name')}")
+            return
+
+        try:
+            full_user = canvas_api.get_user(user.id)
+            course = canvas_api.get_course(canvas_course_id)
+            section = create_section_if_not_exists(course_id, section_name)
+            if section:
+                result = enroll_student_in_section(course.id, full_user.id, section.id)
+                print(f"  Enrollment in '{course.name}' (Section: {section_name}): {result}")
+        except ResourceDoesNotExist:
+            print(f"  ERROR: Canvas course with ID {canvas_course_id} not found.")
+        except CanvasException as e:
+            print(f"  ERROR: A Canvas API error occurred during special enrollment: {e}")
+
+    # Process Jumpstart
+    jumpstart_canvas_id = SPECIAL_COURSE_CANVAS_IDS.get("Jumpstart")
+    if jumpstart_canvas_id:
+        print(f"  Processing Jumpstart enrollment, section: {tor_last_name}")
+        if not dry_run:
+            enroll_student(jumpstart_canvas_id, tor_last_name, student_details)
+
+    # Process Study Hall
+    sh_section_name = get_study_hall_section_from_grade(grade_text)
+    target_sh_name = "ACE Study Hall" # Default study hall
+    target_sh_canvas_id = SPECIAL_COURSE_CANVAS_IDS.get(target_sh_name)
+    if target_sh_canvas_id:
+        print(f"  Processing {target_sh_name} enrollment, section: {sh_section_name}")
+        if not dry_run:
+            enroll_student(target_sh_canvas_id, sh_section_name, student_details)
+            
 def run_plp_sync_for_student(plp_item_id, creator_id, dry_run=True):
     print(f"\n--- Processing PLP Item: {plp_item_id} ---")
     student_details = get_student_details_from_plp(plp_item_id)
