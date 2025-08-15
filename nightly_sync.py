@@ -656,13 +656,15 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details,
     if action == "enroll":
         print(f"  ACTION: Pushing enrollment for '{class_name}' to Canvas.")
         canvas_api = initialize_canvas_api()
-        canvas_course = canvas_api.get_course(canvas_course_id)
+        # Find the Canvas user once to avoid repeated API calls
+        student_canvas_user = None
+        if not dry_run:
+            student_canvas_user = find_canvas_user(student_details, db_cursor)
 
         # --- NEW LOGIC FOR SPECIAL SECTIONS ---
         if class_item_id in ALL_SPECIAL_COURSES:
             print("    -> Applying special section logic.")
             student_master_id = student_details.get('master_id')
-            student_canvas_user = find_canvas_user(student_details, db_cursor)
             
             if not student_master_id or not student_canvas_user:
                 print("    -> SKIPPING: Could not get student details or find Canvas user for special section logic.")
@@ -673,10 +675,12 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details,
                 print("    -> WARNING: Could not determine Roster Teacher. Defaulting to 'Unassigned'.")
                 roster_teacher_name = "Unassigned"
             
+            # Create section based on Roster Teacher
             section_teacher = create_section_if_not_exists(canvas_course_id, roster_teacher_name)
             if section_teacher:
                 if not dry_run: enroll_student_in_section(canvas_course_id, student_canvas_user.id, section_teacher.id)
 
+            # Create credit section if applicable
             if class_item_id in ROSTER_AND_CREDIT_COURSES:
                 course_item_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)) or ""
                 credit_section_name = "2.5 Credits" if "2.5" in course_item_name else "5 Credits"
@@ -1014,10 +1018,6 @@ if __name__ == '__main__':
                     db.commit()
             except Exception as e:
                 print(f"FATAL ERROR processing PLP item {plp_item_id}: {e}")
-
-        # New phase: Sync teachers and universal TAs
-        print("\n--- Phase 3: Syncing Canvas Teachers and TAs ---")
-        sync_canvas_teachers_and_tas(cursor, dry_run=DRY_RUN)
 
         print("\n======================================================")
         print("=== STARTING FINAL RECONCILIATION RUN          ===")
