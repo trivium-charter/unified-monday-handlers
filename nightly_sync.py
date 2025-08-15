@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ==============================================================================
-# NIGHTLY PLP & HS ROSTER SYNC SCRIPT (FINAL, COMPLETE, AND CORRECTED)
+# NIGHTLY PLP & HS ROSTER SYNC SCRIPT (FINAL, CORRECTED VERSION)
 # ==============================================================================
 import os
 import json
@@ -70,43 +70,30 @@ except (json.JSONDecodeError, TypeError):
 MONDAY_HEADERS = { "Authorization": MONDAY_API_KEY, "Content-Type": "application/json", "API-Version": "2023-10" }
 
 def execute_monday_graphql(query):
-    max_retries = 4
-    delay = 2
+    max_retries = 4; delay = 2
     for attempt in range(max_retries):
         try:
             response = requests.post(MONDAY_API_URL, json={"query": query}, headers=MONDAY_HEADERS, timeout=30)
             if response.status_code == 429:
-                print(f"WARNING: Rate limit hit. Waiting {delay} seconds...")
-                time.sleep(delay)
-                delay *= 2
-                continue
+                print(f"WARNING: Rate limit hit. Waiting {delay} seconds..."); time.sleep(delay); delay *= 2; continue
             response.raise_for_status()
             json_response = response.json()
-            if "errors" in json_response:
-                print(f"ERROR: Monday GraphQL Error: {json_response['errors']}")
-                return None
+            if "errors" in json_response: print(f"ERROR: Monday GraphQL Error: {json_response['errors']}"); return None
             return json_response
         except requests.exceptions.RequestException as e:
             print(f"WARNING: Monday HTTP Request Error: {e}. Retrying...")
-            if attempt < max_retries - 1:
-                time.sleep(delay)
-                delay *= 2
-            else:
-                print("ERROR: Final retry failed.")
-                return None
+            if attempt < max_retries - 1: time.sleep(delay); delay *= 2
+            else: print("ERROR: Final retry failed."); return None
     return None
 
 def get_item_name(item_id, board_id):
     query = f"query {{ items(ids: [{item_id}]) {{ name }} }}"
     result = execute_monday_graphql(query)
-    try:
-        return result['data']['items'][0].get('name')
-    except (TypeError, KeyError, IndexError):
-        return None
+    try: return result['data']['items'][0].get('name')
+    except (TypeError, KeyError, IndexError): return None
 
 def get_all_board_items(board_id, item_ids=None, group_id=None):
-    all_items = []
-    cursor = None
+    all_items = []; cursor = None
     items_page_source = f'groups(ids: ["{group_id}"]) {{ items_page' if group_id else 'items_page'
     id_filter = f'query_params: {{ids: {json.dumps(item_ids)}}}' if item_ids else ""
     while True:
@@ -132,8 +119,7 @@ def get_user_id(user_name):
     result = execute_monday_graphql(query)
     try:
         for user in result['data']['users']:
-            if user['name'].lower() == user_name.lower():
-                return user['id']
+            if user['name'].lower() == user_name.lower(): return user['id']
     except (KeyError, IndexError, TypeError): pass
     return None
 
@@ -245,7 +231,7 @@ def create_canvas_user(student_details):
         return account.create_user(**user_payload)
     except CanvasException as e:
         print(f"ERROR: Canvas user creation failed: {e}")
-        raise # Re-raise exception so the calling function can handle it
+        raise
 
 def update_user_ssid(user, new_ssid):
     try:
