@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ==============================================================================
-# NIGHTLY PLP & HS ROSTER SYNC SCRIPT (FINAL, WITH CANVAS ID CACHING)
+# NIGHTLY PLP & HS ROSTER SYNC SCRIPT (FINAL, WITH ALL FIXES AND FEATURES)
 # ==============================================================================
 import os
 import json
@@ -88,12 +88,6 @@ def execute_monday_graphql(query):
             else: print("ERROR: Final retry failed."); return None
     return None
 
-def get_item_name(item_id, board_id):
-    query = f"query {{ items(ids: [{item_id}]) {{ name }} }}"
-    result = execute_monday_graphql(query)
-    try: return result['data']['items'][0].get('name')
-    except (TypeError, KeyError, IndexError): return None
-
 def get_all_board_items(board_id, item_ids=None, group_id=None):
     all_items = []; cursor = None
     items_page_source = f'groups(ids: ["{group_id}"]) {{ items_page' if group_id else 'items_page'
@@ -124,14 +118,12 @@ def get_user_id(user_name):
             if user['name'].lower() == user_name.lower(): return user['id']
     except (KeyError, IndexError, TypeError): pass
     return None
-
 def get_user_name(user_id):
     if user_id is None: return None
     query = f"query {{ users(ids: [{user_id}]) {{ name }} }}"
     result = execute_monday_graphql(query)
     try: return result['data']['users'][0].get('name')
     except (TypeError, KeyError, IndexError): return None
-
 def get_column_value(item_id, board_id, column_id):
     if not item_id or not column_id: return None
     query = f'query {{ items (ids: [{item_id}]) {{ column_values (ids: ["{column_id}"]) {{ text value }} }} }}'
@@ -141,7 +133,6 @@ def get_column_value(item_id, board_id, column_id):
         parsed_value = json.loads(col_val.get('value')) if col_val.get('value') else None
         return {'value': parsed_value, 'text': col_val.get('text')}
     except (TypeError, KeyError, IndexError, json.JSONDecodeError): return None
-
 def get_linked_ids_from_connect_column_value(value_data):
     if not value_data: return set()
     try:
@@ -149,11 +140,9 @@ def get_linked_ids_from_connect_column_value(value_data):
         if "linkedPulseIds" in parsed_value: return {int(item["linkedPulseId"]) for item in parsed_value["linkedPulseIds"]}
     except (json.JSONDecodeError, TypeError): pass
     return set()
-
 def get_linked_items_from_board_relation(item_id, board_id, connect_column_id):
     column_data = get_column_value(item_id, board_id, connect_column_id)
     return get_linked_ids_from_connect_column_value(column_data.get('value')) if column_data else set()
-
 def get_people_ids_from_value(value_data):
     if not value_data: return set()
     if isinstance(value_data, str):
@@ -161,7 +150,6 @@ def get_people_ids_from_value(value_data):
         except json.JSONDecodeError: return set()
     persons_and_teams = value_data.get('personsAndTeams', [])
     return {person['id'] for person in persons_and_teams if 'id' in person and person.get('kind') == 'person'}
-
 def create_subitem(parent_item_id, subitem_name, column_values=None):
     column_values_json = json.dumps(column_values or {})
     mutation = f'mutation {{ create_subitem (parent_item_id: {parent_item_id}, item_name: {json.dumps(subitem_name)}, column_values: {json.dumps(column_values_json)}) {{ id }} }}'
@@ -170,7 +158,6 @@ def create_subitem(parent_item_id, subitem_name, column_values=None):
         return result['data']['create_subitem'].get('id')
     print(f"WARNING: Failed to create subitem '{subitem_name}'.")
     return None
-
 def bulk_add_to_connect_column(item_id, board_id, connect_column_id, course_ids_to_add):
     query_current = f'query {{ items(ids:[{item_id}]) {{ column_values(ids:["{connect_column_id}"]) {{ value }} }} }}'
     result = execute_monday_graphql(query_current)
@@ -184,7 +171,6 @@ def bulk_add_to_connect_column(item_id, board_id, connect_column_id, course_ids_
     mutation = f'mutation {{ change_column_value (board_id: {board_id}, item_id: {item_id}, column_id: "{connect_column_id}", value: {graphql_value}) {{ id }} }}'
     print(f"    SYNCING: Adding {len(course_ids_to_add - current_linked_items)} courses to column {connect_column_id} on PLP item {item_id}.")
     return execute_monday_graphql(mutation) is not None
-
 def update_people_column(item_id, board_id, people_column_id, new_people_value, target_column_type):
     parsed_new_value = new_people_value if isinstance(new_people_value, dict) else json.loads(new_people_value) if isinstance(new_people_value, str) else {}
     persons_and_teams = parsed_new_value.get('personsAndTeams', [])
@@ -197,27 +183,20 @@ def update_people_column(item_id, board_id, people_column_id, new_people_value, 
     else: return False
     mutation = f"""mutation {{ change_column_value(board_id: {board_id}, item_id: {item_id}, column_id: "{people_column_id}", value: {graphql_value}) {{ id }} }}"""
     return execute_monday_graphql(mutation) is not None
-
 def initialize_canvas_api():
     return Canvas(CANVAS_API_URL, CANVAS_API_KEY) if CANVAS_API_URL and CANVAS_API_KEY else None
 
 def find_canvas_user(student_details, cursor):
     canvas_api = initialize_canvas_api()
     if not canvas_api: return None
-
-    # === FIX: First, check our database for a cached ID ===
     plp_item_id = student_details.get('plp_id')
     if plp_item_id:
         cursor.execute("SELECT canvas_id FROM processed_students WHERE student_id = %s", (plp_item_id,))
         result = cursor.fetchone()
         if result and result[0]:
             print(f"  INFO: Found cached Canvas ID {result[0]} for student.")
-            try:
-                return canvas_api.get_user(result[0])
-            except ResourceDoesNotExist:
-                print(f"  WARNING: Cached Canvas ID {result[0]} was not found in Canvas. Searching again.")
-    
-    # If no cached ID, proceed with normal search logic
+            try: return canvas_api.get_user(result[0])
+            except ResourceDoesNotExist: print(f"  WARNING: Cached Canvas ID {result[0]} was not found. Searching again.")
     id_from_monday = student_details.get('canvas_id')
     if id_from_monday:
         try: return canvas_api.get_user(int(id_from_monday))
@@ -320,10 +299,7 @@ def parse_flexible_timestamp(ts_string):
 def enroll_or_create_and_enroll(course_id, section_id, student_details, db_cursor):
     canvas_api = initialize_canvas_api()
     if not canvas_api: return "Failed"
-    
-    # === FIX: Pass the database cursor to the find function ===
     user = find_canvas_user(student_details, db_cursor)
-    
     if not user:
         print(f"INFO: Canvas user not found for {student_details['email']}. Attempting to create new user.")
         try:
@@ -338,10 +314,7 @@ def enroll_or_create_and_enroll(course_id, section_id, student_details, db_curso
     if user:
         try:
             full_user = canvas_api.get_user(user.id)
-            
-            # === FIX: Cache the successful Canvas ID in the database ===
             db_cursor.execute("UPDATE processed_students SET canvas_id = %s WHERE student_id = %s", (str(full_user.id), student_details['plp_id']))
-            
             if student_details.get('ssid') and hasattr(full_user, 'sis_user_id') and full_user.sis_user_id != student_details['ssid']:
                 update_user_ssid(full_user, student_details['ssid'])
             return enroll_student_in_section(course_id, full_user.id, section_id)
