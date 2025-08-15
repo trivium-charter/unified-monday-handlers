@@ -65,7 +65,7 @@ except (json.JSONDecodeError, TypeError):
     MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS = {}
 
 # ==============================================================================
-# 2. UTILITY FUNCTIONS (ALL DEFINED FIRST)
+# 2. MONDAY.COM & CANVAS UTILITIES (ALL DEFINED FIRST)
 # ==============================================================================
 MONDAY_HEADERS = { "Authorization": MONDAY_API_KEY, "Content-Type": "application/json", "API-Version": "2023-10" }
 
