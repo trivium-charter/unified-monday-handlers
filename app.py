@@ -11,6 +11,8 @@ from celery import Celery
 from canvasapi import Canvas
 from canvasapi.exceptions import CanvasException, Conflict, ResourceDoesNotExist
 from collections import defaultdict
+import unicodedata
+import re
 
 # ==============================================================================
 # CENTRALIZED CONFIGURATION
@@ -31,6 +33,7 @@ MASTER_STUDENT_BOARD_ID = os.environ.get("MASTER_STUDENT_BOARD_ID")
 MASTER_STUDENT_SSID_COLUMN = os.environ.get("MASTER_STUDENT_SSID_COLUMN")
 MASTER_STUDENT_EMAIL_COLUMN = os.environ.get("MASTER_STUDENT_EMAIL_COLUMN")
 MASTER_STUDENT_CANVAS_ID_COLUMN = "text_mktgs1ax"
+MASTER_STUDENT_TOR_COLUMN_ID = os.environ.get("MASTER_STUDENT_TOR_COLUMN_ID")
 ALL_COURSES_BOARD_ID = os.environ.get("ALL_COURSES_BOARD_ID")
 ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID = os.environ.get("ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID")
 ALL_CLASSES_CANVAS_ID_COLUMN = os.environ.get("ALL_CLASSES_CANVAS_ID_COLUMN")
@@ -66,6 +69,12 @@ except json.JSONDecodeError:
     SPED_STUDENTS_PEOPLE_COLUMN_MAPPING = {}
     LOG_CONFIGS = []
     MASTER_STUDENT_PEOPLE_COLUMNS = {}
+
+# The 10 special courses
+ROSTER_ONLY_COURSES = {10298, 10297, 10299, 10300, 10301}
+ROSTER_AND_CREDIT_COURSES = {10097, 10002, 10092, 10164, 10198}
+ALL_SPECIAL_COURSES = ROSTER_ONLY_COURSES.union(ROSTER_AND_CREDIT_COURSES)
+
 
 # ==============================================================================
 # MONDAY.COM UTILITIES
@@ -114,6 +123,15 @@ def get_user_name(user_id):
     result = execute_monday_graphql(query)
     if result and 'data' in result and result['data'].get('users'):
         return result['data']['users'][0].get('name')
+    return None
+
+def get_roster_teacher_name(master_student_id):
+    tor_val = get_column_value(master_student_id, int(MASTER_STUDENT_BOARD_ID), MASTER_STUDENT_TOR_COLUMN_ID)
+    if tor_val and tor_val.get('value'):
+        tor_ids = get_people_ids_from_value(tor_val['value'])
+        if tor_ids:
+            tor_full_name = get_user_name(list(tor_ids)[0])
+            if tor_full_name: return tor_full_name.split()[-1]
     return None
 
 def get_column_value(item_id, board_id, column_id):
@@ -285,49 +303,46 @@ def find_canvas_teacher(teacher_details):
         except (ResourceDoesNotExist, CanvasException): pass
     return None
 
-def create_canvas_user(student_details):
+def create_canvas_user(user_details, role='student'):
     canvas_api = initialize_canvas_api()
     if not canvas_api: return None
     try:
         account = canvas_api.get_account(1)
-        user_payload = {'user': {'name': student_details['name'], 'terms_of_use': True}, 'pseudonym': {'unique_id': student_details['email'], 'sis_user_id': student_details['ssid'], 'login_id': student_details['email'], 'authentication_provider_id': '112'}, 'communication_channel': {'type': 'email', 'address': student_details['email'], 'skip_confirmation': True}}
+        user_payload = {
+            'user': {'name': user_details['name'], 'terms_of_use': True},
+            'pseudonym': {
+                'unique_id': user_details['email'],
+                'sis_user_id': user_details.get('sis_id') or user_details['email'],
+                'login_id': user_details['email'],
+                'authentication_provider_id': '112'
+            },
+            'communication_channel': {
+                'type': 'email',
+                'address': user_details['email'],
+                'skip_confirmation': True
+            }
+        }
         new_user = account.create_user(**user_payload)
         return new_user
     except CanvasException as e:
-        print(f"ERROR: Canvas user creation failed: {e}")
+        print(f"ERROR: Canvas user creation failed for {user_details['email']}: {e}")
+        if ("sis_user_id" in str(e) and "is already in use" in str(e)) or \
+           ("unique_id" in str(e) and "ID already in use" in str(e)):
+            print(f"INFO: User creation failed because ID is in use. Attempting to find existing user.")
+            return find_canvas_teacher(user_details) if role == 'teacher' else find_canvas_user(user_details)
         raise
 
 def update_user_ssid(user, new_ssid):
     try:
-        canvas_api = initialize_canvas_api()
-        logins = canvas_api.get_user(user.id).get_logins()
+        logins = user.get_logins()
         if logins:
             login_to_update = logins[0]
             login_to_update.edit(login={'sis_user_id': new_ssid})
             return True
+        return False
     except CanvasException as e:
         print(f"ERROR: API error updating SSID for user '{user.name}': {e}")
     return False
-
-def create_canvas_course(course_name, term_id):
-    canvas_api = initialize_canvas_api()
-    if not all([canvas_api, CANVAS_SUBACCOUNT_ID, CANVAS_TEMPLATE_COURSE_ID]): return None
-    try: account = canvas_api.get_account(CANVAS_SUBACCOUNT_ID)
-    except ResourceDoesNotExist: return None
-    base_sis_name = ''.join(e for e in course_name if e.isalnum()).replace(' ', '_').lower()
-    base_sis_id = f"{base_sis_name}_{term_id}"
-    max_attempts = 10
-    for attempt in range(max_attempts):
-        sis_id_to_try = base_sis_id if attempt == 0 else f"{base_sis_id}_{attempt}"
-        course_data = { 'name': course_name, 'course_code': course_name, 'enrollment_term_id': f"sis_term_id:{term_id}", 'sis_course_id': sis_id_to_try, 'source_course_id': CANVAS_TEMPLATE_COURSE_ID }
-        try:
-            new_course = account.create_course(course=course_data)
-            return new_course
-        except CanvasException as e:
-            if hasattr(e, 'status_code') and e.status_code == 400 and 'is already in use' in str(e).lower():
-                continue
-            else: return None
-    return None
 
 def create_section_if_not_exists(course_id, section_name):
     canvas_api = initialize_canvas_api()
@@ -337,7 +352,7 @@ def create_section_if_not_exists(course_id, section_name):
         existing_section = next((s for s in course.get_sections() if s.name.lower() == section_name.lower()), None)
         return existing_section or course.create_course_section(course_section={'name': section_name})
     except CanvasException as e:
-        print(f"ERROR: Canvas section creation failed: {e}")
+        print(f"ERROR: Canvas section creation/check failed: {e}")
         return None
 
 def enroll_student_in_section(course_id, user_id, section_id):
@@ -367,7 +382,7 @@ def unenroll_student_from_course(course_id, student_details):
         print(f"ERROR: Canvas unenrollment failed: {e}")
         return False
 
-def enroll_teacher_in_course(course_id, teacher_details):
+def enroll_teacher_in_course(course_id, teacher_details, role='TeacherEnrollment'):
     canvas_api = initialize_canvas_api()
     if not canvas_api: return "Failed: Canvas API not initialized"
     teacher_name = teacher_details.get('name', teacher_details.get('email', 'Unknown'))
@@ -375,7 +390,7 @@ def enroll_teacher_in_course(course_id, teacher_details):
     if not user_to_enroll: return f"Failed: User '{teacher_name}' not found in Canvas with provided IDs."
     try:
         course = canvas_api.get_course(course_id)
-        course.enroll_user(user_to_enroll, 'TeacherEnrollment', enrollment_state='active', notify=False)
+        course.enroll_user(user_to_enroll, role, enrollment_state='active', notify=False)
         return "Success"
     except ResourceDoesNotExist: return f"Failed: Course with ID '{course_id}' not found in Canvas."
     except Conflict: return "Already Enrolled"
@@ -391,25 +406,26 @@ def get_teacher_person_value_from_canvas_board(canvas_item_id):
 # ==============================================================================
 # CORE LOGIC FUNCTIONS
 # ==============================================================================
-def enroll_or_create_and_enroll(course_id, section_id, student_details):
+
+def enroll_or_create_and_enroll(course_id, section_id, student_details, db_cursor):
     canvas_api = initialize_canvas_api()
     if not canvas_api: return "Failed"
-    user = find_canvas_user(student_details)
+    user = find_canvas_user(student_details, db_cursor)
     if not user:
         print(f"INFO: Canvas user not found for {student_details['email']}. Attempting to create new user.")
         try:
             user = create_canvas_user(student_details)
         except CanvasException as e:
-            if ("sis_user_id" in str(e) and "is already in use" in str(e)) or \
-               ("unique_id" in str(e) and "ID already in use" in str(e)):
-                print(f"INFO: User creation failed because ID is in use. Searching again for existing user.")
-                user = find_canvas_user(student_details)
+            if "sis_user_id" in str(e) and "is already in use" in str(e):
+                print(f"INFO: User creation failed because SIS ID is in use. Searching again for existing user.")
+                user = find_canvas_user(student_details, db_cursor)
             else:
                 print(f"ERROR: A critical error occurred during user creation: {e}")
                 user = None
     if user:
         try:
             full_user = canvas_api.get_user(user.id)
+            db_cursor.execute("UPDATE processed_students SET canvas_id = %s WHERE student_id = %s", (str(full_user.id), student_details['plp_id']))
             if student_details.get('ssid') and hasattr(full_user, 'sis_user_id') and full_user.sis_user_id != student_details['ssid']:
                 update_user_ssid(full_user, student_details['ssid'])
             return enroll_student_in_section(course_id, full_user.id, section_id)
@@ -420,53 +436,255 @@ def enroll_or_create_and_enroll(course_id, section_id, student_details):
     return "Failed"
 
 def get_student_details_from_plp(plp_item_id):
-    query = f"""query {{ items (ids: [{plp_item_id}]) {{ column_values (ids: ["{PLP_TO_MASTER_STUDENT_CONNECT_COLUMN}"]) {{ value }} }} }}"""
-    result = execute_monday_graphql(query)
+    print(f"  [DIAGNOSTIC] Starting detail fetch for PLP item: {plp_item_id}")
     try:
-        connect_column_value = json.loads(result['data']['items'][0]['column_values'][0]['value'])
+        query = f'query {{ items (ids: [{plp_item_id}]) {{ column_values (ids: ["{PLP_TO_MASTER_STUDENT_CONNECT_COLUMN}"]) {{ value }} }} }}'
+        result = execute_monday_graphql(query)
+        column_value = result['data']['items'][0]['column_values'][0]['value']
+        if not column_value:
+            print("  [DIAGNOSTIC] FAILED: 'Connect to Master' column is empty.")
+            return None
+        connect_column_value = json.loads(column_value)
         linked_ids = [item['linkedPulseId'] for item in connect_column_value.get('linkedPulseIds', [])]
-        if not linked_ids: return None
+        if not linked_ids:
+            print("  [DIAGNOSTIC] FAILED: 'Connect to Master' column is linked, but the linked item list is empty.")
+            return None
         master_student_id = linked_ids[0]
-        details_query = f"""query {{ items (ids: [{master_student_id}]) {{ name column_values(ids: ["{MASTER_STUDENT_SSID_COLUMN}", "{MASTER_STUDENT_EMAIL_COLUMN}", "{MASTER_STUDENT_CANVAS_ID_COLUMN}"]) {{ id text }} }} }}"""
+        print(f"  [DIAGNOSTIC] Found Master Student ID: {master_student_id}")
+    except (TypeError, KeyError, IndexError, json.JSONDecodeError) as e:
+        print(f"  [DIAGNOSTIC] FAILED: Could not get the Master Student ID. Error: {e}")
+        return None
+    try:
+        details_query = f'query {{ items (ids: [{master_student_id}]) {{ id name column_values(ids: ["{MASTER_STUDENT_SSID_COLUMN}", "{MASTER_STUDENT_EMAIL_COLUMN}", "{MASTER_STUDENT_CANVAS_ID_COLUMN}"]) {{ id text }} }} }}'
         details_result = execute_monday_graphql(details_query)
         item_details = details_result['data']['items'][0]
-        student_name = item_details['name']
-        column_map = {cv['id']: cv.get('text') for cv in item_details.get('column_values', []) if isinstance(cv, dict) and 'id' in cv}
+        student_name = item_details.get('name')
+        if not student_name:
+            print(f"  [DIAGNOSTIC] FAILED: Master Student item {master_student_id} has no name.")
+            return None
+        print(f"  [DIAGNOSTIC] Found Name: {student_name}")
+        column_map = {cv['id']: cv.get('text', '') for cv in item_details.get('column_values', [])}
+        raw_email = column_map.get(MASTER_STUDENT_EMAIL_COLUMN)
+        if not raw_email:
+            print(f"  [DIAGNOSTIC] FAILED: Master Student item {master_student_id} is missing an email address.")
+            return None
+        print(f"  [DIAGNOSTIC] Found Email: {raw_email}")
+        email = unicodedata.normalize('NFKC', raw_email).strip()
         ssid = column_map.get(MASTER_STUDENT_SSID_COLUMN, '')
-        email = column_map.get(MASTER_STUDENT_EMAIL_COLUMN, '')
         canvas_id = column_map.get(MASTER_STUDENT_CANVAS_ID_COLUMN, '')
-        if not all([student_name, email]): return None
-        return {'name': student_name, 'ssid': ssid, 'email': email, 'canvas_id': canvas_id, 'master_id': master_student_id}
-    except (TypeError, KeyError, IndexError, json.JSONDecodeError) as e:
-        print(f"ERROR: Could not parse student details from Monday.com response: {e}")
+        print("  [DIAGNOSTIC] Successfully gathered all required details.")
+        return {'name': student_name, 'ssid': ssid, 'email': email, 'canvas_id': canvas_id, 'master_id': item_details['id'], 'plp_id': plp_item_id}
+    except (TypeError, KeyError, IndexError) as e:
+        print(f"  [DIAGNOSTIC] FAILED: Could not parse details from the Master Student board. Error: {e}")
         return None
 
-def manage_class_enrollment(action, plp_item_id, class_item_id, student_details, category_name, subitem_cols=None):
-    subitem_cols = subitem_cols or {}
-    all_courses_item_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)) or f"Item {class_item_id}"
-    linked_canvas_item_ids = get_linked_items_from_board_relation(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
-    class_name = all_courses_item_name
-    if linked_canvas_item_ids:
-        canvas_item_id = list(linked_canvas_item_ids)[0]
-        canvas_class_name = get_item_name(canvas_item_id, int(CANVAS_BOARD_ID))
-        if canvas_class_name: class_name = canvas_class_name
-    if action == "enroll":
-        subitem_title = f"Added {category_name} '{class_name}'"
-        if check_if_subitem_exists_by_name(plp_item_id, subitem_title):
-            print(f"  INFO: Subitem '{subitem_title}' already exists. Skipping.")
+def process_student_special_enrollments(plp_item, db_cursor, dry_run=True):
+    plp_item_id = int(plp_item['id'])
+    print(f"\n--- Processing Special Enrollments for: {plp_item['name']} (PLP ID: {plp_item_id}) ---")
+    student_details = get_student_details_from_plp(plp_item_id)
+    if not student_details:
+        print("  SKIPPING: Could not get student details.")
+        return
+    master_id = student_details['master_id']
+    master_details_query = f'query {{ items(ids:[{master_id}]) {{ column_values(ids:["{MASTER_STUDENT_TOR_COLUMN_ID}", "{MASTER_STUDENT_GRADE_COLUMN_ID}"]) {{ id text value }} }} }}'
+    master_result = execute_monday_graphql(master_details_query)
+    tor_last_name = "Orientation"
+    grade_text = ""
+    if master_result and master_result.get('data', {}).get('items'):
+        cols = {cv['id']: cv for cv in master_result['data']['items'][0].get('column_values', [])}
+        grade_text = cols.get(MASTER_STUDENT_GRADE_COLUMN_ID, {}).get('text', '')
+        tor_val_str = cols.get(MASTER_STUDENT_TOR_COLUMN_ID, {}).get('value')
+        if tor_val_str:
+            try:
+                tor_ids = get_people_ids_from_value(json.loads(tor_val_str))
+                if tor_ids:
+                    tor_full_name = get_user_name(list(tor_ids)[0])
+                    if tor_full_name: tor_last_name = tor_full_name.split()[-1]
+            except (json.JSONDecodeError, TypeError):
+                print(f"  WARNING: Could not parse TOR value for master item {master_id}.")
+    jumpstart_canvas_id = SPECIAL_COURSE_CANVAS_IDS.get("Jumpstart")
+    if jumpstart_canvas_id:
+        print(f"  Processing Jumpstart enrollment, section: {tor_last_name}")
+        if not dry_run:
+            section = create_section_if_not_exists(jumpstart_canvas_id, tor_last_name)
+            if section:
+                result = enroll_or_create_and_enroll(jumpstart_canvas_id, section.id, student_details, db_cursor)
+                print(f"  -> Enrollment status: {result}")
+    sh_section_name = get_study_hall_section_from_grade(grade_text)
+    target_sh_name = "ACE Study Hall"
+    target_sh_canvas_id = SPECIAL_COURSE_CANVAS_IDS.get(target_sh_name)
+    if target_sh_canvas_id:
+        print(f"  Processing {target_sh_name} enrollment, section: {sh_section_name}")
+        if not dry_run:
+            section = create_section_if_not_exists(target_sh_canvas_id, sh_section_name)
+            if section:
+                result = enroll_or_create_and_enroll(target_sh_canvas_id, section.id, student_details, db_cursor)
+                print(f"  -> Enrollment status: {result}")
+
+def run_hs_roster_sync_for_student(hs_roster_item, dry_run=True):
+    parent_item_id = int(hs_roster_item['id'])
+    print(f"\n--- Processing HS Roster for: {hs_roster_item['name']} (ID: {parent_item_id}) ---")
+
+    plp_query = f'query {{ items(ids:[{parent_item_id}]) {{ column_values(ids:["{HS_ROSTER_MAIN_ITEM_to_PLP_CONNECT_COLUMN_ID}"]) {{ value }} }} }}'
+    plp_result = execute_monday_graphql(plp_query)
+    try:
+        plp_linked_ids = get_linked_ids_from_connect_column_value(plp_result['data']['items'][0]['column_values'][0]['value'])
+        if not plp_linked_ids:
+            print("  SKIPPING: Could not find a linked PLP item.")
             return
-        if linked_canvas_item_ids:
-            canvas_item_id = list(linked_canvas_item_ids)[0]
-            course_id_val = get_column_value(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_COURSE_ID_COLUMN_ID)
-            canvas_course_id = course_id_val.get('text') if course_id_val else None
-            if not canvas_course_id:
-                new_course = create_canvas_course(class_name, CANVAS_TERM_ID)
-                if new_course:
-                    canvas_course_id = new_course.id
-                    change_column_value_generic(int(CANVAS_BOARD_ID), canvas_item_id, CANVAS_COURSE_ID_COLUMN_ID, str(canvas_course_id))
-                    if ALL_CLASSES_CANVAS_ID_COLUMN:
-                        change_column_value_generic(int(ALL_COURSES_BOARD_ID), class_item_id, ALL_CLASSES_CANVAS_ID_COLUMN, str(canvas_course_id))
-            if canvas_course_id:
+        plp_item_id = list(plp_linked_ids)[0]
+    except (TypeError, KeyError, IndexError):
+        print("  SKIPPING: Could not find linked PLP item.")
+        return
+
+    HS_ROSTER_SUBITEM_TERM_COLUMN_ID = "color6"
+    subitems_query = f"""
+        query {{
+            items (ids: [{parent_item_id}]) {{
+                subitems {{
+                    id name
+                    column_values(ids: ["{HS_ROSTER_SUBITEM_DROPDOWN_COLUMN_ID}", "{HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID}", "{HS_ROSTER_SUBITEM_TERM_COLUMN_ID}"]) {{ id text value }}
+                }}
+            }}
+        }}
+    """
+    subitems_result = execute_monday_graphql(subitems_query)
+
+    course_data = defaultdict(lambda: {'primary_categories': set(), 'secondary_category': ''})
+    try:
+        subitems = subitems_result['data']['items'][0]['subitems']
+        for subitem in subitems:
+            subitem_cols = {cv['id']: cv for cv in subitem['column_values']}
+            
+            term_val = subitem_cols.get(HS_ROSTER_SUBITEM_TERM_COLUMN_ID, {}).get('text')
+            if term_val == "Spring":
+                print(f"  SKIPPING: Subitem '{subitem['name']}' is marked as Spring.")
+                continue
+            
+            category_text = subitem_cols.get(HS_ROSTER_SUBITEM_DROPDOWN_COLUMN_ID, {}).get('text', '')
+            courses_val = subitem_cols.get(HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID, {}).get('value')
+            if category_text and courses_val:
+                labels = [label.strip() for label in category_text.split(',')]
+                course_ids = get_linked_ids_from_connect_column_value(courses_val)
+                for course_id in course_ids:
+                    for label in labels:
+                        if label:
+                            course_data[course_id]['primary_categories'].add(label)
+    except (TypeError, KeyError, IndexError):
+        print("  ERROR: Could not process subitems.")
+        return
+
+    all_course_ids = list(course_data.keys())
+    if not all_course_ids: 
+        print("  INFO: No non-Spring courses found to process.")
+        return
+
+    secondary_category_col_id = "dropdown_mkq0r2av"
+    secondary_category_query = f"query {{ items (ids: {all_course_ids}) {{ id column_values(ids: [\"{secondary_category_col_id}\"]) {{ text }} }} }}"
+    secondary_category_results = execute_monday_graphql(secondary_category_query)
+    secondary_category_map = {int(item['id']): item['column_values'][0].get('text') for item in secondary_category_results.get('data', {}).get('items', []) if item.get('column_values')}
+    
+    plp_updates = defaultdict(set)
+    for course_id, data in course_data.items():
+        primary_categories = data.get('primary_categories', set())
+        secondary_category = secondary_category_map.get(course_id, '')
+
+        is_ace_course = secondary_category == "ACE"
+
+        if is_ace_course:
+            ace_col_id = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get("ACE")
+            if ace_col_id:
+                plp_updates[ace_col_id].add(course_id)
+            
+            for category in primary_categories:
+                if category in ["ELA", "Other/Elective"]:
+                    primary_col_id = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get(category)
+                    if primary_col_id:
+                        plp_updates[primary_col_id].add(course_id)
+        
+        else:
+            for category in primary_categories:
+                target_col_id = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get(category)
+                if target_col_id:
+                    plp_updates[target_col_id].add(course_id)
+                else:
+                    other_col_id = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get("Other/Elective")
+                    if other_col_id:
+                        print(f"  WARNING: Subject '{category}' doesn't map to a PLP column. Routing to 'Other/Elective'.")
+                        plp_updates[other_col_id].add(course_id)
+                    else:
+                        print(f"  WARNING: Subject '{category}' not mapped and 'Other/Elective' is not configured. Skipping.")
+
+    if not plp_updates:
+        print("  INFO: No valid courses found to sync after categorization.")
+        return
+        
+    print(f"  Found courses to sync for PLP item {plp_item_id}.")
+    if dry_run:
+        for col_id, courses in plp_updates.items():
+            print(f"    DRY RUN: Would add {len(courses)} courses to PLP column {col_id}.")
+        return
+
+    for col_id, courses in plp_updates.items():
+        if col_id and courses:
+            bulk_add_to_connect_column(plp_item_id, int(PLP_BOARD_ID), col_id, courses)
+            time.sleep(1)
+
+def manage_class_enrollment(action, plp_item_id, class_item_id, student_details, category_name, creator_id, db_cursor, dry_run=True):
+    class_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)) or f"Item {class_item_id}"
+    linked_canvas_item_ids = get_linked_items_from_board_relation(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
+    
+    if not linked_canvas_item_ids:
+        print(f"  INFO: '{class_name}' is a non-Canvas course or no link exists. Skipping enrollment action.")
+        return
+
+    canvas_item_id = list(linked_canvas_item_ids)[0]
+    course_id_val = get_column_value(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_COURSE_ID_COLUMN_ID)
+    canvas_course_id = course_id_val.get('text') if course_id_val else None
+
+    if not canvas_course_id:
+        print(f"  WARNING: Canvas Course ID not found for course '{class_name}'. Skipping enrollment action.")
+        return
+
+    if action == "enroll":
+        print(f"  ACTION: Pushing enrollment for '{class_name}' to Canvas.")
+        canvas_api = initialize_canvas_api()
+        student_canvas_user = None
+        if not dry_run:
+            student_canvas_user = find_canvas_user(student_details, db_cursor)
+
+        if student_canvas_user:
+            # --- NEW LOGIC FOR SPECIAL SECTIONS ---
+            if int(class_item_id) in ALL_SPECIAL_COURSES:
+                print("    -> Applying special section logic.")
+                student_master_id = student_details.get('master_id')
+                
+                if not student_master_id:
+                    print("    -> SKIPPING: Could not get student Master ID for special section logic.")
+                    return
+
+                roster_teacher_name = get_roster_teacher_name(student_master_id)
+                if not roster_teacher_name:
+                    print("    -> WARNING: Could not determine Roster Teacher. Defaulting to 'Unassigned'.")
+                    roster_teacher_name = "Unassigned"
+                
+                section_teacher = create_section_if_not_exists(canvas_course_id, roster_teacher_name)
+                if section_teacher:
+                    if not dry_run: 
+                        enrollment_status = enroll_student_in_section(canvas_course_id, student_canvas_user.id, section_teacher.id)
+                        print(f"      -> Roster Section Enrollment Status: {enrollment_status}")
+
+                if int(class_item_id) in ROSTER_AND_CREDIT_COURSES:
+                    course_item_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)) or ""
+                    credit_section_name = "2.5 Credits" if "2.5" in course_item_name else "5 Credits"
+                    
+                    section_credit = create_section_if_not_exists(canvas_course_id, credit_section_name)
+                    if section_credit:
+                        if not dry_run:
+                            enrollment_status = enroll_student_in_section(canvas_course_id, student_canvas_user.id, section_credit.id)
+                            print(f"      -> Credit Section Enrollment Status: {enrollment_status}")
+            else:
+                # --- ORIGINAL LOGIC FOR NORMAL COURSES ---
                 m_series_val = get_column_value(plp_item_id, int(PLP_BOARD_ID), PLP_M_SERIES_LABELS_COLUMN)
                 ag_grad_val = get_column_value(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_CLASSES_AG_GRAD_COLUMN)
                 m_series_text = (m_series_val.get('text') or "") if m_series_val else ""
@@ -475,304 +693,359 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details,
                 if not sections: sections.add("All")
                 for section_name in sections:
                     section = create_section_if_not_exists(canvas_course_id, section_name)
-                    if section: enroll_or_create_and_enroll(canvas_course_id, section.id, student_details)
-        create_subitem(plp_item_id, subitem_title, column_values=subitem_cols)
+                    if section:
+                        if not dry_run: enroll_or_create_and_enroll(canvas_course_id, section.id, student_details, db_cursor)
+        else:
+            print(f"  INFO: Skipping Canvas enrollment for student '{student_details['name']}' because user was not found or created.")
+
+        subitem_title = f"Added {category_name} '{class_name}'"
+        if not check_if_subitem_exists(plp_item_id, subitem_title, creator_id):
+            print(f"  INFO: Subitem log is missing. Creating it.")
+            if not dry_run: create_subitem(plp_item_id, subitem_title)
+        else:
+            print(f"  INFO: Subitem log already exists.")
+
     elif action == "unenroll":
         subitem_title = f"Removed {category_name} '{class_name}'"
-        if linked_canvas_item_ids:
-            canvas_item_id = list(linked_canvas_item_ids)[0]
-            course_id_val = get_column_value(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_COURSE_ID_COLUMN_ID)
-            canvas_course_id = course_id_val.get('text') if course_id_val else None
-            if canvas_course_id: unenroll_student_from_course(canvas_course_id, student_details)
-        create_subitem(plp_item_id, subitem_title, column_values=subitem_cols)
+        print(f"  INFO: Unenrolling student and creating log: '{subitem_title}'")
+        if not dry_run:
+            unenroll_student_from_course(canvas_course_id, student_details)
+            create_subitem(plp_item_id, subitem_title)
 
-# ==============================================================================
-# CELERY APP DEFINITION & TASKS
-# ==============================================================================
-broker_use_ssl_config = {'ssl_cert_reqs': 'required'} if CELERY_BROKER_URL.startswith('rediss://') else {}
-celery_app = Celery('tasks', broker=CELERY_BROKER_URL, backend=CELERY_RESULT_BACKEND, include=[__name__])
-if broker_use_ssl_config:
-    celery_app.conf.broker_use_ssl = broker_use_ssl_config
-    celery_app.conf.redis_backend_use_ssl = broker_use_ssl_config
-celery_app.conf.timezone = 'America/Los_Angeles'
-celery_app.conf.broker_transport_options = { 'health_check_interval': 30, 'socket_keepalive': True, }
-celery_app.conf.broker_connection_retry_on_startup = True
 
-@celery_app.task(name='app.process_general_webhook')
-def process_general_webhook(event_data, config_rule):
-    log_type, params = config_rule.get("log_type"), config_rule.get("params", {})
-    board_id, item_id = event_data.get('boardId'), event_data.get('pulseId')
-    if log_type == "NameReformat":
-        target_col_id, current_name = params.get('target_text_column_id'), get_item_name(item_id, board_id)
-        if not all([target_col_id, current_name]): return
-        parts = current_name.strip().split()
-        if len(parts) >= 2: change_column_value_generic(board_id, item_id, target_col_id, f"{parts[-1]}, {' '.join(parts[:-1])}")
-    elif log_type == "CopyToItemName":
-        source_col_id = params.get('source_column_id')
-        if not source_col_id: return
-        column_data = get_column_value(item_id, board_id, source_col_id)
-        if column_data and column_data.get('text'): update_item_name(item_id, board_id, column_data['text'])
-    elif log_type == "ConnectBoardChange":
-        current_ids, previous_ids = get_linked_ids_from_connect_column_value(event_data.get('value')), get_linked_ids_from_connect_column_value(event_data.get('previousValue'))
-        changer, date, prefix, linked_board_id = get_user_name(event_data.get('userId')) or "automation", datetime.now().strftime('%Y-%m-%d'), params.get('subitem_name_prefix', ''), params.get('linked_board_id')
-        subitem_cols = {params['entry_type_column_id']: {"labels": [str(params['subitem_entry_type'])]}} if params.get('entry_type_column_id') and params.get('subitem_entry_type') else {}
-        for link_id in (current_ids - previous_ids):
-            name = get_item_name(link_id, linked_board_id)
-            if name: create_subitem(item_id, f"Added {prefix} '{name}' on {date} by {changer}", subitem_cols)
-        for link_id in (previous_ids - current_ids):
-            name = get_item_name(link_id, linked_board_id)
-            if name: create_subitem(item_id, f"Removed {prefix} '{name}' on {date} by {changer}", subitem_cols)
+def sync_teacher_assignments(master_student_id, plp_item_id, dry_run=True):
+    print("ACTION: Syncing teacher assignments from Master Student board to PLP...")
+    for source_col_id, mapping in MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS.items():
+        master_person_val = get_column_value(master_student_id, int(MASTER_STUDENT_BOARD_ID), source_col_id)
+        source_person_ids = get_people_ids_from_value(master_person_val.get('value')) if master_person_val else set()
+        plp_target_mapping = next((t for t in mapping.get("targets", []) if str(t.get("board_id")) == str(PLP_BOARD_ID)), None)
+        if plp_target_mapping:
+            target_col_id = plp_target_mapping.get("target_column_id")
+            target_col_type = plp_target_mapping.get("target_column_type")
+            current_plp_val = get_column_value(plp_item_id, int(PLP_BOARD_ID), target_col_id)
+            current_person_ids = get_people_ids_from_value(current_plp_val.get('value')) if current_plp_val else set()
+            if source_person_ids != current_person_ids:
+                print(f"  -> Change detected for {mapping.get('name', 'Staff')}. Updating PLP column {target_col_id}.")
+                if not dry_run:
+                    update_people_column(plp_item_id, int(PLP_BOARD_ID), target_col_id, master_person_val.get('value'), target_col_type)
+            else:
+                print(f"  -> No change needed for {mapping.get('name', 'Staff')}. Values are already in sync.")
 
-@celery_app.task(name='app.process_canvas_full_sync_from_status')
-def process_canvas_full_sync_from_status(event_data):
-    if event_data.get('value', {}).get('label', {}).get('text', '') != PLP_CANVAS_SYNC_STATUS_VALUE: return
-    plp_item_id = event_data.get('pulseId')
+def run_plp_sync_for_student(plp_item_id, creator_id, db_cursor, dry_run=True):
+    print(f"\n--- Processing PLP Item: {plp_item_id} ---")
     student_details = get_student_details_from_plp(plp_item_id)
     if not student_details: return
-    subitem_cols = {}
-    first_rule = next((rule for rule in LOG_CONFIGS if str(rule.get("trigger_board_id")) == PLP_BOARD_ID and rule.get("log_type") == "ConnectBoardChange"), None)
-    if first_rule and "params" in first_rule:
-        params = first_rule["params"]
-        if params.get("entry_type_column_id") and params.get("subitem_entry_type"):
-            subitem_cols[params["entry_type_column_id"]] = {"labels": [str(params["subitem_entry_type"])]}
+    master_student_id = student_details.get('master_id')
+    if not master_student_id: return
+    curriculum_change_values = {PLP_SUBITEM_ENTRY_TYPE_COLUMN_ID: {"labels": ["Curriculum Change"]}}
+    print("INFO: Syncing class enrollments...")
     class_id_to_category_map = {}
     for category, column_id in PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.items():
         for class_id in get_linked_items_from_board_relation(plp_item_id, int(PLP_BOARD_ID), column_id):
             class_id_to_category_map[class_id] = category
-    if not class_id_to_category_map: return
+    if not class_id_to_category_map:
+        print("INFO: No classes to sync.")
     for class_item_id, category_name in class_id_to_category_map.items():
-        manage_class_enrollment("enroll", plp_item_id, class_item_id, student_details, category_name, subitem_cols=subitem_cols)
+        class_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)) or f"Item {class_item_id}"
+        print(f"INFO: Processing class: '{class_name}'")
+        manage_class_enrollment("enroll", plp_item_id, class_item_id, student_details, category_name, creator_id, db_cursor, dry_run=dry_run)
+    sync_teacher_assignments(master_student_id, plp_item_id, dry_run=dry_run)
 
-@celery_app.task(name='app.process_canvas_delta_sync_from_course_change')
-def process_canvas_delta_sync_from_course_change(event_data):
-    plp_item_id, user_id, trigger_column_id = event_data.get('pulseId'), event_data.get('userId'), event_data.get('columnId')
+def reconcile_subitems(plp_item_id, creator_id, db_cursor, dry_run=True):
+    print(f"--- Reconciling All Subitems & Enrollments for PLP Item: {plp_item_id} ---")
     student_details = get_student_details_from_plp(plp_item_id)
-    if not student_details: return
-    master_student_id = student_details.get('master_id')
-    if not master_student_id:
-        print(f"ERROR: Could not find Master Student ID for PLP {plp_item_id}. Cannot sync teacher.")
+    if not student_details or not student_details.get('master_id'):
+        print("  SKIPPING: Could not get complete student details for reconciliation.")
         return
-    ENTRY_TYPE_COLUMN_ID = "entry_type__1"
-    curriculum_change_values = {ENTRY_TYPE_COLUMN_ID: {"labels": ["Curriculum Change"]}}
-    current_ids, previous_ids = get_linked_ids_from_connect_column_value(event_data.get('value')), get_linked_ids_from_connect_column_value(event_data.get('previousValue'))
-    added_ids, removed_ids = current_ids - previous_ids, previous_ids - current_ids
-    category_name = {v: k for k, v in PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.items()}.get(trigger_column_id, "Course")
-    CANVAS_BOARD_CLASS_TYPE_COLUMN_ID = "status__1"
-    ACE_TEACHER_COLUMN_ID_ON_MASTER = "multiple_person_mks1wrfv"
-    CONNECT_TEACHER_COLUMN_ID_ON_MASTER = "multiple_person_mks11jeg"
-    for class_id in added_ids:
-        manage_class_enrollment("enroll", plp_item_id, class_id, student_details, category_name, subitem_cols=curriculum_change_values)
-        linked_canvas_item_ids = get_linked_items_from_board_relation(class_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
-        if linked_canvas_item_ids:
-            canvas_item_id = list(linked_canvas_item_ids)[0]
-            class_type_val = get_column_value(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_BOARD_CLASS_TYPE_COLUMN_ID)
-            class_type_text = class_type_val.get('text', '').lower() if class_type_val and class_type_val.get('text') else ''
-            target_master_col_id = None
-            if 'ace' in class_type_text: target_master_col_id = ACE_TEACHER_COLUMN_ID_ON_MASTER
-            elif 'connect' in class_type_text: target_master_col_id = CONNECT_TEACHER_COLUMN_ID_ON_MASTER
-            if target_master_col_id:
-                teacher_person_value = get_teacher_person_value_from_canvas_board(canvas_item_id)
-                if teacher_person_value:
-                    update_people_column(master_student_id, int(MASTER_STUDENT_BOARD_ID), target_master_col_id, teacher_person_value, "multiple-person")
-                else:
-                    print(f"WARNING: Could not find linked teacher for course item {class_id}.")
-    for class_id in removed_ids:
-        manage_class_enrollment("unenroll", plp_item_id, class_id, student_details, category_name, subitem_cols=curriculum_change_values)
-
-@celery_app.task(name='app.process_plp_course_sync_webhook')
-def process_plp_course_sync_webhook(event_data):
-    subitem_id, parent_item_id = event_data.get('pulseId'), event_data.get('parentItemId')
-    
-    tags_column_value = get_column_value(subitem_id, int(event_data.get('boardId')), HS_ROSTER_SUBITEM_DROPDOWN_COLUMN_ID)
-    if not tags_column_value or not tags_column_value.get('text'):
-        print("INFO: No subject tags found on the HS Roster subitem. Skipping.")
-        return
-    
-    try:
-        tag_labels = {tag.strip() for tag in tags_column_value.get('text', '').split(',')}
-    except (AttributeError, KeyError):
-        print("ERROR: Could not parse tags from the Subject column.")
-        return
-
-    if not tag_labels:
-        print("INFO: No subject tag labels found. Skipping.")
-        return
-
-    current_courses = get_linked_ids_from_connect_column_value(event_data.get('value'))
-    previous_courses = get_linked_ids_from_connect_column_value(event_data.get('previousValue'))
-    added_courses = current_courses - previous_courses
-    removed_courses = previous_courses - current_courses
-
-    if not added_courses and not removed_courses:
-        return
-
-    plp_linked_ids = get_linked_items_from_board_relation(parent_item_id, int(HS_ROSTER_BOARD_ID), HS_ROSTER_MAIN_ITEM_to_PLP_CONNECT_COLUMN_ID)
-    if not plp_linked_ids:
-        print(f"ERROR: Could not find a PLP item linked to HS Roster item {parent_item_id}.")
-        return
-    plp_item_id = list(plp_linked_ids)[0]
-    
-    # Stores the target column for each course
-    course_to_final_cols = defaultdict(set)
-    
-    # 1. Get secondary categories for all added courses to make a single API call
-    secondary_category_col_id = "dropdown_mkq0r2av"
-    if added_courses:
-        course_ids_to_query = list(added_courses)
-        secondary_category_query = f"query {{ items (ids: {course_ids_to_query}) {{ id column_values(ids: [\"{secondary_category_col_id}\"]) {{ text }} }} }}"
-        secondary_category_results = execute_monday_graphql(secondary_category_query)
-        secondary_category_map = {int(item['id']): item['column_values'][0].get('text') for item in secondary_category_results.get('data', {}).get('items', []) if item.get('column_values')}
+    print("  -> Reconciling course enrollments...")
+    class_id_to_category_map = {}
+    for category, column_id in PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.items():
+        for class_id in get_linked_items_from_board_relation(plp_item_id, int(PLP_BOARD_ID), column_id):
+            class_id_to_category_map[class_id] = category
+    if not class_id_to_category_map:
+        print("    INFO: No classes are linked.")
     else:
-        secondary_category_map = {}
-
-    # 2. Process primary tags and determine final columns for each added course
-    for course_id in added_courses:
-        course_secondary = secondary_category_map.get(course_id, '')
-        
-        is_ace_course = course_secondary == "ACE"
-
-        if is_ace_course:
-            ace_col_id = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get("ACE")
-            if ace_col_id:
-                course_to_final_cols[course_id].add(ace_col_id)
-            
-            for category in tag_labels:
-                if category in ["ELA", "Other/Elective"]:
-                    primary_col = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get(category)
-                    if primary_col:
-                        course_to_final_cols[course_id].add(primary_col)
-        
-        else: # Not an ACE course, process primary tags normally
-            for category in tag_labels:
-                target_col = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get(category)
-                
-                if target_col:
-                    course_to_final_cols[course_id].add(target_col)
+        for class_item_id, category_name in class_id_to_category_map.items():
+            class_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)) or f"Item {class_item_id}"
+            print(f"    ACTION: Processing enrollment for '{class_name}'.")
+            expected_subitem_name = f"Added {category_name} '{class_name}'"
+            if not dry_run:
+                linked_canvas_item_ids = get_linked_items_from_board_relation(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
+                if linked_canvas_item_ids:
+                    canvas_item_id = list(linked_canvas_item_ids)[0]
+                    course_id_val = get_column_value(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_COURSE_ID_COLUMN_ID)
+                    canvas_course_id = None
+                    if course_id_val:
+                        canvas_course_id = course_id_val.get('text')
+                        if not canvas_course_id: canvas_course_id = course_id_val.get('value')
+                    if canvas_course_id:
+                        section = create_section_if_not_exists(canvas_course_id, "All")
+                        if section: enroll_or_create_and_enroll(canvas_course_id, section.id, student_details, db_cursor)
                 else:
-                    other_col = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get("Other/Elective")
-                    if other_col:
-                        print(f"WARNING: Tag '{category}' doesn't map to a PLP column. Routing to 'Other/Elective'.")
-                        course_to_final_cols[course_id].add(other_col)
+                    print(f"    INFO: '{class_name}' is a non-Canvas course.")
+            if not check_if_subitem_exists(plp_item_id, expected_subitem_name, creator_id):
+                print(f"    INFO: Subitem '{expected_subitem_name}' is missing. Creating it.")
+                if not dry_run: create_subitem(plp_item_id, expected_subitem_name)
+            else:
+                print(f"    INFO: Subitem '{expected_subitem_name}' already exists.")
+    print("  -> Reconciling staff assignments...")
+    master_student_id = student_details['master_id']
+    for trigger_col, mapping in MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS.items():
+        staff_role_name = mapping.get("name", "Staff")
+        master_person_val = get_column_value(master_student_id, int(MASTER_STUDENT_BOARD_ID), trigger_col)
+        if master_person_val and master_person_val.get('value'):
+            person_ids = get_people_ids_from_value(master_person_val.get('value'))
+            if person_ids:
+                person_id = list(person_ids)[0]
+                person_name = get_user_name(person_id)
+                if person_name:
+                    expected_staff_subitem = f"{staff_role_name}: {person_name}"
+                    if not check_if_subitem_exists(plp_item_id, expected_staff_subitem, creator_id):
+                        print(f"    INFO: Subitem '{expected_staff_subitem}' is missing. Creating it.")
+                        if not dry_run: create_subitem(plp_item_id, expected_staff_subitem)
                     else:
-                        print(f"WARNING: Tag '{category}' not mapped and 'Other/Elective' is not configured. Skipping.")
-    
-    # 3. Add courses to the determined columns
-    for course_id, col_ids in course_to_final_cols.items():
-        for col_id in set(col_ids):
-            update_connect_board_column(plp_item_id, int(PLP_BOARD_ID), col_id, course_id, "add")
+                        print(f"    INFO: Subitem '{expected_staff_subitem}' already exists.")
 
-    # 4. Handle removed courses
-    for course_id in removed_courses:
-        possible_cols = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.values()
-        for col_id in possible_cols:
-            update_connect_board_column(plp_item_id, int(PLP_BOARD_ID), col_id, course_id, "remove")
+def sync_canvas_teachers_and_tas(db_cursor, dry_run=True):
+    """
+    Syncs teachers from Monday.com Canvas Courses board to Canvas,
+    and adds fixed TA accounts to all Canvas classes.
+    """
+    print("\n======================================================")
+    print("=== STARTING CANVAS TEACHER AND TA SYNC          ===")
+    print("======================================================")
 
-    downstream_event = {'pulseId': plp_item_id, 'userId': event_data.get('userId')}
-    process_canvas_delta_sync_from_course_change.delay(downstream_event)
+    ta_accounts = [
+        {'name': 'Substitute TA', 'email': TA_SUB_EMAIL, 'sis_id': 'TA-SUB'},
+        {'name': 'Aide TA', 'email': TA_AIDE_EMAIL, 'sis_id': 'TA-AIDE'}
+    ]
 
-@celery_app.task(name='app.process_master_student_person_sync_webhook')
-def process_master_student_person_sync_webhook(event_data):
-    master_item_id, trigger_column_id, user_id = event_data.get('pulseId'), event_data.get('columnId'), event_data.get('userId')
-    current_value_raw, previous_value_raw = event_data.get('value'), event_data.get('previousValue')
-    current_ids = get_people_ids_from_value(current_value_raw)
-    previous_ids = get_people_ids_from_value(previous_value_raw)
-    if current_ids == previous_ids:
-        print(f"INFO: People column for item {master_item_id} was updated, but no change was made. Skipping.")
-        return
-    mappings = MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS.get(trigger_column_id)
-    if not mappings: return
-    for target in mappings["targets"]:
-        linked_ids = get_linked_items_from_board_relation(master_item_id, int(MASTER_STUDENT_BOARD_ID), target["connect_column_id"])
-        for linked_id in linked_ids:
-            update_people_column(linked_id, int(target["board_id"]), target["target_column_id"], current_value_raw, target["target_column_type"])
-    plp_target = next((t for t in mappings["targets"] if str(t.get("board_id")) == str(PLP_BOARD_ID)), None)
-    if not plp_target: return
-    plp_linked_ids = get_linked_items_from_board_relation(master_item_id, int(MASTER_STUDENT_BOARD_ID), plp_target["connect_column_id"])
-    if not plp_linked_ids: return
-    plp_item_id = list(plp_linked_ids)[0]
-    ENTRY_TYPE_COLUMN_ID = "entry_type__1"
-    staff_change_values = {ENTRY_TYPE_COLUMN_ID: {"labels": ["Staff Change"]}}
-    col_name, changer, date = mappings.get("name", "Staff"), get_user_name(user_id) or "automation", datetime.now().strftime('%Y-%m-%d')
-    for p_id in (current_ids - previous_ids):
-        name = get_user_name(p_id)
-        if name: create_subitem(plp_item_id, f"{col_name} changed to {name} on {date} by {changer}", column_values=staff_change_values)
-    for p_id in (previous_ids - current_ids):
-        name = get_user_name(p_id)
-        if name: create_subitem(plp_item_id, f"Removed {name} from {col_name} on {date} by {changer}", column_values=staff_change_values)
+    canvas_course_items_query = f"""
+        query {{
+            boards(ids: {CANVAS_BOARD_ID}) {{
+                items_page(limit: 500) {{
+                    cursor
+                    items {{
+                        id name
+                        column_values(ids: ["{CANVAS_COURSE_ID_COLUMN_ID}", "{CANVAS_TO_STAFF_CONNECT_COLUMN_ID}"]) {{
+                            id text value
+                        }}
+                    }}
+                }}
+            }}
+        }}
+    """
+    all_canvas_course_items = []
+    cursor = None
+    while True:
+        current_query = canvas_course_items_query
+        if cursor:
+            current_query = current_query.replace("limit: 500)", f"limit: 500, cursor: \"{cursor}\")")
+        
+        result = execute_monday_graphql(current_query)
+        if not result or 'data' not in result or not result['data']['boards']:
+            break
 
-@celery_app.task(name='app.process_teacher_enrollment_webhook')
-def process_teacher_enrollment_webhook(event_data):
-    course_item_id = event_data.get('pulseId')
-    board_id = event_data.get('boardId')
-    canvas_course_id_val = get_column_value(course_item_id, board_id, CANVAS_COURSE_ID_COLUMN_ID)
-    canvas_course_id = canvas_course_id_val.get('text') if canvas_course_id_val else None
-    if not canvas_course_id:
-        create_monday_update(course_item_id, "Enrollment Failed: Canvas Course ID is missing on the course item.")
-        return
-    added_staff_item_ids = get_linked_ids_from_connect_column_value(event_data.get('value')) - get_linked_ids_from_connect_column_value(event_data.get('previousValue'))
-    if not added_staff_item_ids: return
-    for staff_item_id in added_staff_item_ids:
-        teacher_name = get_item_name(staff_item_id, int(ALL_STAFF_BOARD_ID)) or f"Staff Item {staff_item_id}"
-        email_val = get_column_value(staff_item_id, int(ALL_STAFF_BOARD_ID), ALL_STAFF_EMAIL_COLUMN_ID)
-        sis_id_val = get_column_value(staff_item_id, int(ALL_STAFF_BOARD_ID), ALL_STAFF_SIS_ID_COLUMN_ID)
-        canvas_id_val = get_column_value(staff_item_id, int(ALL_STAFF_BOARD_ID), ALL_STAFF_CANVAS_ID_COLUMN)
-        internal_id_val = get_column_value(staff_item_id, int(ALL_STAFF_BOARD_ID), ALL_STAFF_INTERNAL_ID_COLUMN)
-        teacher_details = { 'name': teacher_name, 'email': email_val.get('text') if email_val else None, 'sis_id': sis_id_val.get('text') if sis_id_val else None, 'canvas_id': canvas_id_val.get('text') if canvas_id_val else None, 'internal_id': internal_id_val.get('text') if internal_id_val else None, }
-        result = enroll_teacher_in_course(canvas_course_id, teacher_details)
-        create_monday_update(course_item_id, f"Enrollment attempt for '{teacher_name}': {result}")
+        page_info = result['data']['boards'][0]['items_page']
+        all_canvas_course_items.extend(page_info['items'])
+        cursor = page_info.get('cursor')
+        if not cursor:
+            break
+        print(f"  Fetched {len(all_canvas_course_items)} Canvas course items...")
 
-@celery_app.task(name='app.process_sped_students_person_sync_webhook')
-def process_sped_students_person_sync_webhook(event_data):
-    source_item_id, col_id, col_val = event_data.get('pulseId'), event_data.get('columnId'), event_data.get('value')
-    config = SPED_STUDENTS_PEOPLE_COLUMN_MAPPING.get(col_id)
-    if not config: return
-    linked_ids = get_linked_items_from_board_relation(source_item_id, int(SPED_STUDENTS_BOARD_ID), SPED_TO_IEPAP_CONNECT_COLUMN_ID)
-    for linked_id in linked_ids:
-        update_people_column(linked_id, int(IEP_AP_BOARD_ID), config["target_column_id"], col_val, config["target_column_type"])
+    print(f"Found {len(all_canvas_course_items)} Canvas courses on Monday.com to process.")
+
+    universal_ta_users = []
+    for ta_data in ta_accounts:
+        ta_user = find_canvas_teacher(ta_data)
+        if not ta_user:
+            print(f"INFO: Universal TA user {ta_data['email']} not found. Attempting to create.")
+            try:
+                ta_user = create_canvas_user(ta_data, role='teacher')
+            except Exception as e:
+                print(f"ERROR: Failed to create universal TA {ta_data['email']}: {e}")
+                ta_user = None
+        if ta_user:
+            universal_ta_users.append(ta_user)
+        else:
+            print(f"WARNING: Could not find or create universal TA {ta_data['email']}. They will not be enrolled.")
+
+    if not universal_ta_users:
+        print("WARNING: No universal TA users available for enrollment. Skipping universal TA sync.")
+
+    for i, canvas_item in enumerate(all_canvas_course_items, 1):
+        canvas_item_id = int(canvas_item['id'])
+        canvas_item_name = canvas_item['name']
+        print(f"\n===== Processing Canvas Course {i}/{len(all_canvas_course_items)}: '{canvas_item_name}' (Monday ID: {canvas_item_id}) =====")
+
+        column_values = {cv['id']: cv for cv in canvas_item.get('column_values', [])}
+        canvas_course_id_val = column_values.get(CANVAS_COURSE_ID_COLUMN_ID, {}).get('text')
+        
+        if not canvas_course_id_val:
+            print(f"  WARNING: Canvas Course ID not found for Monday item {canvas_item_id}. Skipping teacher/TA sync for this course.")
+            continue
+
+        canvas_course_id = int(canvas_course_id_val)
+
+        if universal_ta_users:
+            print("  -> Ensuring TA accounts are enrolled...")
+            for ta_user in universal_ta_users:
+                if not dry_run:
+                    enroll_status = enroll_teacher_in_course(canvas_course_id, ta_user, role='TaEnrollment')
+                    print(f"    -> Enrollment status for {ta_user.name} ({ta_user.id}) in course {canvas_course_id}: {enroll_status}")
+                else:
+                    print(f"  DRY RUN: Would enroll universal TA {ta_user.name} ({ta_user.id}) in course {canvas_course_id} as TA.")
+
+        print("  -> Syncing assigned teachers...")
+        linked_staff_ids = get_linked_ids_from_connect_column_value(column_values.get(CANVAS_TO_STAFF_CONNECT_COLUMN_ID, {}).get('value'))
+        
+        if linked_staff_ids:
+            for staff_monday_id in linked_staff_ids:
+                staff_details_query = f"""
+                    query {{
+                        items (ids: [{staff_monday_id}]) {{
+                            name
+                            column_values(ids: ["{ALL_STAFF_EMAIL_COLUMN_ID}", "{ALL_STAFF_SIS_ID_COLUMN_ID}", "{ALL_STAFF_CANVAS_ID_COLUMN}", "{ALL_STAFF_INTERNAL_ID_COLUMN}"]) {{
+                                id text
+                            }}
+                        }}
+                    }}
+                """
+                staff_result = execute_monday_graphql(staff_details_query)
+                if staff_result and staff_result.get('data', {}).get('items'):
+                    staff_item = staff_result['data']['items'][0]
+                    staff_name = staff_item.get('name')
+                    staff_col_map = {cv['id']: cv.get('text') for cv in staff_item.get('column_values', [])}
+                    
+                    teacher_details = {
+                        'name': staff_name,
+                        'email': staff_col_map.get(ALL_STAFF_EMAIL_COLUMN_ID),
+                        'sis_id': staff_col_map.get(ALL_STAFF_SIS_ID_COLUMN_ID),
+                        'canvas_id': staff_col_map.get(ALL_STAFF_CANVAS_ID_COLUMN),
+                        'internal_id': staff_col_map.get(ALL_STAFF_INTERNAL_ID_COLUMN)
+                    }
+                    if teacher_details['email']:
+                        print(f"    Attempting to enroll teacher: {teacher_details['name']} ({teacher_details['email']})")
+                        if not dry_run:
+                            enroll_status = enroll_teacher_in_course(canvas_course_id, teacher_details, role='TeacherEnrollment')
+                            print(f"    -> Enrollment status for {teacher_details['name']}: {enroll_status}")
+                    else:
+                        print(f"    WARNING: Teacher {staff_name} (Monday ID: {staff_monday_id}) missing email. Skipping enrollment.")
+                else:
+                    print(f"    WARNING: Could not retrieve details for staff ID {staff_monday_id}. Skipping enrollment.")
+        else:
+            print("  INFO: No specific teachers linked on Monday.com for this Canvas course.")
+
+        if not dry_run:
+            time.sleep(2)
+
+    print("\n======================================================")
+    print("=== CANVAS TEACHER AND TA SYNC FINISHED          ===")
+    print("======================================================")
 
 # ==============================================================================
-# FLASK WEB APP
+# 4. SCRIPT EXECUTION
 # ==============================================================================
-app = Flask(__name__)
-
-@app.route('/monday-webhooks', methods=['POST'])
-def monday_unified_webhooks():
-    data = request.get_json()
-    if 'challenge' in data: return jsonify({'challenge': data['challenge']})
-    event = data.get('event', {})
-    board_id, col_id, webhook_type = str(event.get('boardId')), event.get('columnId'), event.get('type')
-    parent_board_id = str(event.get('parentItemBoardId')) if event.get('parentItemBoardId') else None
-    if board_id == PLP_BOARD_ID and webhook_type == "update_column_value":
-        if col_id == PLP_CANVAS_SYNC_COLUMN_ID:
-            process_canvas_full_sync_from_status.delay(event)
-            return jsonify({"message": "Canvas Full Sync queued."}), 202
-        if col_id in [c.strip() for c in PLP_ALL_CLASSES_CONNECT_COLUMNS_STR.split(',')]:
-            process_canvas_delta_sync_from_course_change.delay(event)
-            return jsonify({"message": "Canvas Delta Sync queued."}), 202
-    if parent_board_id == HS_ROSTER_BOARD_ID and col_id == HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID:
-        process_plp_course_sync_webhook.delay(event)
-        return jsonify({"message": "PLP Course Sync queued."}), 202
-    if board_id == MASTER_STUDENT_BOARD_ID and col_id in MASTER_STUDENT_PEOPLE_COLUMNS:
-        process_master_student_person_sync_webhook.delay(event)
-        return jsonify({"message": "Master Student Person Sync queued."}), 202
-    if board_id == SPED_STUDENTS_BOARD_ID and col_id in SPED_STUDENTS_PEOPLE_COLUMN_MAPPING:
-        process_sped_students_person_sync_webhook.delay(event)
-        return jsonify({"message": "SpEd Students Person Sync queued."}), 202
-    if board_id == CANVAS_BOARD_ID and col_id == CANVAS_TO_STAFF_CONNECT_COLUMN_ID:
-        process_teacher_enrollment_webhook.delay(event)
-        return jsonify({"message": "Canvas Teacher Enrollment queued."}), 202
-    for rule in LOG_CONFIGS:
-        if str(rule.get("trigger_board_id")) == board_id:
-            if (webhook_type == "update_column_value" and rule.get("trigger_column_id") == col_id) or \
-               (webhook_type == "create_pulse" and not rule.get("trigger_column_id")):
-                 process_general_webhook.delay(event, rule)
-                 return jsonify({"message": f"General task '{rule.get('log_type')}' queued."}), 202
-    return jsonify({"status": "ignored"}), 200
-
-@app.route('/')
-def home():
-    return "Consolidated Webhook Handler is running!", 200
-
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
+    PERFORM_INITIAL_CLEANUP = False
+    DRY_RUN = False
+    TARGET_USER_NAME = "Sarah Bruce"
+
+    print("======================================================")
+    print("=== STARTING NIGHTLY DELTA SYNC SCRIPT           ===")
+    print("======================================================")
+    if DRY_RUN:
+        print("\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+        print("!!!               DRY RUN MODE IS ON               !!!")
+        print("!!!  No actual changes will be made to your data.  !!!")
+        print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+    db = None
+    cursor = None
+    try:
+        print("INFO: Connecting to the database...")
+        ssl_opts = {'ssl_ca': 'ca.pem', 'ssl_verify_cert': True}
+        db = mysql.connector.connect( host=DB_HOST, user=DB_USER, password=DB_PASSWORD, database=DB_NAME, port=int(DB_PORT), **ssl_opts )
+        cursor = db.cursor()
+        print("INFO: Fetching last sync times for processed students...")
+        cursor.execute("SELECT student_id, last_synced_at, canvas_id FROM processed_students")
+        processed_map = {row[0]: {'last_synced': row[1], 'canvas_id': row[2]} for row in cursor.fetchall()}
+        print(f"INFO: Found {len(processed_map)} students in the database.")
+        print("INFO: Finding creator ID for subitem management...")
+        creator_id = get_user_id(TARGET_USER_NAME)
+        if not creator_id: raise Exception(f"Halting script: Target user '{TARGET_USER_NAME}' could not be found.")
+        print("INFO: Fetching all PLP board items from Monday.com...")
+        all_plp_items = get_all_board_items(PLP_BOARD_ID)
+        print("INFO: Filtering for new or updated students on PLP Board...")
+        items_to_process = []
+        for item in all_plp_items:
+            item_id = int(item['id'])
+            updated_at = parse_flexible_timestamp(item['updated_at'])
+            sync_data = processed_map.get(item_id)
+            last_synced = sync_data['last_synced'] if sync_data else None
+            if last_synced: last_synced = last_synced.replace(tzinfo=timezone.utc)
+            if not last_synced or updated_at > last_synced:
+                items_to_process.append(item)
+        total_to_process = len(items_to_process)
+        print(f"INFO: Found {total_to_process} PLP students that are new or have been updated.")
+        
+        for i, plp_item in enumerate(items_to_process, 1):
+            plp_item_id = int(plp_item['id'])
+            print(f"\n===== Processing Student {i}/{total_to_process} (PLP ID: {plp_item_id}) =====")
+            try:
+                print("--- Phase 0: Syncing Special Enrollments (Jumpstart/Study Hall) ---")
+                process_student_special_enrollments(plp_item, cursor, dry_run=DRY_RUN)
+                print("--- Phase 1: Checking for and syncing HS Roster ---")
+                hs_roster_connect_val = get_column_value(plp_item_id, int(PLP_BOARD_ID), PLP_TO_HS_ROSTER_CONNECT_COLUMN)
+                hs_roster_ids = get_linked_ids_from_connect_column_value(hs_roster_connect_val.get('value')) if hs_roster_connect_val else set()
+                if hs_roster_ids:
+                    hs_roster_item_id = list(hs_roster_ids)[0]
+                    hs_roster_item_object = get_all_board_items(HS_ROSTER_BOARD_ID, item_ids=[hs_roster_item_id])
+                    if hs_roster_item_object:
+                        hs_roster_item_object = hs_roster_item_object[0]
+                        run_hs_roster_sync_for_student(hs_roster_item_object, dry_run=DRY_RUN)
+                    else:
+                        print(f"WARNING: Could not fetch HS Roster item object for ID {hs_roster_item_id}")
+                else:
+                    print("INFO: No HS Roster item linked. Skipping Phase 1.")
+                print("--- Phase 2: Syncing PLP to Canvas ---")
+                run_plp_sync_for_student(plp_item_id, creator_id, cursor, dry_run=DRY_RUN)
+                if not DRY_RUN:
+                    print(f"INFO: Sync successful. Updating timestamp for PLP item {plp_item_id}.")
+                    update_query = ''' INSERT INTO processed_students (student_id, last_synced_at) VALUES (%s, NOW()) ON DUPLICATE KEY UPDATE last_synced_at = NOW() '''
+                    cursor.execute(update_query, (plp_item_id,))
+                    db.commit()
+            except Exception as e:
+                print(f"FATAL ERROR processing PLP item {plp_item_id}: {e}")
+
+        print("\n======================================================")
+        print("=== STARTING FINAL RECONCILIATION RUN          ===")
+        print("======================================================")
+        total_all_students = len(all_plp_items)
+        print(f"INFO: Reconciling subitems for all {total_all_students} students...")
+        for i, plp_item in enumerate(all_plp_items, 1):
+            plp_item_id = int(plp_item['id'])
+            print(f"\n===== Reconciling Student {i}/{total_all_students} (PLP ID: {plp_item_id}) =====")
+            try:
+                reconcile_subitems(plp_item_id, creator_id, cursor, dry_run=DRY_RUN)
+                if not DRY_RUN:
+                    print(f"INFO: Reconciliation successful. Updating timestamp for PLP item {plp_item_id}.")
+                    update_query = ''' INSERT INTO processed_students (student_id, last_synced_at) VALUES (%s, NOW()) ON DUPLICATE KEY UPDATE last_synced_at = NOW() '''
+                    cursor.execute(update_query, (plp_item_id,))
+                    db.commit()
+            except Exception as e:
+                print(f"FATAL ERROR during reconciliation for PLP item {plp_item_id}: {e}")
+        
+        # --- NEW PHASE 3: Sync Teachers and TAs to Canvas Courses ---
+        print("\n--- Phase 3: Syncing Canvas Teachers and TAs ---")
+        sync_canvas_teachers_and_tas(cursor, dry_run=DRY_RUN)
+
+    except Exception as e:
+        print(f"A critical error occurred: {e}")
+    finally:
+        if cursor: cursor.close()
+        if db and db.is_connected():
+            db.close()
+            print("\nINFO: Database connection closed.")
+    print("\n======================================================")
+    print("=== SCRIPT FINISHED                                ===")
+    print("======================================================")
