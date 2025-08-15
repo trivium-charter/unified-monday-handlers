@@ -592,28 +592,49 @@ def process_plp_course_sync_webhook(event_data):
     downstream_event = {'pulseId': plp_item_id, 'columnId': target_plp_col_id, 'value': updated_val, 'previousValue': original_val, 'userId': event_data.get('userId')}
     process_canvas_delta_sync_from_course_change.delay(downstream_event)
 
+# In app.py, replace the entire process_master_student_person_sync_webhook function
+
 @celery_app.task(name='app.process_master_student_person_sync_webhook')
 def process_master_student_person_sync_webhook(event_data):
     master_item_id, trigger_column_id, user_id = event_data.get('pulseId'), event_data.get('columnId'), event_data.get('userId')
     current_value_raw, previous_value_raw = event_data.get('value'), event_data.get('previousValue')
+    
+    # === START FIX: CHECK IF THERE WAS AN ACTUAL CHANGE ===
+    current_ids = get_people_ids_from_value(current_value_raw)
+    previous_ids = get_people_ids_from_value(previous_value_raw)
+
+    # If the set of people is the same as before, do nothing.
+    if current_ids == previous_ids:
+        print(f"INFO: People column for item {master_item_id} was updated, but no change was made. Skipping.")
+        return
+    # === END FIX ===
+
     mappings = MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS.get(trigger_column_id)
     if not mappings: return
+
     for target in mappings["targets"]:
         linked_ids = get_linked_items_from_board_relation(master_item_id, int(MASTER_STUDENT_BOARD_ID), target["connect_column_id"])
         for linked_id in linked_ids:
             update_people_column(linked_id, int(target["board_id"]), target["target_column_id"], current_value_raw, target["target_column_type"])
+    
     plp_target = next((t for t in mappings["targets"] if str(t.get("board_id")) == str(PLP_BOARD_ID)), None)
     if not plp_target: return
+    
     plp_linked_ids = get_linked_items_from_board_relation(master_item_id, int(MASTER_STUDENT_BOARD_ID), plp_target["connect_column_id"])
     if not plp_linked_ids: return
+    
     plp_item_id = list(plp_linked_ids)[0]
+    
     ENTRY_TYPE_COLUMN_ID = "entry_type__1"
     staff_change_values = {ENTRY_TYPE_COLUMN_ID: {"labels": ["Staff Change"]}}
+    
     col_name, changer, date = mappings.get("name", "Staff"), get_user_name(user_id) or "automation", datetime.now().strftime('%Y-%m-%d')
-    current_ids, previous_ids = get_people_ids_from_value(current_value_raw), get_people_ids_from_value(previous_value_raw)
+    
+    # This logic now only runs if there was a real change
     for p_id in (current_ids - previous_ids):
         name = get_user_name(p_id)
         if name: create_subitem(plp_item_id, f"{col_name} changed to {name} on {date} by {changer}", column_values=staff_change_values)
+
     for p_id in (previous_ids - current_ids):
         name = get_user_name(p_id)
         if name: create_subitem(plp_item_id, f"Removed {name} from {col_name} on {date} by {changer}", column_values=staff_change_values)
