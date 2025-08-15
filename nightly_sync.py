@@ -60,6 +60,12 @@ SPECIAL_COURSE_CANVAS_IDS = { "Jumpstart": 10069, "ACE Study Hall": 10128, "Conn
 TA_SUB_EMAIL = "sub@triviumcharter.org"
 TA_AIDE_EMAIL = "aide@triviumcharter.org"
 
+# <<< ADDED FROM app.py: Configuration variables for teacher sync
+ALL_STAFF_EMAIL_COLUMN_ID = os.environ.get("ALL_STAFF_EMAIL_COLUMN_ID")
+ALL_STAFF_SIS_ID_COLUMN_ID = os.environ.get("ALL_STAFF_SIS_ID_COLUMN_ID")
+ALL_STAFF_CANVAS_ID_COLUMN = "text_mktg7h6"
+ALL_STAFF_INTERNAL_ID_COLUMN = "text_mkthjxht"
+
 try:
     PLP_CATEGORY_TO_CONNECT_COLUMN_MAP = json.loads(os.environ.get("PLP_CATEGORY_TO_CONNECT_COLUMN_MAP", "{}"))
     MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS = json.loads(os.environ.get("MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS", "{}"))
@@ -142,6 +148,16 @@ def get_user_name(user_id):
     result = execute_monday_graphql(query)
     try: return result['data']['users'][0].get('name')
     except (TypeError, KeyError, IndexError): return None
+
+# <<< ADDED FROM app.py
+def get_roster_teacher_name(master_student_id):
+    tor_val = get_column_value(master_student_id, int(MASTER_STUDENT_BOARD_ID), MASTER_STUDENT_TOR_COLUMN_ID)
+    if tor_val and tor_val.get('value'):
+        tor_ids = get_people_ids_from_value(tor_val['value'])
+        if tor_ids:
+            tor_full_name = get_user_name(list(tor_ids)[0])
+            if tor_full_name: return tor_full_name.split()[-1]
+    return "Orientation" # Default value for nightly sync
 
 def get_column_value(item_id, board_id, column_id):
     if not item_id or not column_id: return None
@@ -299,7 +315,8 @@ def find_canvas_teacher(teacher_details):
     return None
 
 
-def create_canvas_user(user_details, role='student', db_cursor=None): # Add db_cursor as an argument
+# <<< BUG FIX: Added db_cursor argument to pass to find_canvas_user in exception
+def create_canvas_user(user_details, role='student', db_cursor=None):
     canvas_api = initialize_canvas_api()
     if not canvas_api: return None
     try:
@@ -308,7 +325,7 @@ def create_canvas_user(user_details, role='student', db_cursor=None): # Add db_c
             'user': {'name': user_details['name'], 'terms_of_use': True},
             'pseudonym': {
                 'unique_id': user_details['email'],
-                'sis_user_id': user_details.get('sis_id') or user_details['email'],
+                'sis_user_id': user_details.get('sis_id') or user_details.get('ssid') or user_details['email'],
                 'login_id': user_details['email'],
                 'authentication_provider_id': '112'
             },
@@ -325,9 +342,10 @@ def create_canvas_user(user_details, role='student', db_cursor=None): # Add db_c
         if ("sis_user_id" in str(e) and "is already in use" in str(e)) or \
            ("unique_id" in str(e) and "ID already in use" in str(e)):
             print(f"INFO: User creation failed because ID is in use. Attempting to find existing user.")
-            # Pass the db_cursor here
+            # <<< BUG FIX: Pass the db_cursor to the fallback function
             return find_canvas_teacher(user_details) if role == 'teacher' else find_canvas_user(user_details, db_cursor)
         raise
+
 
 def update_user_ssid(user, new_ssid):
     try:
@@ -382,6 +400,43 @@ def enroll_user_in_course(course_id, user_id, role='StudentEnrollment'):
         print(f"ERROR: Failed to enroll user {user_id} with role {role} in course {course_id}. Details: {e}")
         return "Failed"
 
+# <<< ADDED FROM app.py
+def unenroll_student_from_course(course_id, student_details):
+    canvas_api = initialize_canvas_api()
+    if not canvas_api: return False
+    user = find_canvas_user(student_details, cursor=None) # No cursor needed for unenrollment
+    if not user: return True
+    try:
+        course = canvas_api.get_course(course_id)
+        for enrollment in course.get_enrollments(user_id=user.id):
+            if enrollment.role == 'StudentEnrollment':
+                enrollment.deactivate(task='conclude')
+        return True
+    except CanvasException as e:
+        print(f"ERROR: Canvas unenrollment failed: {e}")
+        return False
+
+# <<< ADDED FROM app.py
+def enroll_teacher_in_course(course_id, teacher_details, role='TeacherEnrollment'):
+    canvas_api = initialize_canvas_api()
+    if not canvas_api: return "Failed: Canvas API not initialized"
+    teacher_name = teacher_details.get('name', teacher_details.get('email', 'Unknown'))
+    user_to_enroll = find_canvas_teacher(teacher_details)
+    if not user_to_enroll:
+        print(f"INFO: Teacher '{teacher_name}' not found. Attempting to create.")
+        try:
+            # Note: db_cursor is not available in this context, but it's a fallback.
+            user_to_enroll = create_canvas_user(teacher_details, role='teacher', db_cursor=None)
+        except Exception as e:
+            return f"Failed: Could not find or create teacher '{teacher_name}'. Error: {e}"
+    if not user_to_enroll: return f"Failed: User '{teacher_name}' not found in Canvas with provided IDs."
+    try:
+        course = canvas_api.get_course(course_id)
+        course.enroll_user(user_to_enroll, role, enrollment_state='active', notify=False)
+        return "Success"
+    except ResourceDoesNotExist: return f"Failed: Course with ID '{course_id}' not found in Canvas."
+    except Conflict: return "Already Enrolled"
+    except CanvasException as e: return f"Failed: {e}"
 
 def get_study_hall_section_from_grade(grade_text):
     if not grade_text: return "General"
@@ -421,10 +476,11 @@ def enroll_or_create_and_enroll(course_id, section_id, student_details, db_curso
     if not user:
         print(f"INFO: Canvas user not found for {student_details['email']}. Attempting to create new user.")
         try:
-        # Pass the cursor to create_canvas_user
+            # <<< BUG FIX: Pass the db_cursor to create_canvas_user
             user = create_canvas_user(student_details, db_cursor=db_cursor)
         except CanvasException as e:
-            if "sis_user_id" in str(e) and "is already in use" in str(e):
+            if ("sis_user_id" in str(e) and "is already in use" in str(e)) or \
+               ("unique_id" in str(e) and "ID already in use" in str(e)):
                 print(f"INFO: User creation failed because SIS ID is in use. Searching again for existing user.")
                 user = find_canvas_user(student_details, db_cursor)
             else:
@@ -861,7 +917,7 @@ def sync_canvas_teachers_and_tas(db_cursor, dry_run=True):
         if not ta_user:
             print(f"INFO: Universal TA user {ta_data['email']} not found. Attempting to create.")
             try:
-                ta_user = create_canvas_user(ta_data, role='teacher')
+                ta_user = create_canvas_user(ta_data, role='teacher', db_cursor=db_cursor)
             except Exception as e:
                 print(f"ERROR: Failed to create universal TA {ta_data['email']}: {e}")
                 ta_user = None
@@ -966,10 +1022,11 @@ if __name__ == '__main__':
     cursor = None
     try:
         print("INFO: Connecting to the database...")
-        ssl_opts = {'ssl_ca': 'ca.pem', 'ssl_verify_cert': True}
-        db = mysql.connector.connect( host=DB_HOST, user=DB_USER, password=DB_PASSWORD, database=DB_NAME, port=int(DB_PORT), **ssl_opts )
+        # ssl_opts = {'ssl_ca': 'ca.pem', 'ssl_verify_cert': True} # Enable for production with SSL
+        db = mysql.connector.connect( host=DB_HOST, user=DB_USER, password=DB_PASSWORD, database=DB_NAME, port=int(DB_PORT) ) #, **ssl_opts 
         cursor = db.cursor()
         print("INFO: Fetching last sync times for processed students...")
+        cursor.execute("CREATE TABLE IF NOT EXISTS processed_students (student_id BIGINT PRIMARY KEY, last_synced_at TIMESTAMP, canvas_id VARCHAR(255))")
         cursor.execute("SELECT student_id, last_synced_at, canvas_id FROM processed_students")
         processed_map = {row[0]: {'last_synced': row[1], 'canvas_id': row[2]} for row in cursor.fetchall()}
         print(f"INFO: Found {len(processed_map)} students in the database.")
@@ -1019,6 +1076,9 @@ if __name__ == '__main__':
                     db.commit()
             except Exception as e:
                 print(f"FATAL ERROR processing PLP item {plp_item_id}: {e}")
+
+        # Always run Teacher/TA Sync after student processing
+        sync_canvas_teachers_and_tas(cursor, dry_run=DRY_RUN)
 
         print("\n======================================================")
         print("=== STARTING FINAL RECONCILIATION RUN          ===")
