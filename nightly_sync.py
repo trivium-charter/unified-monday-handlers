@@ -57,6 +57,10 @@ PLP_JUMPSTART_SH_CONNECT_COLUMN = "board_relation_mktqp08q"
 MASTER_STUDENT_GRADE_COLUMN_ID = "color_mksy8hcw"
 SPECIAL_COURSE_MONDAY_IDS = { "Jumpstart": 9717398551, "ACE Study Hall": 9717398779, "Connect English Study Hall": 9717398717, "Connect Math Study Hall": 9717398109, "Prep Math and ELA Study Hall": 9717398063, "EL Support Study Hall": 10046 }
 SPECIAL_COURSE_CANVAS_IDS = { "Jumpstart": 10069, "ACE Study Hall": 10128, "Connect English Study Hall": 10109, "Connect Math Study Hall": 9966, "Prep Math and ELA Study Hall": 9960, "EL Support Study Hall": 10046 }
+# Staff Email IDs for TA role - IMPORTANT: These should be actual Canvas login IDs/emails
+TA_SUB_EMAIL = "sub@triviumcharter.org"
+TA_AIDE_EMAIL = "aide@triviumcharter.org"
+
 try:
     PLP_CATEGORY_TO_CONNECT_COLUMN_MAP = json.loads(os.environ.get("PLP_CATEGORY_TO_CONNECT_COLUMN_MAP", "{}"))
     MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS = json.loads(os.environ.get("MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS", "{}"))
@@ -95,7 +99,9 @@ def get_item_name(item_id, board_id):
     except (TypeError, KeyError, IndexError): return None
 
 def get_all_board_items(board_id, item_ids=None, group_id=None):
-    all_items = []; cursor = None
+    """Fetches all item IDs from a board, handling pagination."""
+    all_items = []
+    cursor = None
     items_page_source = f'groups(ids: ["{group_id}"]) {{ items_page' if group_id else 'items_page'
     id_filter = f'query_params: {{ids: {json.dumps(item_ids)}}}' if item_ids else ""
     while True:
@@ -243,23 +249,94 @@ def find_canvas_user(student_details, cursor):
         except (ResourceDoesNotExist, CanvasException): pass
     return None
 
-def create_canvas_user(student_details):
+def find_canvas_teacher(teacher_details):
+    """
+    Finds a Canvas user who is a teacher based on provided details.
+    Prioritizes Canvas ID, then SIS ID, then email.
+    """
+    canvas_api = initialize_canvas_api()
+    if not canvas_api: return None
+
+    if teacher_details.get('canvas_id'):
+        try:
+            user = canvas_api.get_user(teacher_details['canvas_id'])
+            if 'TeacherEnrollment' in [e.type for e in user.get_enrollments()]:
+                return user
+        except (ResourceDoesNotExist, ValueError):
+            pass # Not found by Canvas ID, try other methods
+
+    if teacher_details.get('sis_id'):
+        try:
+            user = canvas_api.get_user(teacher_details['sis_id'], 'sis_user_id')
+            if 'TeacherEnrollment' in [e.type for e in user.get_enrollments()]:
+                return user
+        except ResourceDoesNotExist:
+            pass # Not found by SIS ID, try other methods
+
+    if teacher_details.get('email'):
+        try:
+            user = canvas_api.get_user(teacher_details['email'], 'login_id')
+            if 'TeacherEnrollment' in [e.type for e in user.get_enrollments()]:
+                return user
+        except ResourceDoesNotExist:
+            pass # Not found by login_id, try search
+
+    # Fallback to general search by email if other methods fail
+    if teacher_details.get('email'):
+        try:
+            users = [u for u in canvas_api.get_account(1).get_users(search_term=teacher_details['email'])]
+            for user in users:
+                if 'TeacherEnrollment' in [e.type for e in user.get_enrollments()]:
+                    return user
+            if len(users) == 1: # If only one user found by search, and no specific teacher enrollment, return it.
+                return users[0]
+        except (ResourceDoesNotExist, CanvasException):
+            pass
+    return None
+
+
+def create_canvas_user(user_details, role='student'):
     canvas_api = initialize_canvas_api()
     if not canvas_api: return None
     try:
-        account = canvas_api.get_account(1)
-        user_payload = { 'user': {'name': student_details['name'], 'terms_of_use': True}, 'pseudonym': {'unique_id': student_details['email'], 'sis_user_id': student_details['ssid']}, }
-        return account.create_user(**user_payload)
+        account = canvas_api.get_account(1) # Assuming account ID 1 for user creation
+        user_payload = {
+            'user': {'name': user_details['name'], 'terms_of_use': True},
+            'pseudonym': {
+                'unique_id': user_details['email'],
+                'sis_user_id': user_details.get('sis_id') or user_details['email'],
+                'login_id': user_details['email'],
+                'authentication_provider_id': '112' # Default provider, adjust if needed
+            },
+            'communication_channel': {
+                'type': 'email',
+                'address': user_details['email'],
+                'skip_confirmation': True
+            }
+        }
+        new_user = account.create_user(**user_payload)
+        return new_user
     except CanvasException as e:
-        print(f"ERROR: Canvas user creation failed: {e}")
-        raise
+        print(f"ERROR: Canvas user creation failed for {user_details['email']}: {e}")
+        # Handle specific errors like "ID already in use"
+        if ("sis_user_id" in str(e) and "is already in use" in str(e)) or \
+           ("unique_id" in str(e) and "ID already in use" in str(e)):
+            print(f"INFO: User creation failed because ID is in use. Attempting to find existing user.")
+            # If creation fails due to existing ID, try to find the user.
+            # This is a fallback, ideally find_canvas_user would catch it first.
+            return find_canvas_teacher(user_details) if role == 'teacher' else find_canvas_user(user_details, None) # Pass None for cursor as it's not available here.
+        raise # Re-raise other unexpected Canvas exceptions
+
 
 def update_user_ssid(user, new_ssid):
     try:
         canvas_api = initialize_canvas_api()
-        logins = canvas_api.get_user(user.id).get_logins()
+        # Fetch the full user object to ensure get_logins() is available
+        full_user_obj = canvas_api.get_user(user.id)
+        logins = full_user_obj.get_logins()
         if logins:
-            logins[0].edit(login={'sis_user_id': new_ssid})
+            login_to_update = logins[0]
+            login_to_update.edit(login={'sis_user_id': new_ssid})
             return True
         return False
     except (CanvasException, AttributeError) as e:
@@ -291,6 +368,50 @@ def enroll_student_in_section(course_id, user_id, section_id):
     except CanvasException as e:
         print(f"ERROR: Failed to enroll user {user_id}: {e}")
         return "Failed"
+
+def enroll_teacher_in_course(course_id, user_details, role='TeacherEnrollment'):
+    """
+    Enrolls a user (teacher or TA) in a Canvas course.
+    Attempts to find the user first, creates if not found.
+    """
+    canvas_api = initialize_canvas_api()
+    if not canvas_api: return "Failed: Canvas API not initialized"
+
+    user_to_enroll = find_canvas_teacher(user_details) # Use find_canvas_teacher for all staff roles
+    if not user_to_enroll:
+        print(f"INFO: Canvas user not found for {user_details.get('email')}. Attempting to create new user.")
+        try:
+            user_to_enroll = create_canvas_user(user_details, role='teacher') # Create as a teacher if not found
+        except CanvasException as e:
+            print(f"ERROR: A critical error occurred during user creation for {user_details.get('email')}: {e}")
+            return "Failed: User creation issue"
+
+    if not user_to_enroll:
+        print(f"ERROR: Could not find or create Canvas user for {user_details.get('name')}. Enrollment failed.")
+        return "Failed: User not found/created"
+
+    try:
+        course = canvas_api.get_course(course_id)
+        # Check if already enrolled with the correct role to avoid Conflict errors
+        existing_enrollments = course.get_enrollments(user_id=user_to_enroll.id)
+        for enrollment in existing_enrollments:
+            if enrollment.type == role:
+                return f"Already Enrolled as {role}"
+
+        enrollment = course.enroll_user(
+            user_to_enroll,
+            role, # 'TeacherEnrollment' or 'TaEnrollment'
+            enrollment_state='active',
+            notify=False
+        )
+        return "Success" if enrollment else "Failed"
+    except ResourceDoesNotExist:
+        return f"Failed: Course with ID '{course_id}' not found in Canvas."
+    except Conflict:
+        return f"Already Enrolled as {role}" # Should be caught by the loop above, but as a fallback
+    except CanvasException as e:
+        return f"Failed: {e}"
+
 
 def get_study_hall_section_from_grade(grade_text):
     if not grade_text: return "General"
@@ -576,8 +697,6 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details,
     elif action == "unenroll":
         subitem_title = f"Removed {category_name} '{class_name}'"
         print(f"  INFO: Unenrolling student and creating log: '{subitem_title}'")
-        # In a nightly sync, we should only create the subitem if the unenrollment actually happens in Canvas.
-        # However, for consistency with previous logic, we'll create it regardless if dry_run is False.
         if not dry_run:
             linked_canvas_item_ids = get_linked_items_from_board_relation(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
             if linked_canvas_item_ids:
@@ -682,16 +801,146 @@ def reconcile_subitems(plp_item_id, creator_id, db_cursor, dry_run=True):
                     else:
                         print(f"    INFO: Subitem '{expected_staff_subitem}' already exists.")
 
+def sync_canvas_teachers_and_tas(db_cursor, dry_run=True):
+    """
+    Syncs teachers from Monday.com Canvas Courses board to Canvas,
+    and adds fixed TA accounts to all Canvas classes.
+    """
+    print("\n======================================================")
+    print("=== STARTING CANVAS TEACHER AND TA SYNC          ===")
+    print("======================================================")
+
+    # Define fixed TA accounts
+    ta_accounts = [
+        {'name': 'Substitute TA', 'email': TA_SUB_EMAIL, 'sis_id': 'TA-SUB'},
+        {'name': 'Aide TA', 'email': TA_AIDE_EMAIL, 'sis_id': 'TA-AIDE'}
+    ]
+
+    # 1. Get all active Canvas Courses from Monday.com's CANVAS_BOARD_ID
+    # Query for items on the Canvas board that have a Canvas Course ID
+    canvas_course_items_query = f"""
+        query {{
+            boards(ids: {CANVAS_BOARD_ID}) {{
+                items_page(limit: 500) {{
+                    cursor
+                    items {{
+                        id name
+                        column_values(ids: ["{CANVAS_COURSE_ID_COLUMN_ID}", "{CANVAS_TO_STAFF_CONNECT_COLUMN_ID}"]) {{
+                            id text value
+                        }}
+                    }}
+                }}
+            }}
+        }}
+    """
+    all_canvas_course_items = []
+    cursor = None
+    while True:
+        current_query = canvas_course_items_query
+        if cursor:
+            current_query = current_query.replace("limit: 500)", f"limit: 500, cursor: \"{cursor}\")")
+        
+        result = execute_monday_graphql(current_query)
+        if not result or 'data' not in result or not result['data']['boards']:
+            break
+
+        page_info = result['data']['boards'][0]['items_page']
+        all_canvas_course_items.extend(page_info['items'])
+        cursor = page_info.get('cursor')
+        if not cursor:
+            break
+        print(f"  Fetched {len(all_canvas_course_items)} Canvas course items...")
+
+    print(f"Found {len(all_canvas_course_items)} Canvas courses on Monday.com to process.")
+
+    for i, canvas_item in enumerate(all_canvas_course_items, 1):
+        canvas_item_id = int(canvas_item['id'])
+        canvas_item_name = canvas_item['name']
+        print(f"\n===== Processing Canvas Course {i}/{len(all_canvas_course_items)}: '{canvas_item_name}' (Monday ID: {canvas_item_id}) =====")
+
+        column_values = {cv['id']: cv for cv in canvas_item.get('column_values', [])}
+        canvas_course_id_val = column_values.get(CANVAS_COURSE_ID_COLUMN_ID, {}).get('text')
+        
+        if not canvas_course_id_val:
+            print(f"  WARNING: Canvas Course ID not found for Monday item {canvas_item_id}. Skipping teacher/TA sync for this course.")
+            continue
+
+        canvas_course_id = int(canvas_course_id_val) # Ensure it's an integer for Canvas API
+
+        # 2. Sync Assigned Teachers
+        print("  -> Syncing assigned teachers...")
+        linked_staff_ids = get_linked_ids_from_connect_column_value(column_values.get(CANVAS_TO_STAFF_CONNECT_COLUMN_ID, {}).get('value'))
+        
+        if linked_staff_ids:
+            for staff_monday_id in linked_staff_ids:
+                staff_details_query = f"""
+                    query {{
+                        items (ids: [{staff_monday_id}]) {{
+                            name
+                            column_values(ids: ["{ALL_STAFF_EMAIL_COLUMN_ID}", "{ALL_STAFF_SIS_ID_COLUMN_ID}", "{ALL_STAFF_CANVAS_ID_COLUMN}", "{ALL_STAFF_INTERNAL_ID_COLUMN}"]) {{
+                                id text
+                            }}
+                        }}
+                    }}
+                """
+                staff_result = execute_monday_graphql(staff_details_query)
+                if staff_result and staff_result.get('data', {}).get('items'):
+                    staff_item = staff_result['data']['items'][0]
+                    staff_name = staff_item.get('name')
+                    staff_col_map = {cv['id']: cv.get('text') for cv in staff_item.get('column_values', [])}
+                    
+                    teacher_details = {
+                        'name': staff_name,
+                        'email': staff_col_map.get(ALL_STAFF_EMAIL_COLUMN_ID),
+                        'sis_id': staff_col_map.get(ALL_STAFF_SIS_ID_COLUMN_ID),
+                        'canvas_id': staff_col_map.get(ALL_STAFF_CANVAS_ID_COLUMN),
+                        'internal_id': staff_col_map.get(ALL_STAFF_INTERNAL_ID_COLUMN)
+                    }
+                    if teacher_details['email']:
+                        print(f"    Attempting to enroll teacher: {teacher_details['name']} ({teacher_details['email']})")
+                        if not dry_run:
+                            enroll_status = enroll_teacher_in_course(canvas_course_id, teacher_details, role='TeacherEnrollment')
+                            print(f"    -> Enrollment status for {teacher_details['name']}: {enroll_status}")
+                    else:
+                        print(f"    WARNING: Teacher {staff_name} (Monday ID: {staff_monday_id}) missing email. Skipping enrollment.")
+                else:
+                    print(f"    WARNING: Could not retrieve details for staff ID {staff_monday_id}. Skipping enrollment.")
+        else:
+            print("  INFO: No teachers linked on Monday.com for this Canvas course.")
+
+        # 3. Add fixed TA accounts
+        print("  -> Ensuring TA accounts are enrolled...")
+        for ta_data in ta_accounts:
+            print(f"    Attempting to enroll TA: {ta_data['name']} ({ta_data['email']})")
+            if not dry_run:
+                enroll_status = enroll_teacher_in_course(canvas_course_id, ta_data, role='TaEnrollment')
+                print(f"    -> Enrollment status for {ta_data['name']}: {enroll_status}")
+        
+        if not dry_run:
+            time.sleep(2) # Small delay between courses to avoid rate limits
+
+    print("\n======================================================")
+    print("=== CANVAS TEACHER AND TA SYNC FINISHED          ===")
+    print("======================================================")
+
+
 # ==============================================================================
 # 4. SCRIPT EXECUTION
 # ==============================================================================
 if __name__ == '__main__':
     PERFORM_INITIAL_CLEANUP = False
-    DRY_RUN = False
-    TARGET_USER_NAME = "Sarah Bruce"
+    DRY_RUN = False # Set to True for testing without making changes
+    TARGET_USER_NAME = "Sarah Bruce" # User for subitem creation logs
+
     print("======================================================")
     print("=== STARTING NIGHTLY DELTA SYNC SCRIPT           ===")
     print("======================================================")
+    if DRY_RUN:
+        print("\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+        print("!!!               DRY RUN MODE IS ON               !!!")
+        print("!!!  No actual changes will be made to your data.  !!!")
+        print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+
     db = None
     cursor = None
     try:
@@ -767,6 +1016,11 @@ if __name__ == '__main__':
                     db.commit()
             except Exception as e:
                 print(f"FATAL ERROR during reconciliation for PLP item {plp_item_id}: {e}")
+        
+        # --- NEW PHASE 3: Sync Teachers and TAs to Canvas Courses ---
+        print("\n--- Phase 3: Syncing Canvas Teachers and TAs ---")
+        sync_canvas_teachers_and_tas(cursor, dry_run=DRY_RUN)
+
     except Exception as e:
         print(f"A critical error occurred: {e}")
     finally:
