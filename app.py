@@ -216,15 +216,30 @@ def create_monday_update(item_id, update_text):
     mutation = f"mutation {{ create_update (item_id: {item_id}, body: {formatted_text}) {{ id }} }}"
     return execute_monday_graphql(mutation)
 
+# In app.py, replace the entire check_if_subitem_exists_by_name function
+
 def check_if_subitem_exists_by_name(parent_item_id, subitem_name_to_check):
+    """
+    Checks if a subitem for a specific course already exists,
+    regardless of its category prefix (e.g., 'Added Math' vs 'Added ACE').
+    """
+    # Extracts the core course name from the full subitem title
+    # Example: "Added Math 'Algebra 1'" becomes "'Algebra 1'"
+    try:
+        course_part = "'" + subitem_name_to_check.split("'", 1)[1]
+    except IndexError:
+        course_part = subitem_name_to_check # Fallback for unexpected formats
+
     query = f'query {{ items(ids:[{parent_item_id}]) {{ subitems {{ name }} }} }}'
     result = execute_monday_graphql(query)
     try:
         subitems = result['data']['items'][0]['subitems']
         for subitem in subitems:
-            if subitem.get('name') == subitem_name_to_check:
+            # Check if any existing subitem ENDS WITH the same course part
+            if subitem.get('name', '').endswith(course_part):
                 return True
-    except (KeyError, IndexError, TypeError): pass
+    except (KeyError, IndexError, TypeError):
+        pass
     return False
 
 # ==============================================================================
@@ -567,23 +582,72 @@ def process_canvas_delta_sync_from_course_change(event_data):
     for class_id in removed_ids:
         manage_class_enrollment("unenroll", plp_item_id, class_id, student_details, category_name, subitem_cols=curriculum_change_values)
 
+# In app.py, replace the entire process_plp_course_sync_webhook function
+
 @celery_app.task(name='app.process_plp_course_sync_webhook')
 def process_plp_course_sync_webhook(event_data):
     subitem_id, parent_item_id = event_data.get('pulseId'), event_data.get('parentItemId')
-    current, previous = (get_linked_ids_from_connect_column_value(event_data.get(k)) for k in ['value', 'previousValue'])
-    if not (current - previous) and not (previous - current): return
-    dropdown_label = (get_column_value(subitem_id, int(event_data.get('boardId')), HS_ROSTER_SUBITEM_DROPDOWN_COLUMN_ID) or {}).get('text')
-    target_plp_col_id = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get(dropdown_label)
-    if not target_plp_col_id: return
+    
+    # === START FIX: LOGIC TO HANDLE MULTIPLE TAGS ===
+    
+    # Get the raw value of the tags column, which contains IDs
+    tags_column_value = get_column_value(subitem_id, int(event_data.get('boardId')), HS_ROSTER_SUBITEM_DROPDOWN_COLUMN_ID)
+    if not tags_column_value or not tags_column_value.get('value'):
+        print("INFO: No subject tags found on the HS Roster subitem. Skipping.")
+        return
+    
+    # Extract the text labels for each tag
+    try:
+        # The 'value' of a tags column is a JSON object with a 'tag_ids' key
+        tag_ids = tags_column_value['value'].get('tag_ids', [])
+        # The 'text' contains a comma-separated string of the tag names
+        tag_labels = [tag.strip() for tag in tags_column_value.get('text', '').split(',')]
+    except (AttributeError, KeyError):
+        print("ERROR: Could not parse tags from the Subject column.")
+        return
+
+    if not tag_labels:
+        print("INFO: No subject tag labels found. Skipping.")
+        return
+
+    # Get the courses linked in the subitem
+    current_courses = get_linked_ids_from_connect_column_value(event_data.get('value'))
+    previous_courses = get_linked_ids_from_connect_column_value(event_data.get('previousValue'))
+    added_courses = current_courses - previous_courses
+    removed_courses = previous_courses - current_courses
+
+    if not added_courses and not removed_courses:
+        return # No change in linked courses
+
+    # Get the linked PLP item
     plp_linked_ids = get_linked_items_from_board_relation(parent_item_id, int(HS_ROSTER_BOARD_ID), HS_ROSTER_MAIN_ITEM_to_PLP_CONNECT_COLUMN_ID)
-    if not plp_linked_ids: return
+    if not plp_linked_ids:
+        print(f"ERROR: Could not find a PLP item linked to HS Roster item {parent_item_id}.")
+        return
     plp_item_id = list(plp_linked_ids)[0]
-    original_val = (get_column_value(plp_item_id, int(PLP_BOARD_ID), target_plp_col_id) or {}).get('value')
-    for course_id in (current - previous): update_connect_board_column(plp_item_id, int(PLP_BOARD_ID), target_plp_col_id, course_id, "add")
-    for course_id in (previous - current): update_connect_board_column(plp_item_id, int(PLP_BOARD_ID), target_plp_col_id, course_id, "remove")
-    updated_val = (get_column_value(plp_item_id, int(PLP_BOARD_ID), target_plp_col_id) or {}).get('value')
-    downstream_event = {'pulseId': plp_item_id, 'columnId': target_plp_col_id, 'value': updated_val, 'previousValue': original_val, 'userId': event_data.get('userId')}
+
+    # Process each tag found in the Subject column
+    for dropdown_label in tag_labels:
+        target_plp_col_id = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get(dropdown_label)
+        if not target_plp_col_id:
+            print(f"WARNING: Tag '{dropdown_label}' does not map to a PLP column. Skipping.")
+            continue
+
+        print(f"INFO: Syncing courses to PLP column for category: '{dropdown_label}'")
+        
+        # Add the newly added courses to the correct PLP column
+        for course_id in added_courses:
+            update_connect_board_column(plp_item_id, int(PLP_BOARD_ID), target_plp_col_id, course_id, "add")
+            
+        # Remove the deleted courses from the correct PLP column
+        for course_id in removed_courses:
+            update_connect_board_column(plp_item_id, int(PLP_BOARD_ID), target_plp_col_id, course_id, "remove")
+
+    # After all updates, trigger a single delta-sync for the PLP item
+    downstream_event = {'pulseId': plp_item_id, 'userId': event_data.get('userId')}
     process_canvas_delta_sync_from_course_change.delay(downstream_event)
+    
+    # === END FIX ===
 
 @celery_app.task(name='app.process_master_student_person_sync_webhook')
 def process_master_student_person_sync_webhook(event_data):
