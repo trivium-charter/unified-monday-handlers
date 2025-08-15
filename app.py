@@ -631,20 +631,7 @@ def run_hs_roster_sync_for_student(hs_roster_item, dry_run=True):
             time.sleep(1)
 
 def manage_class_enrollment(action, plp_item_id, class_item_id, student_details, category_name, creator_id, db_cursor, dry_run=True):
-    class_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)) or f"Item {class_item_id}"
-    linked_canvas_item_ids = get_linked_items_from_board_relation(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
-    
-    if not linked_canvas_item_ids:
-        print(f"  INFO: '{class_name}' is a non-Canvas course or no link exists. Skipping enrollment action.")
-        return
-
-    canvas_item_id = list(linked_canvas_item_ids)[0]
-    course_id_val = get_column_value(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_COURSE_ID_COLUMN_ID)
-    canvas_course_id = course_id_val.get('text') if course_id_val else None
-
-    if not canvas_course_id:
-        print(f"  WARNING: Canvas Course ID not found for course '{class_name}'. Skipping enrollment action.")
-        return
+    # ... existing code to get course ID and check for non-Canvas courses ...
 
     if action == "enroll":
         print(f"  ACTION: Pushing enrollment for '{class_name}' to Canvas.")
@@ -670,9 +657,7 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details,
                 
                 section_teacher = create_section_if_not_exists(canvas_course_id, roster_teacher_name)
                 if section_teacher:
-                    if not dry_run: 
-                        enrollment_status = enroll_student_in_section(canvas_course_id, student_canvas_user.id, section_teacher.id)
-                        print(f"      -> Roster Section Enrollment Status: {enrollment_status}")
+                    if not dry_run: enroll_student_in_section(canvas_course_id, student_canvas_user.id, section_teacher.id)
 
                 if int(class_item_id) in ROSTER_AND_CREDIT_COURSES:
                     course_item_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)) or ""
@@ -680,9 +665,7 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details,
                     
                     section_credit = create_section_if_not_exists(canvas_course_id, credit_section_name)
                     if section_credit:
-                        if not dry_run:
-                            enrollment_status = enroll_student_in_section(canvas_course_id, student_canvas_user.id, section_credit.id)
-                            print(f"      -> Credit Section Enrollment Status: {enrollment_status}")
+                        if not dry_run: enroll_student_in_section(canvas_course_id, student_canvas_user.id, section_credit.id)
             else:
                 # --- ORIGINAL LOGIC FOR NORMAL COURSES ---
                 m_series_val = get_column_value(plp_item_id, int(PLP_BOARD_ID), PLP_M_SERIES_LABELS_COLUMN)
