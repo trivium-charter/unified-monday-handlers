@@ -71,18 +71,13 @@ except json.JSONDecodeError:
 # ==============================================================================
 MONDAY_HEADERS = { "Authorization": MONDAY_API_KEY, "Content-Type": "application/json", "API-Version": "2023-10" }
 
-# === FIX #1: ADDED RETRY LOGIC TO MONDAY.COM API CALLS ===
 def execute_monday_graphql(query):
-    max_retries = 4
-    delay = 2
+    max_retries = 4; delay = 2
     for attempt in range(max_retries):
         try:
             response = requests.post(MONDAY_API_URL, json={"query": query}, headers=MONDAY_HEADERS, timeout=30)
             if response.status_code == 429:
-                print(f"WARNING: Rate limit hit. Waiting {delay} seconds...")
-                time.sleep(delay)
-                delay *= 2
-                continue
+                print(f"WARNING: Rate limit hit. Waiting {delay} seconds..."); time.sleep(delay); delay *= 2; continue
             response.raise_for_status()
             json_response = response.json()
             if "errors" in json_response:
@@ -91,12 +86,8 @@ def execute_monday_graphql(query):
             return json_response
         except requests.exceptions.RequestException as e:
             print(f"WARNING: Monday HTTP Request Error: {e}. Retrying...")
-            if attempt < max_retries - 1:
-                time.sleep(delay)
-                delay *= 2
-            else:
-                print("ERROR: Final retry failed.")
-                return None
+            if attempt < max_retries - 1: time.sleep(delay); delay *= 2
+            else: print("ERROR: Final retry failed."); return None
     return None
 
 def get_user_email(user_id):
@@ -293,7 +284,7 @@ def create_canvas_user(student_details):
         return new_user
     except CanvasException as e:
         print(f"ERROR: Canvas user creation failed: {e}")
-        raise # Re-raise exception so the calling function can handle it
+        raise
 
 def update_user_ssid(user, new_ssid):
     try:
@@ -385,7 +376,9 @@ def get_teacher_person_value_from_canvas_board(canvas_item_id):
     person_col_val = get_column_value(staff_item_id, int(ALL_STAFF_BOARD_ID), ALL_STAFF_PERSON_COLUMN_ID)
     return person_col_val.get('value') if person_col_val else None
 
-# === FIX #2: REPLACE THE enroll_or_create_and_enroll FUNCTION ===
+# ==============================================================================
+# CORE LOGIC FUNCTIONS
+# ==============================================================================
 def enroll_or_create_and_enroll(course_id, section_id, student_details):
     canvas_api = initialize_canvas_api()
     if not canvas_api: return "Failed"
@@ -414,48 +407,6 @@ def enroll_or_create_and_enroll(course_id, section_id, student_details):
     print(f"ERROR: Could not find or create a Canvas user for {student_details.get('name')}. Final enrollment failed.")
     return "Failed"
 
-# ==============================================================================
-# CELERY APP DEFINITION
-# ==============================================================================
-broker_use_ssl_config = {'ssl_cert_reqs': 'required'} if CELERY_BROKER_URL.startswith('rediss://') else {}
-celery_app = Celery('tasks', broker=CELERY_BROKER_URL, backend=CELERY_RESULT_BACKEND, include=[__name__])
-if broker_use_ssl_config:
-    celery_app.conf.broker_use_ssl = broker_use_ssl_config
-    celery_app.conf.redis_backend_use_ssl = broker_use_ssl_config
-celery_app.conf.timezone = 'America/Los_Angeles'
-# === FIX #3: ADDED SOCKET KEEPALIVE TO CELERY CONFIG ===
-celery_app.conf.broker_transport_options = { 'health_check_interval': 30, 'socket_keepalive': True, }
-celery_app.conf.broker_connection_retry_on_startup = True
-
-# ==============================================================================
-# CELERY TASKS
-# ==============================================================================
-@celery_app.task(name='app.process_general_webhook')
-def process_general_webhook(event_data, config_rule):
-    log_type, params = config_rule.get("log_type"), config_rule.get("params", {})
-    board_id, item_id = event_data.get('boardId'), event_data.get('pulseId')
-    if log_type == "NameReformat":
-        target_col_id, current_name = params.get('target_text_column_id'), get_item_name(item_id, board_id)
-        if not all([target_col_id, current_name]): return
-        parts = current_name.strip().split()
-        if len(parts) >= 2: change_column_value_generic(board_id, item_id, target_col_id, f"{parts[-1]}, {' '.join(parts[:-1])}")
-    elif log_type == "CopyToItemName":
-        source_col_id = params.get('source_column_id')
-        if not source_col_id: return
-        column_data = get_column_value(item_id, board_id, source_col_id)
-        if column_data and column_data.get('text'): update_item_name(item_id, board_id, column_data['text'])
-    elif log_type == "ConnectBoardChange":
-        current_ids, previous_ids = get_linked_ids_from_connect_column_value(event_data.get('value')), get_linked_ids_from_connect_column_value(event_data.get('previousValue'))
-        changer, date, prefix, linked_board_id = get_user_name(event_data.get('userId')) or "automation", datetime.now().strftime('%Y-%m-%d'), params.get('subitem_name_prefix', ''), params.get('linked_board_id')
-        subitem_cols = {params['entry_type_column_id']: {"labels": [str(params['subitem_entry_type'])]}} if params.get('entry_type_column_id') and params.get('subitem_entry_type') else {}
-        for link_id in (current_ids - previous_ids):
-            name = get_item_name(link_id, linked_board_id)
-            if name: create_subitem(item_id, f"Added {prefix} '{name}' on {date} by {changer}", subitem_cols)
-        for link_id in (previous_ids - current_ids):
-            name = get_item_name(link_id, linked_board_id)
-            if name: create_subitem(item_id, f"Removed {prefix} '{name}' on {date} by {changer}", subitem_cols)
-
-# === FIX #4: get_student_details_from_plp RETURNS MASTER_ID ===
 def get_student_details_from_plp(plp_item_id):
     query = f"""query {{ items (ids: [{plp_item_id}]) {{ column_values (ids: ["{PLP_TO_MASTER_STUDENT_CONNECT_COLUMN}"]) {{ value }} }} }}"""
     result = execute_monday_graphql(query)
@@ -478,7 +429,6 @@ def get_student_details_from_plp(plp_item_id):
         print(f"ERROR: Could not parse student details from Monday.com response: {e}")
         return None
 
-# === FIX #5: CORRECTED SUBITEM NAMING AND DUPLICATE CHECK ===
 def manage_class_enrollment(action, plp_item_id, class_item_id, student_details, category_name, subitem_cols=None):
     subitem_cols = subitem_cols or {}
     all_courses_item_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)) or f"Item {class_item_id}"
@@ -524,7 +474,43 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details,
             if canvas_course_id: unenroll_student_from_course(canvas_course_id, student_details)
         create_subitem(plp_item_id, subitem_title, column_values=subitem_cols)
 
-# === FIX #6: CORRECTED THE FULL SYNC TASK ===
+# ==============================================================================
+# CELERY APP DEFINITION & TASKS
+# ==============================================================================
+broker_use_ssl_config = {'ssl_cert_reqs': 'required'} if CELERY_BROKER_URL.startswith('rediss://') else {}
+celery_app = Celery('tasks', broker=CELERY_BROKER_URL, backend=CELERY_RESULT_BACKEND, include=[__name__])
+if broker_use_ssl_config:
+    celery_app.conf.broker_use_ssl = broker_use_ssl_config
+    celery_app.conf.redis_backend_use_ssl = broker_use_ssl_config
+celery_app.conf.timezone = 'America/Los_Angeles'
+celery_app.conf.broker_transport_options = { 'health_check_interval': 30, 'socket_keepalive': True, }
+celery_app.conf.broker_connection_retry_on_startup = True
+
+@celery_app.task(name='app.process_general_webhook')
+def process_general_webhook(event_data, config_rule):
+    log_type, params = config_rule.get("log_type"), config_rule.get("params", {})
+    board_id, item_id = event_data.get('boardId'), event_data.get('pulseId')
+    if log_type == "NameReformat":
+        target_col_id, current_name = params.get('target_text_column_id'), get_item_name(item_id, board_id)
+        if not all([target_col_id, current_name]): return
+        parts = current_name.strip().split()
+        if len(parts) >= 2: change_column_value_generic(board_id, item_id, target_col_id, f"{parts[-1]}, {' '.join(parts[:-1])}")
+    elif log_type == "CopyToItemName":
+        source_col_id = params.get('source_column_id')
+        if not source_col_id: return
+        column_data = get_column_value(item_id, board_id, source_col_id)
+        if column_data and column_data.get('text'): update_item_name(item_id, board_id, column_data['text'])
+    elif log_type == "ConnectBoardChange":
+        current_ids, previous_ids = get_linked_ids_from_connect_column_value(event_data.get('value')), get_linked_ids_from_connect_column_value(event_data.get('previousValue'))
+        changer, date, prefix, linked_board_id = get_user_name(event_data.get('userId')) or "automation", datetime.now().strftime('%Y-%m-%d'), params.get('subitem_name_prefix', ''), params.get('linked_board_id')
+        subitem_cols = {params['entry_type_column_id']: {"labels": [str(params['subitem_entry_type'])]}} if params.get('entry_type_column_id') and params.get('subitem_entry_type') else {}
+        for link_id in (current_ids - previous_ids):
+            name = get_item_name(link_id, linked_board_id)
+            if name: create_subitem(item_id, f"Added {prefix} '{name}' on {date} by {changer}", subitem_cols)
+        for link_id in (previous_ids - current_ids):
+            name = get_item_name(link_id, linked_board_id)
+            if name: create_subitem(item_id, f"Removed {prefix} '{name}' on {date} by {changer}", subitem_cols)
+
 @celery_app.task(name='app.process_canvas_full_sync_from_status')
 def process_canvas_full_sync_from_status(event_data):
     if event_data.get('value', {}).get('label', {}).get('text', '') != PLP_CANVAS_SYNC_STATUS_VALUE: return
