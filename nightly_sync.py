@@ -315,23 +315,49 @@ def parse_flexible_timestamp(ts_string):
 # ==============================================================================
 # 3. CORE LOGIC FUNCTIONS
 # ==============================================================================
+# In nightly_sync.py, replace the entire enroll_or_create_and_enroll function
+
 def enroll_or_create_and_enroll(course_id, section_id, student_details):
+    """
+    Finds or creates a user, handles cases where the user already exists,
+    ensures the full user object is loaded, and then proceeds with enrollment.
+    """
     canvas_api = initialize_canvas_api()
-    if not canvas_api: return "Failed"
+    if not canvas_api:
+        return "Failed"
+
     user = find_canvas_user(student_details)
+    
     if not user:
-        print(f"INFO: Canvas user not found for {student_details['email']}. Creating new user.")
-        user = create_canvas_user(student_details)
+        print(f"INFO: Canvas user not found for {student_details['email']}. Attempting to create new user.")
+        try:
+            # Attempt to create the user
+            user = create_canvas_user(student_details)
+        except CanvasException as e:
+            # === START FIX: HANDLE "SIS ID ALREADY IN USE" ERROR ===
+            # This is the new, smarter logic. If user creation fails because the SIS ID is taken,
+            # it means the user already exists. We now immediately try to find them again.
+            if "sis_user_id" in str(e) and "is already in use" in str(e):
+                print(f"INFO: User creation failed because SIS ID is in use. Searching again for existing user.")
+                user = find_canvas_user(student_details)
+            else:
+                # If it's a different error, we log it and stop.
+                print(f"ERROR: A critical error occurred during user creation: {e}")
+                user = None
+            # === END FIX ===
+
     if user:
         try:
-            full_user = canvas_api.get_user(user.id)
+            full_user = canvas_api.get_user(user.id) # Re-fetch the full user object
             if student_details.get('ssid') and hasattr(full_user, 'sis_user_id') and full_user.sis_user_id != student_details['ssid']:
                 update_user_ssid(full_user, student_details['ssid'])
             return enroll_student_in_section(course_id, full_user.id, section_id)
         except CanvasException as e:
             print(f"ERROR: Could not retrieve full user object or enroll for user ID {user.id}: {e}")
             return "Failed"
-    return "Failed: User not found/created"
+
+    print(f"ERROR: Could not find or create a Canvas user for {student_details.get('name')}. Final enrollment failed.")
+    return "Failed"
 
 def get_student_details_from_plp(plp_item_id):
     print(f"  [DIAGNOSTIC] Starting detail fetch for PLP item: {plp_item_id}")
