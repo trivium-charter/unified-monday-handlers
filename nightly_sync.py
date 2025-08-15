@@ -96,6 +96,14 @@ def execute_monday_graphql(query):
                 return None
     return None
 
+def get_item_name(item_id, board_id):
+    query = f"query {{ items(ids: [{item_id}]) {{ name }} }}"
+    result = execute_monday_graphql(query)
+    try:
+        return result['data']['items'][0].get('name')
+    except (TypeError, KeyError, IndexError):
+        return None
+
 def get_all_board_items(board_id, item_ids=None, group_id=None):
     all_items = []
     cursor = None
@@ -128,12 +136,14 @@ def get_user_id(user_name):
                 return user['id']
     except (KeyError, IndexError, TypeError): pass
     return None
+
 def get_user_name(user_id):
     if user_id is None: return None
     query = f"query {{ users(ids: [{user_id}]) {{ name }} }}"
     result = execute_monday_graphql(query)
     try: return result['data']['users'][0].get('name')
     except (TypeError, KeyError, IndexError): return None
+
 def get_column_value(item_id, board_id, column_id):
     if not item_id or not column_id: return None
     query = f'query {{ items (ids: [{item_id}]) {{ column_values (ids: ["{column_id}"]) {{ text value }} }} }}'
@@ -143,6 +153,7 @@ def get_column_value(item_id, board_id, column_id):
         parsed_value = json.loads(col_val.get('value')) if col_val.get('value') else None
         return {'value': parsed_value, 'text': col_val.get('text')}
     except (TypeError, KeyError, IndexError, json.JSONDecodeError): return None
+
 def get_linked_ids_from_connect_column_value(value_data):
     if not value_data: return set()
     try:
@@ -150,9 +161,11 @@ def get_linked_ids_from_connect_column_value(value_data):
         if "linkedPulseIds" in parsed_value: return {int(item["linkedPulseId"]) for item in parsed_value["linkedPulseIds"]}
     except (json.JSONDecodeError, TypeError): pass
     return set()
+
 def get_linked_items_from_board_relation(item_id, board_id, connect_column_id):
     column_data = get_column_value(item_id, board_id, connect_column_id)
     return get_linked_ids_from_connect_column_value(column_data.get('value')) if column_data else set()
+
 def get_people_ids_from_value(value_data):
     if not value_data: return set()
     if isinstance(value_data, str):
@@ -160,6 +173,7 @@ def get_people_ids_from_value(value_data):
         except json.JSONDecodeError: return set()
     persons_and_teams = value_data.get('personsAndTeams', [])
     return {person['id'] for person in persons_and_teams if 'id' in person and person.get('kind') == 'person'}
+
 def create_subitem(parent_item_id, subitem_name, column_values=None):
     column_values_json = json.dumps(column_values or {})
     mutation = f'mutation {{ create_subitem (parent_item_id: {parent_item_id}, item_name: {json.dumps(subitem_name)}, column_values: {json.dumps(column_values_json)}) {{ id }} }}'
@@ -168,6 +182,7 @@ def create_subitem(parent_item_id, subitem_name, column_values=None):
         return result['data']['create_subitem'].get('id')
     print(f"WARNING: Failed to create subitem '{subitem_name}'.")
     return None
+
 def bulk_add_to_connect_column(item_id, board_id, connect_column_id, course_ids_to_add):
     query_current = f'query {{ items(ids:[{item_id}]) {{ column_values(ids:["{connect_column_id}"]) {{ value }} }} }}'
     result = execute_monday_graphql(query_current)
@@ -181,6 +196,7 @@ def bulk_add_to_connect_column(item_id, board_id, connect_column_id, course_ids_
     mutation = f'mutation {{ change_column_value (board_id: {board_id}, item_id: {item_id}, column_id: "{connect_column_id}", value: {graphql_value}) {{ id }} }}'
     print(f"    SYNCING: Adding {len(course_ids_to_add - current_linked_items)} courses to column {connect_column_id} on PLP item {item_id}.")
     return execute_monday_graphql(mutation) is not None
+
 def update_people_column(item_id, board_id, people_column_id, new_people_value, target_column_type):
     parsed_new_value = new_people_value if isinstance(new_people_value, dict) else json.loads(new_people_value) if isinstance(new_people_value, str) else {}
     persons_and_teams = parsed_new_value.get('personsAndTeams', [])
@@ -193,8 +209,10 @@ def update_people_column(item_id, board_id, people_column_id, new_people_value, 
     else: return False
     mutation = f"""mutation {{ change_column_value(board_id: {board_id}, item_id: {item_id}, column_id: "{people_column_id}", value: {graphql_value}) {{ id }} }}"""
     return execute_monday_graphql(mutation) is not None
+
 def initialize_canvas_api():
     return Canvas(CANVAS_API_URL, CANVAS_API_KEY) if CANVAS_API_URL and CANVAS_API_KEY else None
+
 def find_canvas_user(student_details):
     canvas_api = initialize_canvas_api()
     if not canvas_api: return None
@@ -217,6 +235,7 @@ def find_canvas_user(student_details):
             if len(users) == 1: return users[0]
         except (ResourceDoesNotExist, CanvasException): pass
     return None
+
 def create_canvas_user(student_details):
     canvas_api = initialize_canvas_api()
     if not canvas_api: return None
@@ -226,7 +245,8 @@ def create_canvas_user(student_details):
         return account.create_user(**user_payload)
     except CanvasException as e:
         print(f"ERROR: Canvas user creation failed: {e}")
-        raise # Re-raise the exception so the calling function knows it failed
+        raise # Re-raise exception so the calling function can handle it
+
 def update_user_ssid(user, new_ssid):
     try:
         logins = user.get_logins()
@@ -237,6 +257,7 @@ def update_user_ssid(user, new_ssid):
     except (CanvasException, AttributeError) as e:
         print(f"ERROR: Could not update SSID for user '{user.name}': {e}")
         return False
+
 def create_section_if_not_exists(course_id, section_name):
     canvas_api = initialize_canvas_api()
     if not canvas_api: return None
@@ -249,6 +270,7 @@ def create_section_if_not_exists(course_id, section_name):
     except CanvasException as e:
         print(f"ERROR: Canvas section creation/check failed: {e}")
         return None
+
 def enroll_student_in_section(course_id, user_id, section_id):
     canvas_api = initialize_canvas_api()
     if not canvas_api: return "Failed"
@@ -261,6 +283,7 @@ def enroll_student_in_section(course_id, user_id, section_id):
     except CanvasException as e:
         print(f"ERROR: Failed to enroll user {user_id}: {e}")
         return "Failed"
+
 def get_study_hall_section_from_grade(grade_text):
     if not grade_text: return "General"
     match = re.search(r'\d+', grade_text)
@@ -271,6 +294,7 @@ def get_study_hall_section_from_grade(grade_text):
     elif 6 <= grade_level <= 8: return "Middle School"
     elif 9 <= grade_level <= 12: return "High School"
     else: return "General"
+
 def check_if_subitem_exists(parent_item_id, subitem_name_to_check, creator_id):
     query = f'query {{ items(ids:[{parent_item_id}]) {{ subitems {{ name creator {{ id }} }} }} }}'
     result = execute_monday_graphql(query)
@@ -283,6 +307,7 @@ def check_if_subitem_exists(parent_item_id, subitem_name_to_check, creator_id):
                 return True
     except (KeyError, IndexError, TypeError): pass
     return False
+
 def parse_flexible_timestamp(ts_string):
     try: return datetime.strptime(ts_string, '%Y-%m-%dT%H:%M:%S.%fZ').replace(tzinfo=timezone.utc)
     except ValueError: return datetime.strptime(ts_string, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)
@@ -360,7 +385,6 @@ def get_student_details_from_plp(plp_item_id):
         print(f"  [DIAGNOSTIC] FAILED: Could not parse details from the Master Student board. Error: {e}")
         return None
 
-# === FIX: RESTORED THE process_student_special_enrollments FUNCTION ===
 def process_student_special_enrollments(plp_item, dry_run=True):
     plp_item_id = int(plp_item['id'])
     print(f"\n--- Processing Special Enrollments for: {plp_item['name']} (PLP ID: {plp_item_id}) ---")
@@ -390,7 +414,9 @@ def process_student_special_enrollments(plp_item, dry_run=True):
         print(f"  Processing Jumpstart enrollment, section: {tor_last_name}")
         if not dry_run:
             section = create_section_if_not_exists(jumpstart_canvas_id, tor_last_name)
-            if section: enroll_or_create_and_enroll(jumpstart_canvas_id, section.id, student_details)
+            if section:
+                result = enroll_or_create_and_enroll(jumpstart_canvas_id, section.id, student_details)
+                print(f"  -> Enrollment status: {result}")
     sh_section_name = get_study_hall_section_from_grade(grade_text)
     target_sh_name = "ACE Study Hall"
     target_sh_canvas_id = SPECIAL_COURSE_CANVAS_IDS.get(target_sh_name)
@@ -398,7 +424,9 @@ def process_student_special_enrollments(plp_item, dry_run=True):
         print(f"  Processing {target_sh_name} enrollment, section: {sh_section_name}")
         if not dry_run:
             section = create_section_if_not_exists(target_sh_canvas_id, sh_section_name)
-            if section: enroll_or_create_and_enroll(target_sh_canvas_id, section.id, student_details)
+            if section:
+                result = enroll_or_create_and_enroll(target_sh_canvas_id, section.id, student_details)
+                print(f"  -> Enrollment status: {result}")
 
 def run_hs_roster_sync_for_student(hs_roster_item, dry_run=True):
     parent_item_id = int(hs_roster_item['id'])
