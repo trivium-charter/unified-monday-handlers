@@ -584,23 +584,20 @@ def process_canvas_delta_sync_from_course_change(event_data):
 
 # In app.py, replace the entire process_plp_course_sync_webhook function
 
+# In app.py, replace the entire process_plp_course_sync_webhook function
+
 @celery_app.task(name='app.process_plp_course_sync_webhook')
 def process_plp_course_sync_webhook(event_data):
     subitem_id, parent_item_id = event_data.get('pulseId'), event_data.get('parentItemId')
     
-    # === START FIX: LOGIC TO HANDLE MULTIPLE TAGS ===
-    
     # Get the raw value of the tags column, which contains IDs
     tags_column_value = get_column_value(subitem_id, int(event_data.get('boardId')), HS_ROSTER_SUBITEM_DROPDOWN_COLUMN_ID)
-    if not tags_column_value or not tags_column_value.get('value'):
+    if not tags_column_value or not tags_column_value.get('text'):
         print("INFO: No subject tags found on the HS Roster subitem. Skipping.")
         return
     
     # Extract the text labels for each tag
     try:
-        # The 'value' of a tags column is a JSON object with a 'tag_ids' key
-        tag_ids = tags_column_value['value'].get('tag_ids', [])
-        # The 'text' contains a comma-separated string of the tag names
         tag_labels = [tag.strip() for tag in tags_column_value.get('text', '').split(',')]
     except (AttributeError, KeyError):
         print("ERROR: Could not parse tags from the Subject column.")
@@ -625,29 +622,19 @@ def process_plp_course_sync_webhook(event_data):
         print(f"ERROR: Could not find a PLP item linked to HS Roster item {parent_item_id}.")
         return
     plp_item_id = list(plp_linked_ids)[0]
-
+    
     # Process each tag found in the Subject column
-
-    # ... inside process_plp_course_sync_webhook function ...
     for dropdown_label in tag_labels:
         target_plp_col_id = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get(dropdown_label)
-    
-        # If the category is not found in the map, use the 'Other/Elective' column
+
+        # Route unmapped subjects to "Other/Elective"
         if not target_plp_col_id:
             target_plp_col_id = PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.get("Other/Elective")
             if not target_plp_col_id:
                 print(f"ERROR: No target column found for tag '{dropdown_label}' or 'Other/Elective'. Skipping.")
                 continue
             print(f"WARNING: Tag '{dropdown_label}' not mapped. Routing to 'Other/Elective' column.")
-    
-        # Add the newly added courses to the correct PLP column
-        for course_id in added_courses:
-            update_connect_board_column(plp_item_id, int(PLP_BOARD_ID), target_plp_col_id, course_id, "add")
-    
-        # Remove the deleted courses from the correct PLP column
-        for course_id in removed_courses:
-            update_connect_board_column(plp_item_id, int(PLP_BOARD_ID), target_plp_col_id, course_id, "remove")
-
+            
         print(f"INFO: Syncing courses to PLP column for category: '{dropdown_label}'")
         
         # Add the newly added courses to the correct PLP column
@@ -661,8 +648,6 @@ def process_plp_course_sync_webhook(event_data):
     # After all updates, trigger a single delta-sync for the PLP item
     downstream_event = {'pulseId': plp_item_id, 'userId': event_data.get('userId')}
     process_canvas_delta_sync_from_course_change.delay(downstream_event)
-    
-    # === END FIX ===
 
 @celery_app.task(name='app.process_master_student_person_sync_webhook')
 def process_master_student_person_sync_webhook(event_data):
