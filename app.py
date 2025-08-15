@@ -13,7 +13,6 @@ from canvasapi.exceptions import CanvasException, Conflict, ResourceDoesNotExist
 
 # ==============================================================================
 # CENTRALIZED CONFIGURATION
-# (No changes were needed here)
 # ==============================================================================
 MONDAY_API_KEY = os.environ.get("MONDAY_API_KEY")
 CANVAS_API_KEY = os.environ.get("CANVAS_API_KEY")
