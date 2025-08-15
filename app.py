@@ -123,7 +123,7 @@ def get_user_name(user_id):
     if result and 'data' in result and result['data'].get('users'):
         return result['data']['users'][0].get('name')
     return None
-    
+
 def get_roster_teacher_name(master_student_id):
     tor_val = get_column_value(master_student_id, int(MASTER_STUDENT_BOARD_ID), MASTER_STUDENT_TOR_COLUMN_ID)
     if tor_val and tor_val.get('value'):
@@ -351,7 +351,7 @@ def create_section_if_not_exists(course_id, section_name):
         existing_section = next((s for s in course.get_sections() if s.name.lower() == section_name.lower()), None)
         return existing_section or course.create_course_section(course_section={'name': section_name})
     except CanvasException as e:
-        print(f"ERROR: Canvas section creation/check failed: {e}")
+        print(f"ERROR: Canvas section creation failed: {e}")
         return None
 
 def enroll_student_in_section(course_id, user_id, section_id):
@@ -381,7 +381,7 @@ def unenroll_student_from_course(course_id, student_details):
         print(f"ERROR: Canvas unenrollment failed: {e}")
         return False
 
-def enroll_teacher_in_course(course_id, teacher_details, role='TeacherEnrollment'):
+def enroll_teacher_in_course(course_id, teacher_details):
     canvas_api = initialize_canvas_api()
     if not canvas_api: return "Failed: Canvas API not initialized"
     teacher_name = teacher_details.get('name', teacher_details.get('email', 'Unknown'))
@@ -389,7 +389,7 @@ def enroll_teacher_in_course(course_id, teacher_details, role='TeacherEnrollment
     if not user_to_enroll: return f"Failed: User '{teacher_name}' not found in Canvas with provided IDs."
     try:
         course = canvas_api.get_course(course_id)
-        course.enroll_user(user_to_enroll, role, enrollment_state='active', notify=False)
+        course.enroll_user(user_to_enroll, 'TeacherEnrollment', enrollment_state='active', notify=False)
         return "Success"
     except ResourceDoesNotExist: return f"Failed: Course with ID '{course_id}' not found in Canvas."
     except Conflict: return "Already Enrolled"
@@ -405,7 +405,6 @@ def get_teacher_person_value_from_canvas_board(canvas_item_id):
 # ==============================================================================
 # CORE LOGIC FUNCTIONS
 # ==============================================================================
-
 def enroll_or_create_and_enroll(course_id, section_id, student_details):
     canvas_api = initialize_canvas_api()
     if not canvas_api: return "Failed"
