@@ -96,6 +96,14 @@ def execute_monday_graphql(query):
                 return None
     return None
 
+def get_item_name(item_id, board_id):
+    query = f"query {{ items(ids: [{item_id}]) {{ name }} }}"
+    result = execute_monday_graphql(query)
+    try:
+        return result['data']['items'][0].get('name')
+    except (TypeError, KeyError, IndexError):
+        return None
+        
 def get_all_board_items(board_id, item_ids=None, group_id=None):
     all_items = []
     cursor = None
@@ -307,7 +315,6 @@ def parse_flexible_timestamp(ts_string):
 # ==============================================================================
 # 3. CORE LOGIC FUNCTIONS
 # ==============================================================================
-
 def enroll_or_create_and_enroll(course_id, section_id, student_details):
     canvas_api = initialize_canvas_api()
     if not canvas_api: return "Failed"
@@ -446,27 +453,7 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details,
         print(f"  INFO: Unenrolling student and creating log: '{subitem_title}'")
         create_subitem(plp_item_id, subitem_title, column_values=subitem_cols)
 
-def run_plp_sync_for_student(plp_item_id, creator_id, dry_run=True):
-    print(f"\n--- Processing PLP Item: {plp_item_id} ---")
-    student_details = get_student_details_from_plp(plp_item_id)
-    if not student_details: return
-    master_student_id = student_details.get('master_id')
-    if not master_student_id: return
-    curriculum_change_values = {PLP_SUBITEM_ENTRY_TYPE_COLUMN_ID: {"labels": ["Curriculum Change"]}}
-    print("INFO: Syncing class enrollments...")
-    class_id_to_category_map = {}
-    for category, column_id in PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.items():
-        for class_id in get_linked_items_from_board_relation(plp_item_id, int(PLP_BOARD_ID), column_id):
-            class_id_to_category_map[class_id] = category
-    if not class_id_to_category_map:
-        print("INFO: No classes to sync.")
-        return
-    for class_item_id, category_name in class_id_to_category_map.items():
-        class_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)) or f"Item {class_item_id}"
-        print(f"INFO: Processing class: '{class_name}'")
-        manage_class_enrollment("enroll", plp_item_id, class_item_id, student_details, category_name, creator_id, subitem_cols=curriculum_change_values, dry_run=dry_run)
-
-# === FIX: NEW, SMARTER TEACHER SYNC FUNCTION ===
+# === FIX: NEW, SMARTER TEACHER SYNC LOGIC ===
 def sync_teacher_assignments(master_student_id, plp_item_id, dry_run=True):
     print("ACTION: Syncing teacher assignments from Master Student board to PLP...")
     for source_col_id, mapping in MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS.items():
@@ -487,6 +474,27 @@ def sync_teacher_assignments(master_student_id, plp_item_id, dry_run=True):
                     update_people_column(plp_item_id, int(PLP_BOARD_ID), target_col_id, master_person_val.get('value'), target_col_type)
             else:
                 print(f"  -> No change needed for {mapping.get('name', 'Staff')}. Values are already in sync.")
+
+def run_plp_sync_for_student(plp_item_id, creator_id, dry_run=True):
+    print(f"\n--- Processing PLP Item: {plp_item_id} ---")
+    student_details = get_student_details_from_plp(plp_item_id)
+    if not student_details: return
+    master_student_id = student_details.get('master_id')
+    if not master_student_id: return
+    curriculum_change_values = {PLP_SUBITEM_ENTRY_TYPE_COLUMN_ID: {"labels": ["Curriculum Change"]}}
+    print("INFO: Syncing class enrollments...")
+    class_id_to_category_map = {}
+    for category, column_id in PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.items():
+        for class_id in get_linked_items_from_board_relation(plp_item_id, int(PLP_BOARD_ID), column_id):
+            class_id_to_category_map[class_id] = category
+    if not class_id_to_category_map:
+        print("INFO: No classes to sync.")
+    for class_item_id, category_name in class_id_to_category_map.items():
+        class_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)) or f"Item {class_item_id}"
+        print(f"INFO: Processing class: '{class_name}'")
+        manage_class_enrollment("enroll", plp_item_id, class_item_id, student_details, category_name, creator_id, subitem_cols=curriculum_change_values, dry_run=dry_run)
+    # === FIX: Teacher sync now happens LAST ===
+    sync_teacher_assignments(master_student_id, plp_item_id, dry_run=dry_run)
 
 def reconcile_subitems(plp_item_id, creator_id, dry_run=True):
     print(f"--- Reconciling All Subitems & Enrollments for PLP Item: {plp_item_id} ---")
@@ -542,6 +550,7 @@ def reconcile_subitems(plp_item_id, creator_id, dry_run=True):
                         if not dry_run: create_subitem(plp_item_id, expected_staff_subitem, column_values={PLP_SUBITEM_ENTRY_TYPE_COLUMN_ID: {"labels": ["Staff Change"]}})
                     else:
                         print(f"    INFO: Subitem '{expected_staff_subitem}' already exists.")
+
 # ==============================================================================
 # 4. SCRIPT EXECUTION
 # ==============================================================================
@@ -556,7 +565,6 @@ if __name__ == '__main__':
     cursor = None
     try:
         print("INFO: Connecting to the database...")
-        # Use a dictionary for SSL options for clarity
         ssl_opts = {'ssl_ca': 'ca.pem', 'ssl_verify_cert': True}
         db = mysql.connector.connect( host=DB_HOST, user=DB_USER, password=DB_PASSWORD, database=DB_NAME, port=int(DB_PORT), **ssl_opts )
         cursor = db.cursor()
@@ -585,10 +593,8 @@ if __name__ == '__main__':
             plp_item_id = int(plp_item['id'])
             print(f"\n===== Processing Student {i}/{total_to_process} (PLP ID: {plp_item_id}) =====")
             try:
-                # === FIX: Teacher sync is now the last step ===
                 print("--- Phase 0: Syncing Special Enrollments (Jumpstart/Study Hall) ---")
                 process_student_special_enrollments(plp_item, dry_run=DRY_RUN)
-                
                 print("--- Phase 1: Checking for and syncing HS Roster ---")
                 hs_roster_connect_val = get_column_value(plp_item_id, int(PLP_BOARD_ID), PLP_TO_HS_ROSTER_CONNECT_COLUMN)
                 hs_roster_ids = get_linked_ids_from_connect_column_value(hs_roster_connect_val.get('value')) if hs_roster_connect_val else set()
@@ -602,17 +608,8 @@ if __name__ == '__main__':
                         print(f"WARNING: Could not fetch HS Roster item object for ID {hs_roster_item_id}")
                 else:
                     print("INFO: No HS Roster item linked. Skipping Phase 1.")
-                    
                 print("--- Phase 2: Syncing PLP to Canvas ---")
                 run_plp_sync_for_student(plp_item_id, creator_id, dry_run=DRY_RUN)
-
-                print("--- Phase 3: Syncing Teacher Assignments ---")
-                student_details = get_student_details_from_plp(plp_item_id)
-                if student_details and student_details.get('master_id'):
-                    sync_teacher_assignments(student_details['master_id'], plp_item_id, dry_run=DRY_RUN)
-                else:
-                    print("WARNING: Cannot sync teachers because student details could not be fully loaded.")
-                
                 if not DRY_RUN:
                     print(f"INFO: Sync successful. Updating timestamp for PLP item {plp_item_id}.")
                     update_query = ''' INSERT INTO processed_students (student_id, last_synced_at) VALUES (%s, NOW()) ON DUPLICATE KEY UPDATE last_synced_at = NOW() '''
