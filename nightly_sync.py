@@ -299,7 +299,7 @@ def find_canvas_teacher(teacher_details):
     return None
 
 
-def create_canvas_user(user_details, role='student'):
+def create_canvas_user(user_details, role='student', db_cursor=None): # Add db_cursor as an argument
     canvas_api = initialize_canvas_api()
     if not canvas_api: return None
     try:
@@ -325,9 +325,9 @@ def create_canvas_user(user_details, role='student'):
         if ("sis_user_id" in str(e) and "is already in use" in str(e)) or \
            ("unique_id" in str(e) and "ID already in use" in str(e)):
             print(f"INFO: User creation failed because ID is in use. Attempting to find existing user.")
-            return find_canvas_teacher(user_details) if role == 'teacher' else find_canvas_user(user_details, None)
+            # Pass the db_cursor here
+            return find_canvas_teacher(user_details) if role == 'teacher' else find_canvas_user(user_details, db_cursor)
         raise
-
 
 def update_user_ssid(user, new_ssid):
     try:
@@ -421,7 +421,8 @@ def enroll_or_create_and_enroll(course_id, section_id, student_details, db_curso
     if not user:
         print(f"INFO: Canvas user not found for {student_details['email']}. Attempting to create new user.")
         try:
-            user = create_canvas_user(student_details)
+        # Pass the cursor to create_canvas_user
+            user = create_canvas_user(student_details, db_cursor=db_cursor)
         except CanvasException as e:
             if "sis_user_id" in str(e) and "is already in use" in str(e):
                 print(f"INFO: User creation failed because SIS ID is in use. Searching again for existing user.")
