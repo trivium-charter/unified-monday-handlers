@@ -912,49 +912,78 @@ def sync_canvas_teachers_and_tas(db_cursor, dry_run=True):
     print("=== STARTING CANVAS TEACHER AND TA SYNC          ===")
     print("======================================================")
 
+    # --- THIS PART STAYS COMMENTED OUT FOR TESTING ---
     # Define fixed TA accounts
     # ta_accounts = [
     #     {'name': 'Substitute TA', 'email': TA_SUB_EMAIL, 'sis_id': 'TA-SUB'},
     #     {'name': 'Aide TA', 'email': TA_AIDE_EMAIL, 'sis_id': 'TA-AIDE'}
     # ]
+    # --- END OF COMMENTED OUT BLOCK ---
 
+    # --- THIS PART MUST BE ACTIVE ---
     # 1. Get all active Canvas Courses from Monday.com's CANVAS_BOARD_ID
-    # ... (this part stays the same) ...
-    
+    canvas_course_items_query = f"""
+        query {{
+            boards(ids: {CANVAS_BOARD_ID}) {{
+                items_page(limit: 500) {{
+                    cursor
+                    items {{
+                        id name
+                        column_values(ids: ["{CANVAS_COURSE_ID_COLUMN_ID}", "{CANVAS_TO_STAFF_CONNECT_COLUMN_ID}"]) {{
+                            id text value
+                        }}
+                    }}
+                }}
+            }}
+        }}
+    """
+    all_canvas_course_items = []
+    cursor = None
+    while True:
+        current_query = canvas_course_items_query
+        if cursor:
+            current_query = current_query.replace("limit: 500)", f"limit: 500, cursor: \\"{cursor}\\")")
+        
+        result = execute_monday_graphql(current_query)
+        if not result or 'data' not in result or not result['data']['boards']:
+            break
+
+        page_info = result['data']['boards'][0]['items_page']
+        all_canvas_course_items.extend(page_info['items'])
+        cursor = page_info.get('cursor')
+        if not cursor:
+            break
+        print(f"  Fetched {len(all_canvas_course_items)} Canvas course items...")
+    # --- END OF ACTIVE BLOCK ---
+
     print(f"Found {len(all_canvas_course_items)} Canvas courses on Monday.com to process.")
 
+    # --- THIS PART STAYS COMMENTED OUT FOR TESTING ---
     # 1b. Pre-create TA users to avoid redundant lookups
     # universal_ta_users = []
     # for ta_data in ta_accounts:
-    #     ta_user = find_canvas_teacher(ta_data)
-    #     if not ta_user:
-    #         print(f"INFO: Universal TA user {ta_data['email']} not found. Attempting to create.")
-    #         try:
-    #             ta_user = create_canvas_user(ta_data, role='teacher', db_cursor=db_cursor)
-    #         except Exception as e:
-    #             print(f"ERROR: Failed to create universal TA {ta_data['email']}: {e}")
-    #             ta_user = None
-    #     if ta_user:
-    #         universal_ta_users.append(ta_user)
-    #     else:
-    #         print(f"WARNING: Could not find or create universal TA {ta_data['email']}. They will not be enrolled.")
-
-    # if not universal_ta_users:
-    #     print("WARNING: No universal TA users available for enrollment. Skipping universal TA sync.")
+    # ... (rest of the TA creation logic) ...
+    # --- END OF COMMENTED OUT BLOCK ---
 
     for i, canvas_item in enumerate(all_canvas_course_items, 1):
-        # ... (this part stays the same) ...
+        canvas_item_id = int(canvas_item['id'])
+        canvas_item_name = canvas_item['name']
+        print(f"\n===== Processing Canvas Course {i}/{len(all_canvas_course_items)}: '{canvas_item_name}' (Monday ID: {canvas_item_id}) =====")
 
+        column_values = {cv['id']: cv for cv in canvas_item.get('column_values', [])}
+        canvas_course_id_val = column_values.get(CANVAS_COURSE_ID_COLUMN_ID, {}).get('text')
+        
+        if not canvas_course_id_val:
+            print(f"  WARNING: Canvas Course ID not found for Monday item {canvas_item_id}. Skipping teacher/TA sync for this course.")
+            continue
+
+        canvas_course_id = int(canvas_course_id_val)
+
+        # --- THIS PART STAYS COMMENTED OUT FOR TESTING ---
         # Enroll Universal TAs in this course
         # if universal_ta_users:
-        #     print("  -> Ensuring TA accounts are enrolled...")
-        #     for ta_user in universal_ta_users:
-        #         if not dry_run:
-        #             enroll_status = enroll_user_in_course(canvas_course_id, ta_user.id, role='TaEnrollment')
-        #             print(f"    -> Enrollment status for {ta_user.name} ({ta_user.id}) in course {canvas_course_id}: {enroll_status}")
-        #         else:
-        #             print(f"  DRY RUN: Would enroll universal TA {ta_user.name} ({ta_user.id}) in course {canvas_course_id} as TA.")
-
+        # ... (rest of the TA enrollment logic) ...
+        # --- END OF COMMENTED OUT BLOCK ---
 
 
         # 2. Sync Assigned Teachers
