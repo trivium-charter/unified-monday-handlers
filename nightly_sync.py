@@ -422,24 +422,39 @@ def unenroll_student_from_course(course_id, student_details):
 # <<< ADDED FROM app.py
 def enroll_teacher_in_course(course_id, teacher_details, role='TeacherEnrollment'):
     canvas_api = initialize_canvas_api()
-    if not canvas_api: return "Failed: Canvas API not initialized"
+    if not canvas_api:
+        return "Failed: Canvas API not initialized"
+
     teacher_name = teacher_details.get('name', teacher_details.get('email', 'Unknown'))
     user_to_enroll = find_canvas_teacher(teacher_details)
+
     if not user_to_enroll:
         print(f"INFO: Teacher '{teacher_name}' not found. Attempting to create.")
         try:
-            # Note: db_cursor is not available in this context, but it's a fallback.
             user_to_enroll = create_canvas_user(teacher_details, role='teacher', db_cursor=None)
-        except Exception as e:
-            return f"Failed: Could not find or create teacher '{teacher_name}'. Error: {e}"
-    if not user_to_enroll: return f"Failed: User '{teacher_name}' not found in Canvas with provided IDs."
+        except CanvasException as e:
+            # This is the critical new block that handles the "already exists" error
+            if ("sis_user_id" in str(e) and "is already in use" in str(e)) or \
+               ("unique_id" in str(e) and "ID already in use" in str(e)):
+                print(f"INFO: Teacher creation failed because ID is in use. Searching again for existing teacher.")
+                user_to_enroll = find_canvas_teacher(teacher_details)
+            else:
+                return f"Failed: Could not create teacher '{teacher_name}'. Error: {e}"
+
+    if not user_to_enroll:
+        return f"Failed: Could not find or create teacher '{teacher_name}' with the provided details."
+
+    # Proceed with enrollment now that we have a valid user
     try:
         course = canvas_api.get_course(course_id)
         course.enroll_user(user_to_enroll, role, enrollment_state='active', notify=False)
         return "Success"
-    except ResourceDoesNotExist: return f"Failed: Course with ID '{course_id}' not found in Canvas."
-    except Conflict: return "Already Enrolled"
-    except CanvasException as e: return f"Failed: {e}"
+    except ResourceDoesNotExist:
+        return f"Failed: Course with ID '{course_id}' not found in Canvas."
+    except Conflict:
+        return "Already Enrolled"
+    except CanvasException as e:
+        return f"Failed: {e}"
 
 def get_study_hall_section_from_grade(grade_text):
     if not grade_text: return "General"
