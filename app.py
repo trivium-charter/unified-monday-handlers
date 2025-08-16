@@ -281,25 +281,43 @@ def find_canvas_user(student_details):
     return None
 
 def find_canvas_teacher(teacher_details):
+    """
+    Finds a Canvas user based on provided details without checking their role.
+    Prioritizes Canvas ID, then SIS ID, then email.
+    """
     canvas_api = initialize_canvas_api()
     if not canvas_api: return None
+
+    # Search by internal Canvas ID
     if teacher_details.get('canvas_id'):
-        try: return canvas_api.get_user(teacher_details['canvas_id'])
-        except (ResourceDoesNotExist, ValueError): pass
-    if teacher_details.get('internal_id'):
-        try: return canvas_api.get_user(teacher_details['internal_id'])
-        except (ResourceDoesNotExist, ValueError): pass
-    if teacher_details.get('email'):
-        try: return canvas_api.get_user(teacher_details['email'], 'login_id')
-        except ResourceDoesNotExist: pass
+        try:
+            return canvas_api.get_user(teacher_details['canvas_id'])
+        except (ResourceDoesNotExist, ValueError):
+            pass
+
+    # Search by SIS ID
     if teacher_details.get('sis_id'):
-        try: return canvas_api.get_user(teacher_details['sis_id'], 'sis_user_id')
-        except ResourceDoesNotExist: pass
+        try:
+            return canvas_api.get_user(teacher_details['sis_id'], 'sis_user_id')
+        except ResourceDoesNotExist:
+            pass
+
+    # Search by email
+    if teacher_details.get('email'):
+        try:
+            return canvas_api.get_user(teacher_details['email'], 'login_id')
+        except ResourceDoesNotExist:
+            pass
+
+    # Broader email search (fallback)
     if teacher_details.get('email'):
         try:
             users = [u for u in canvas_api.get_account(1).get_users(search_term=teacher_details['email'])]
-            if len(users) == 1: return users[0]
-        except (ResourceDoesNotExist, CanvasException): pass
+            if len(users) == 1:
+                return users[0]
+        except (ResourceDoesNotExist, CanvasException):
+            pass
+            
     return None
 
 def create_canvas_user(student_details):
