@@ -942,7 +942,8 @@ def sync_canvas_teachers_and_tas(db_cursor, dry_run=True):
     while True:
         current_query = canvas_course_items_query
         if cursor:
-            current_query = current_query.replace("limit: 500)", f"limit: 500, cursor: \\"{cursor}\\")")
+            # THIS IS THE CORRECTED LINE
+            current_query = current_query.replace('limit: 500)', f'limit: 500, cursor: "{cursor}"')
         
         result = execute_monday_graphql(current_query)
         if not result or 'data' not in result or not result['data']['boards']:
@@ -962,7 +963,21 @@ def sync_canvas_teachers_and_tas(db_cursor, dry_run=True):
     # 1b. Pre-create TA users to avoid redundant lookups
     # universal_ta_users = []
     # for ta_data in ta_accounts:
-    # ... (rest of the TA creation logic) ...
+    #     ta_user = find_canvas_teacher(ta_data)
+    #     if not ta_user:
+    #         print(f"INFO: Universal TA user {ta_data['email']} not found. Attempting to create.")
+    #         try:
+    #             ta_user = create_canvas_user(ta_data, role='teacher', db_cursor=db_cursor)
+    #         except Exception as e:
+    #             print(f"ERROR: Failed to create universal TA {ta_data['email']}: {e}")
+    #             ta_user = None
+    #     if ta_user:
+    #         universal_ta_users.append(ta_user)
+    #     else:
+    #         print(f"WARNING: Could not find or create universal TA {ta_data['email']}. They will not be enrolled.")
+
+    # if not universal_ta_users:
+    #     print("WARNING: No universal TA users available for enrollment. Skipping universal TA sync.")
     # --- END OF COMMENTED OUT BLOCK ---
 
     for i, canvas_item in enumerate(all_canvas_course_items, 1):
@@ -982,11 +997,16 @@ def sync_canvas_teachers_and_tas(db_cursor, dry_run=True):
         # --- THIS PART STAYS COMMENTED OUT FOR TESTING ---
         # Enroll Universal TAs in this course
         # if universal_ta_users:
-        # ... (rest of the TA enrollment logic) ...
+        #     print("  -> Ensuring TA accounts are enrolled...")
+        #     for ta_user in universal_ta_users:
+        #         if not dry_run:
+        #             enroll_status = enroll_user_in_course(canvas_course_id, ta_user.id, role='TaEnrollment')
+        #             print(f"    -> Enrollment status for {ta_user.name} ({ta_user.id}) in course {canvas_course_id}: {enroll_status}")
+        #         else:
+        #             print(f"  DRY RUN: Would enroll universal TA {ta_user.name} ({ta_user.id}) in course {canvas_course_id} as TA.")
         # --- END OF COMMENTED OUT BLOCK ---
 
-
-        # 2. Sync Assigned Teachers
+        # 2. Sync Assigned Teachers (This will now run correctly)
         print("  -> Syncing assigned teachers...")
         linked_staff_ids = get_linked_ids_from_connect_column_value(column_values.get(CANVAS_TO_STAFF_CONNECT_COLUMN_ID, {}).get('value'))
         
