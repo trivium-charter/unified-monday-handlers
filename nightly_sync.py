@@ -278,40 +278,48 @@ def find_canvas_teacher(teacher_details):
     canvas_api = initialize_canvas_api()
     if not canvas_api: return None
 
+    print(f"    [DEBUG] Starting search for teacher: {teacher_details.get('name')}")
+
     if teacher_details.get('canvas_id'):
         try:
+            print(f"    [DEBUG] Attempting search with Canvas ID: {teacher_details['canvas_id']}")
             user = canvas_api.get_user(teacher_details['canvas_id'])
+            print(f"    [DEBUG] Found user by Canvas ID. User object: {user}. Checking enrollments...")
             if 'TeacherEnrollment' in [e.type for e in user.get_enrollments()]:
+                print(f"    [DEBUG] TeacherEnrollment found. Returning user.")
                 return user
-        except (ResourceDoesNotExist, ValueError):
+            print(f"    [DEBUG] No TeacherEnrollment found for this user.")
+        except (ResourceDoesNotExist, ValueError) as e:
+            print(f"    [DEBUG] Search by Canvas ID failed: {e}")
             pass
 
     if teacher_details.get('sis_id'):
         try:
+            print(f"    [DEBUG] Attempting search with SIS ID: {teacher_details['sis_id']}")
             user = canvas_api.get_user(teacher_details['sis_id'], 'sis_user_id')
+            print(f"    [DEBUG] Found user by SIS ID. User object: {user}. Checking enrollments...")
             if 'TeacherEnrollment' in [e.type for e in user.get_enrollments()]:
+                print(f"    [DEBUG] TeacherEnrollment found. Returning user.")
                 return user
-        except ResourceDoesNotExist:
+            print(f"    [DEBUG] No TeacherEnrollment found for this user.")
+        except ResourceDoesNotExist as e:
+            print(f"    [DEBUG] Search by SIS ID failed: {e}")
             pass
 
     if teacher_details.get('email'):
         try:
+            print(f"    [DEBUG] Attempting search with Email: {teacher_details['email']}")
             user = canvas_api.get_user(teacher_details['email'], 'login_id')
+            print(f"    [DEBUG] Found user by Email. User object: {user}. Checking enrollments...")
             if 'TeacherEnrollment' in [e.type for e in user.get_enrollments()]:
+                print(f"    [DEBUG] TeacherEnrollment found. Returning user.")
                 return user
-        except ResourceDoesNotExist:
+            print(f"    [DEBUG] No TeacherEnrollment found for this user.")
+        except ResourceDoesNotExist as e:
+            print(f"    [DEBUG] Search by Email failed: {e}")
             pass
 
-    if teacher_details.get('email'):
-        try:
-            users = [u for u in canvas_api.get_account(1).get_users(search_term=teacher_details['email'])]
-            for user in users:
-                if 'TeacherEnrollment' in [e.type for e in user.get_enrollments()]:
-                    return user
-            if len(users) == 1:
-                return users[0]
-        except (ResourceDoesNotExist, CanvasException):
-            pass
+    print(f"    [DEBUG] No user found with specific lookups. Returning None.")
     return None
 
 
@@ -426,25 +434,31 @@ def enroll_teacher_in_course(course_id, teacher_details, role='TeacherEnrollment
         return "Failed: Canvas API not initialized"
 
     teacher_name = teacher_details.get('name', teacher_details.get('email', 'Unknown'))
+    
+    print(f"  [DEBUG] Enrolling teacher '{teacher_name}'. Finding user object...")
     user_to_enroll = find_canvas_teacher(teacher_details)
+    print(f"  [DEBUG] After find_canvas_teacher, user_to_enroll is: {user_to_enroll} (Type: {type(user_to_enroll)})")
 
     if not user_to_enroll:
-        print(f"INFO: Teacher '{teacher_name}' not found. Attempting to create.")
+        print(f"  [DEBUG] User not found. Attempting to create.")
         try:
             user_to_enroll = create_canvas_user(teacher_details, role='teacher', db_cursor=None)
+            print(f"  [DEBUG] After create_canvas_user, user_to_enroll is: {user_to_enroll} (Type: {type(user_to_enroll)})")
         except CanvasException as e:
-            # This is the critical new block that handles the "already exists" error
             if ("sis_user_id" in str(e) and "is already in use" in str(e)) or \
                ("unique_id" in str(e) and "ID already in use" in str(e)):
-                print(f"INFO: Teacher creation failed because ID is in use. Searching again for existing teacher.")
+                print(f"  [DEBUG] Create failed, user exists. Searching again.")
                 user_to_enroll = find_canvas_teacher(teacher_details)
+                print(f"  [DEBUG] After second find_canvas_teacher, user_to_enroll is: {user_to_enroll} (Type: {type(user_to_enroll)})")
             else:
                 return f"Failed: Could not create teacher '{teacher_name}'. Error: {e}"
 
     if not user_to_enroll:
         return f"Failed: Could not find or create teacher '{teacher_name}' with the provided details."
 
-    # Proceed with enrollment now that we have a valid user
+    # Final check before the API call that is crashing
+    print(f"  [DEBUG] PRE-ENROLLMENT CHECK: User is '{user_to_enroll}', Type is '{type(user_to_enroll)}'. Attempting enrollment...")
+    
     try:
         course = canvas_api.get_course(course_id)
         course.enroll_user(user_to_enroll, role, enrollment_state='active', notify=False)
