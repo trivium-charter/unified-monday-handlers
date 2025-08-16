@@ -272,54 +272,42 @@ def find_canvas_user(student_details, cursor):
 
 def find_canvas_teacher(teacher_details):
     """
-    Finds a Canvas user who is a teacher based on provided details.
+    Finds a Canvas user based on provided details without checking their role.
     Prioritizes Canvas ID, then SIS ID, then email.
     """
     canvas_api = initialize_canvas_api()
     if not canvas_api: return None
 
-    print(f"    [DEBUG] Starting search for teacher: {teacher_details.get('name')}")
-
+    # Search by internal Canvas ID
     if teacher_details.get('canvas_id'):
         try:
-            print(f"    [DEBUG] Attempting search with Canvas ID: {teacher_details['canvas_id']}")
-            user = canvas_api.get_user(teacher_details['canvas_id'])
-            print(f"    [DEBUG] Found user by Canvas ID. User object: {user}. Checking enrollments...")
-            if 'TeacherEnrollment' in [e.type for e in user.get_enrollments()]:
-                print(f"    [DEBUG] TeacherEnrollment found. Returning user.")
-                return user
-            print(f"    [DEBUG] No TeacherEnrollment found for this user.")
-        except (ResourceDoesNotExist, ValueError) as e:
-            print(f"    [DEBUG] Search by Canvas ID failed: {e}")
+            return canvas_api.get_user(teacher_details['canvas_id'])
+        except (ResourceDoesNotExist, ValueError):
             pass
 
+    # Search by SIS ID
     if teacher_details.get('sis_id'):
         try:
-            print(f"    [DEBUG] Attempting search with SIS ID: {teacher_details['sis_id']}")
-            user = canvas_api.get_user(teacher_details['sis_id'], 'sis_user_id')
-            print(f"    [DEBUG] Found user by SIS ID. User object: {user}. Checking enrollments...")
-            if 'TeacherEnrollment' in [e.type for e in user.get_enrollments()]:
-                print(f"    [DEBUG] TeacherEnrollment found. Returning user.")
-                return user
-            print(f"    [DEBUG] No TeacherEnrollment found for this user.")
-        except ResourceDoesNotExist as e:
-            print(f"    [DEBUG] Search by SIS ID failed: {e}")
+            return canvas_api.get_user(teacher_details['sis_id'], 'sis_user_id')
+        except ResourceDoesNotExist:
             pass
 
+    # Search by email
     if teacher_details.get('email'):
         try:
-            print(f"    [DEBUG] Attempting search with Email: {teacher_details['email']}")
-            user = canvas_api.get_user(teacher_details['email'], 'login_id')
-            print(f"    [DEBUG] Found user by Email. User object: {user}. Checking enrollments...")
-            if 'TeacherEnrollment' in [e.type for e in user.get_enrollments()]:
-                print(f"    [DEBUG] TeacherEnrollment found. Returning user.")
-                return user
-            print(f"    [DEBUG] No TeacherEnrollment found for this user.")
-        except ResourceDoesNotExist as e:
-            print(f"    [DEBUG] Search by Email failed: {e}")
+            return canvas_api.get_user(teacher_details['email'], 'login_id')
+        except ResourceDoesNotExist:
             pass
 
-    print(f"    [DEBUG] No user found with specific lookups. Returning None.")
+    # Broader email search (fallback)
+    if teacher_details.get('email'):
+        try:
+            users = [u for u in canvas_api.get_account(1).get_users(search_term=teacher_details['email'])]
+            if len(users) == 1:
+                return users[0]
+        except (ResourceDoesNotExist, CanvasException):
+            pass
+            
     return None
 
 
