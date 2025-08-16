@@ -350,15 +350,18 @@ def create_canvas_user(user_details, role='student', db_cursor=None):
 def update_user_ssid(user, new_ssid):
     try:
         canvas_api = initialize_canvas_api()
-        full_user_obj = canvas_api.get_user(user.id)
+        # This line ensures the full, detailed user object is fetched
+        full_user_obj = canvas_api.get_user(user.id) 
         logins = full_user_obj.get_logins()
         if logins:
             login_to_update = logins[0]
             login_to_update.edit(login={'sis_user_id': new_ssid})
+            print(f"  INFO: Successfully updated SSID for user '{full_user_obj.name}'.")
             return True
         return False
     except (CanvasException, AttributeError) as e:
-        print(f"ERROR: Could not update SSID for user '{user.name}': {e}")
+        # The user's name might not be on the summary object, so we use the ID in the error
+        print(f"ERROR: Could not update SSID for user ID '{user.id}': {e}")
         return False
 
 def create_section_if_not_exists(course_id, section_name):
