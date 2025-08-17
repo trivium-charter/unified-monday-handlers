@@ -11,7 +11,7 @@ from datetime import datetime
 
 # --- IMPORTANT ---
 # Set to False to perform the actual creation and deletion.
-DRY_RUN = True
+DRY_RUN = False
 
 # Your Monday.com API Key and Board ID from environment variables
 MONDAY_API_KEY = os.environ.get("MONDAY_API_KEY")
@@ -147,7 +147,6 @@ if __name__ == '__main__':
     all_students = get_all_plp_items()
     print(f"Found {len(all_students)} students to process.")
 
-    # Define the column value payloads for entry types
     curriculum_entry_type = {PLP_SUBITEM_ENTRY_TYPE_COLUMN_ID: {"labels": ["Curriculum"]}}
     staff_entry_type = {PLP_SUBITEM_ENTRY_TYPE_COLUMN_ID: {"labels": ["Staff"]}}
 
@@ -189,7 +188,9 @@ if __name__ == '__main__':
                 else:
                     print(f"  ERROR: Could not find or create subitem for '{category_name}'")
             else:
+                # <<< MODIFIED DRY RUN LOGIC
                 print(f"  -> DRY RUN: Would find or create subitem '{category_name}' with Entry Type 'Curriculum'.")
+                print(f"     DRY RUN: Would post an update with {len(course_names)} courses.")
 
         # --- Build and log staff assignments from people columns ---
         for col_val in student.get('column_values', []):
@@ -208,7 +209,9 @@ if __name__ == '__main__':
                     else:
                         print(f"  ERROR: Could not find or create subitem for '{category_name}'")
                 else:
+                    # <<< MODIFIED DRY RUN LOGIC
                     print(f"  -> DRY RUN: Would find or create subitem '{category_name}' with Entry Type 'Staff'.")
+                    print(f"     DRY RUN: Would post an update with assignment: {staff_names}")
 
         # --- Delete all old subitems created by the target user ---
         subitems_to_delete = [s['id'] for s in student.get('subitems', []) if str(s.get('creator', {}).get('id')) == str(target_user_id)]
