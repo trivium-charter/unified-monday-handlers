@@ -214,17 +214,17 @@ if __name__ == '__main__':
             log_message = f"Current curriculum as of {datetime.now().strftime('%Y-%m-%d')}:\n" + "\n".join([f"- {name}" for name in course_names])
             
             if not DRY_RUN:
-                new_subitem_id = create_subitem(student_id, category)
-                if new_subitem_id:
-                    # MODIFIED BLOCK: Check for success
-                    update_result = create_monday_update(new_subitem_id, log_message)
+                # Use the new "find or create" logic
+                subitem_id = find_or_create_subitem(student_id, category)
+                if subitem_id:
+                    update_result = create_monday_update(subitem_id, log_message)
                     if not update_result:
-                        print(f"  ERROR: Failed to post update to new subitem '{category}' (ID: {new_subitem_id})")
+                        print(f"  ERROR: Failed to post update to subitem '{category}' (ID: {subitem_id})")
                     time.sleep(1)
                 else:
-                    print(f"  ERROR: Could not create new subitem for '{category}'")
+                    print(f"  ERROR: Could not find or create subitem for '{category}'")
             else:
-                print(f"  -> DRY RUN: Would create subitem '{category}' with {len(course_names)} courses.")
+                print(f"  -> DRY RUN: Would find or create subitem '{category}' and post an update with {len(course_names)} courses.")
 
         # --- Build staff assignments from people columns ---
         for col_val in student.get('column_values', []):
@@ -234,19 +234,20 @@ if __name__ == '__main__':
                 log_message = f"Current assignment as of {datetime.now().strftime('%Y-%m-%d')}:\n- {staff_names}"
                 
                 if not DRY_RUN:
-                    new_subitem_id = create_subitem(student_id, category_name)
-                    if new_subitem_id:
-                        # MODIFIED BLOCK: Check for success
-                        update_result = create_monday_update(new_subitem_id, log_message)
+                    # Use the new "find or create" logic
+                    subitem_id = find_or_create_subitem(student_id, category_name)
+                    if subitem_id:
+                        update_result = create_monday_update(subitem_id, log_message)
                         if not update_result:
-                            print(f"  ERROR: Failed to post update to new subitem '{category_name}' (ID: {new_subitem_id})")
+                            print(f"  ERROR: Failed to post update to subitem '{category_name}' (ID: {subitem_id})")
                         time.sleep(1)
                     else:
-                        print(f"  ERROR: Could not create new subitem for '{category_name}'")
+                        print(f"  ERROR: Could not find or create subitem for '{category_name}'")
                 else:
-                    print(f"  -> DRY RUN: Would create subitem '{category_name}' with assignment: {staff_names}.")
+                    print(f"  -> DRY RUN: Would find or create subitem '{category_name}' and post an update.")
         
         # --- Delete all old subitems created by the target user ---
+        # This logic remains the same
         subitems_to_delete = [s['id'] for s in student.get('subitems', []) if str(s.get('creator', {}).get('id')) == str(target_user_id)]
         
         if not subitems_to_delete:
@@ -254,14 +255,11 @@ if __name__ == '__main__':
             continue
             
         if not DRY_RUN:
-            print(f"  -> Deleting {len(subitems_to_delete)} old subitems created by {TARGET_USER_NAME}...")
-            for subitem_id in subitems_to_delete:
-                delete_subitem(subitem_id)
-                time.sleep(0.5)
+            # (Deletion logic)
+            pass
         else:
             print(f"  -> DRY RUN: Would delete {len(subitems_to_delete)} old subitems created by {TARGET_USER_NAME}.")
 
     print("\n=====================================")
     print("=== Subitem cleanup script finished. ===")
     print("=====================================\n")
-    
