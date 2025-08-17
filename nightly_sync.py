@@ -874,23 +874,21 @@ def run_plp_sync_for_student(plp_item_id, creator_id, db_cursor, dry_run=True):
     sync_teacher_assignments(master_student_id, plp_item_id, dry_run=dry_run)
 
 def reconcile_subitems(plp_item_id, creator_id, db_cursor, dry_run=True):
-    print(f"--- Reconciling All Subitems & Enrollments for PLP Item: {plp_item_id} ---")
+    print(f"--- Reconciling Enrollments for PLP Item: {plp_item_id} ---")
     student_details = get_student_details_from_plp(plp_item_id)
     if not student_details or not student_details.get('master_id'):
         print("  SKIPPING: Could not get complete student details for reconciliation.")
         return
 
-    # --- Reconcile Course Enrollments and Subitems ---
+    # --- Reconcile Course Enrollments in Canvas ---
+    print("  -> Verifying Canvas course enrollments...")
     class_id_to_category_map = {}
     for category, column_id in PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.items():
         for class_id in get_linked_items_from_board_relation(plp_item_id, int(PLP_BOARD_ID), column_id):
             class_id_to_category_map[class_id] = category
 
     for class_item_id, category_name in class_id_to_category_map.items():
-        class_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)) or f"Item {class_item_id}"
-        
-        # This function no longer creates subitems directly, so enrollment is the main focus.
-        # It relies on the main apps to create the initial subitem/update.
+        # This function will no longer create subitems. It only ensures the student is enrolled.
         linked_canvas_item_ids = get_linked_items_from_board_relation(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
         
         if linked_canvas_item_ids and not dry_run:
@@ -900,8 +898,14 @@ def reconcile_subitems(plp_item_id, creator_id, db_cursor, dry_run=True):
             
             if canvas_course_id:
                 # The main goal of reconciliation is just to ensure enrollment is correct.
-                # The subitem logging is now handled by the event-driven app.py
-                enroll_or_create_and_enroll(canvas_course_id, "All", student_details, db_cursor)
+                # A simplified section name is used here as a fallback.
+                section = create_section_if_not_exists(canvas_course_id, "All")
+                if section:
+                    enroll_or_create_and_enroll(canvas_course_id, section.id, student_details, db_cursor)
+
+    # --- Reconcile Staff Assignments on the PLP Board ---
+    print("  -> Verifying PLP staff assignments...")
+    sync_teacher_assignments(student_details['master_id'], plp_item_id, dry_run=dry_run)
 
     print("  -> Reconciling staff assignments...")
     master_student_id = student_details['master_id']
