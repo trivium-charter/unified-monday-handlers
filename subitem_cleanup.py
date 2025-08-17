@@ -8,7 +8,7 @@ from datetime import datetime
 # ==============================================================================
 # 1. CONFIGURATION
 # ==============================================================================
-DRY_RUN = True
+DRY_RUN = False
 MONDAY_API_KEY = os.environ.get("MONDAY_API_KEY")
 PLP_BOARD_ID = os.environ.get("PLP_BOARD_ID")
 MONDAY_API_URL = "https://api.monday.com/v2"
