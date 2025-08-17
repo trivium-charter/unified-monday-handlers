@@ -84,6 +84,31 @@ ALL_SPECIAL_COURSES = ROSTER_ONLY_COURSES.union(ROSTER_AND_CREDIT_COURSES)
 # ==============================================================================
 MONDAY_HEADERS = { "Authorization": MONDAY_API_KEY, "Content-Type": "application/json", "API-Version": "2023-10" }
 
+def find_or_create_subitem(parent_item_id, subitem_name, column_values=None, dry_run=False):
+    """
+    Finds a subitem by name. If it doesn't exist, it creates it.
+    Returns the ID of the subitem.
+    """
+    # First, try to find the subitem by name
+    query = f'query {{ items(ids:[{parent_item_id}]) {{ subitems {{ id name }} }} }}'
+    result = execute_monday_graphql(query)
+    try:
+        subitems = result['data']['items'][0]['subitems']
+        for subitem in subitems:
+            if subitem.get('name') == subitem_name:
+                print(f"  INFO: Found existing subitem '{subitem_name}' (ID: {subitem['id']}).")
+                return subitem['id']
+    except (KeyError, IndexError, TypeError):
+        pass # Subitem not found, will proceed to create
+
+    # If not found, create it
+    print(f"  INFO: No existing subitem named '{subitem_name}'. Creating it.")
+    if not dry_run:
+        return create_subitem(parent_item_id, subitem_name, column_values=column_values)
+    else:
+        print(f"  -> DRY RUN: Would create subitem '{subitem_name}'.")
+        return "dry_run_placeholder_id" # Return a placeholder for dry runs
+        
 def execute_monday_graphql(query):
     max_retries = 4; delay = 2
     for attempt in range(max_retries):
@@ -854,37 +879,30 @@ def reconcile_subitems(plp_item_id, creator_id, db_cursor, dry_run=True):
     if not student_details or not student_details.get('master_id'):
         print("  SKIPPING: Could not get complete student details for reconciliation.")
         return
-    print("  -> Reconciling course enrollments...")
+
+    # --- Reconcile Course Enrollments and Subitems ---
     class_id_to_category_map = {}
     for category, column_id in PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.items():
         for class_id in get_linked_items_from_board_relation(plp_item_id, int(PLP_BOARD_ID), column_id):
             class_id_to_category_map[class_id] = category
-    if not class_id_to_category_map:
-        print("    INFO: No classes are linked.")
-    else:
-        for class_item_id, category_name in class_id_to_category_map.items():
-            class_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)) or f"Item {class_item_id}"
-            print(f"    ACTION: Processing enrollment for '{class_name}'.")
-            expected_subitem_name = f"Added {category_name} '{class_name}'"
-            if not dry_run:
-                linked_canvas_item_ids = get_linked_items_from_board_relation(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
-                if linked_canvas_item_ids:
-                    canvas_item_id = list(linked_canvas_item_ids)[0]
-                    course_id_val = get_column_value(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_COURSE_ID_COLUMN_ID)
-                    canvas_course_id = None
-                    if course_id_val:
-                        canvas_course_id = course_id_val.get('text')
-                        if not canvas_course_id: canvas_course_id = course_id_val.get('value')
-                    if canvas_course_id:
-                        section = create_section_if_not_exists(canvas_course_id, "All")
-                        if section: enroll_or_create_and_enroll(canvas_course_id, section.id, student_details, db_cursor)
-                else:
-                    print(f"    INFO: '{class_name}' is a non-Canvas course.")
-            if not check_if_subitem_exists(plp_item_id, expected_subitem_name, creator_id):
-                print(f"    INFO: Subitem '{expected_subitem_name}' is missing. Creating it.")
-                if not dry_run: create_subitem(plp_item_id, expected_subitem_name, column_values={PLP_SUBITEM_ENTRY_TYPE_COLUMN_ID: {"labels": ["Curriculum Change"]}})
-            else:
-                print(f"    INFO: Subitem '{expected_subitem_name}' already exists.")
+
+    for class_item_id, category_name in class_id_to_category_map.items():
+        class_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)) or f"Item {class_item_id}"
+        
+        # This function no longer creates subitems directly, so enrollment is the main focus.
+        # It relies on the main apps to create the initial subitem/update.
+        linked_canvas_item_ids = get_linked_items_from_board_relation(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
+        
+        if linked_canvas_item_ids and not dry_run:
+            canvas_item_id = list(linked_canvas_item_ids)[0]
+            course_id_val = get_column_value(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_COURSE_ID_COLUMN_ID)
+            canvas_course_id = course_id_val.get('text') if course_id_val else None
+            
+            if canvas_course_id:
+                # The main goal of reconciliation is just to ensure enrollment is correct.
+                # The subitem logging is now handled by the event-driven app.py
+                enroll_or_create_and_enroll(canvas_course_id, "All", student_details, db_cursor)
+
     print("  -> Reconciling staff assignments...")
     master_student_id = student_details['master_id']
     for trigger_col, mapping in MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS.items():
