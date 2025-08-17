@@ -1,4 +1,4 @@
- import os
+import os
 import json
 import requests
 import time
@@ -8,21 +8,12 @@ from datetime import datetime
 # ==============================================================================
 # 1. CONFIGURATION
 # ==============================================================================
-
-# --- IMPORTANT ---
-# Set to False to perform the actual creation and deletion.
-DRY_RUN = False
-
-# Your Monday.com API Key and Board ID from environment variables
+DRY_RUN = True
 MONDAY_API_KEY = os.environ.get("MONDAY_API_KEY")
 PLP_BOARD_ID = os.environ.get("PLP_BOARD_ID")
 MONDAY_API_URL = "https://api.monday.com/v2"
-
-# --- SET THE TARGET USER ---
 PLP_SUBITEM_ENTRY_TYPE_COLUMN_ID = os.environ.get("PLP_SUBITEM_ENTRY_TYPE_COLUMN_ID")
 TARGET_USER_NAME = "Sarah Bruce"
-
-# --- CONFIGURE YOUR PLP COLUMNS (Based on your provided variables) ---
 PLP_CONNECT_COLUMNS_MAP = {
     "ELA Curriculum": "board_relation_mkqnxyjd",
     "Math Curriculum": "board_relation_mkqnbtaf",
@@ -65,56 +56,26 @@ def get_user_id_by_name(user_name):
             if user['name'].lower() == user_name.lower(): return user['id']
     except (KeyError, IndexError, TypeError): pass
     return None
-
-# <<< CORRECTED FUNCTION
+    
 def get_all_plp_items():
     all_items = []
     cursor = None
-    
     connect_column_ids = [f'"{col_id}"' for col_id in PLP_CONNECT_COLUMNS_MAP.values() if col_id]
     people_column_ids = [f'"{col_id}"' for col_id in PLP_PEOPLE_COLUMNS_MAP.values() if col_id]
     all_column_ids = connect_column_ids + people_column_ids
-    
-    if not all_column_ids:
-        print("FATAL ERROR: No PLP Column IDs are configured in the script. Exiting.")
-        exit()
-
+    if not all_column_ids: print("FATAL ERROR: No PLP Column IDs are configured."); exit()
     while True:
         cursor_str = f', cursor: "{cursor}"' if cursor else ""
-        # CORRECTED QUERY: Explicitly requests both 'value' and 'text' for all columns
-        query = f"""
-            query {{
-                boards(ids: {PLP_BOARD_ID}) {{
-                    items_page(limit: 50{cursor_str}) {{
-                        cursor
-                        items {{
-                            id
-                            name
-                            column_values(ids: [{", ".join(all_column_ids)}]) {{
-                                id
-                                value
-                                text
-                            }}
-                            subitems {{
-                                id
-                                creator {{ id }}
-                            }}
-                        }}
-                    }}
-                }}
-            }}
-        """
+        query = f'query {{ boards(ids: {PLP_BOARD_ID}) {{ items_page(limit: 50{cursor_str}) {{ cursor items {{ id name column_values(ids: [{", ".join(all_column_ids)}]) {{ id value text }} subitems {{ id name creator {{ id }} }} }} }} }} }}'
         result = execute_monday_graphql(query)
         if not result or 'data' not in result: break
         try:
             page_info = result['data']['boards'][0]['items_page']
             all_items.extend(page_info['items'])
-            cursor = page_info.get('cursor')
+            cursor = page_info.get('cursor');
             if not cursor: break
             print(f"  Fetched {len(all_items)} student items...")
-        except (KeyError, IndexError):
-            print(f"ERROR: Could not parse items from board {PLP_BOARD_ID}.")
-            break
+        except (KeyError, IndexError): print(f"ERROR: Could not parse items from board {PLP_BOARD_ID}."); break
     return all_items
 
 def get_item_names(item_ids):
@@ -174,7 +135,9 @@ if __name__ == '__main__':
     all_students = get_all_plp_items()
     print(f"Found {len(all_students)} students to process.")
 
+    # --- Create a set of the new, valid subitem names to protect them from deletion ---
     consolidated_subitem_names = set(PLP_CONNECT_COLUMNS_MAP.keys()) | set(PLP_PEOPLE_COLUMNS_MAP.keys())
+
     curriculum_entry_type = {PLP_SUBITEM_ENTRY_TYPE_COLUMN_ID: {"labels": ["Curriculum"]}}
     staff_entry_type = {PLP_SUBITEM_ENTRY_TYPE_COLUMN_ID: {"labels": ["Staff"]}}
 
