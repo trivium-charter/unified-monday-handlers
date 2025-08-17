@@ -11,29 +11,29 @@ from datetime import datetime
 
 # --- IMPORTANT ---
 # Set to False to perform the actual creation and deletion.
-DRY_RUN = False
+DRY_RUN = True
 
 # Your Monday.com API Key and Board ID from environment variables
 MONDAY_API_KEY = os.environ.get("MONDAY_API_KEY")
-PLP_BOARD_ID = os.environ.get("PLP_BOARD_ID") # Should be 8993025745
+PLP_BOARD_ID = os.environ.get("PLP_BOARD_ID")
 MONDAY_API_URL = "https://api.monday.com/v2"
 
+# <<< USES EXISTING VARIABLE
+# The ID of the "Entry Type" dropdown column on your PLP board's subitems.
+PLP_SUBITEM_ENTRY_TYPE_COLUMN_ID = os.environ.get("PLP_SUBITEM_ENTRY_TYPE_COLUMN_ID")
+
 # --- SET THE TARGET USER ---
-# The script will ONLY touch subitems created by this exact user name.
 TARGET_USER_NAME = "Sarah Bruce"
 
 # --- CONFIGURE YOUR PLP COLUMNS (Based on your provided variables) ---
-# 1. Map for CURRICULUM "Connect Boards" columns
 PLP_CONNECT_COLUMNS_MAP = {
     "ELA Curriculum": "board_relation_mkqnxyjd",
     "Math Curriculum": "board_relation_mkqnbtaf",
     "ACE Curriculum": "board_relation_mkqn34pg",
     "Other Curriculum": "board_relation_mkr54dtg"
 }
-
-# 2. Map for STAFF "People" columns
 PLP_PEOPLE_COLUMNS_MAP = {
-    "TOR Assignments": "person", # From MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS
+    "TOR Assignments": "person",
     "Case Manager Assignments": "multiple_person_mks1hqnj",
     "Connect Teacher Assignments": "multiple_person_mks1hzcz",
     "ACE Teacher Assignments": "multiple_person_mks1w5fc"
@@ -44,39 +44,15 @@ PLP_PEOPLE_COLUMNS_MAP = {
 # ==============================================================================
 MONDAY_HEADERS = { "Authorization": MONDAY_API_KEY, "Content-Type": "application/json", "API-Version": "2023-10" }
 
-def find_or_create_subitem(parent_item_id, subitem_name):
-    """
-    Finds a subitem by name. If it doesn't exist, it creates it.
-    Returns the ID of the subitem.
-    """
-    # First, try to find the subitem by name
-    query = f'query {{ items(ids:[{parent_item_id}]) {{ subitems {{ id name }} }} }}'
-    result = execute_monday_graphql(query)
-    try:
-        subitems = result['data']['items'][0]['subitems']
-        for subitem in subitems:
-            if subitem.get('name') == subitem_name:
-                print(f"  INFO: Found existing subitem '{subitem_name}' (ID: {subitem['id']}).")
-                return subitem['id']
-    except (KeyError, IndexError, TypeError):
-        pass
-
-    # If not found, create it
-    print(f"  INFO: No existing subitem named '{subitem_name}'. Creating it.")
-    return create_subitem(parent_item_id, subitem_name)
-    
 def execute_monday_graphql(query):
     max_retries = 4; delay = 2
     for attempt in range(max_retries):
         try:
             response = requests.post(MONDAY_API_URL, json={"query": query}, headers=MONDAY_HEADERS, timeout=30)
-            if response.status_code == 429:
-                print(f"WARNING: Rate limit hit. Waiting {delay} seconds..."); time.sleep(delay); delay *= 2; continue
+            if response.status_code == 429: print(f"WARNING: Rate limit hit. Waiting {delay} seconds..."); time.sleep(delay); delay *= 2; continue
             response.raise_for_status()
             json_response = response.json()
-            if "errors" in json_response:
-                print(f"ERROR: Monday GraphQL Error: {json_response['errors']}")
-                return None
+            if "errors" in json_response: print(f"ERROR: Monday GraphQL Error: {json_response['errors']}"); return None
             return json_response
         except requests.exceptions.RequestException as e:
             print(f"WARNING: Monday HTTP Request Error: {e}. Retrying...")
@@ -89,70 +65,41 @@ def get_user_id_by_name(user_name):
     result = execute_monday_graphql(query)
     try:
         for user in result['data']['users']:
-            if user['name'].lower() == user_name.lower():
-                return user['id']
+            if user['name'].lower() == user_name.lower(): return user['id']
     except (KeyError, IndexError, TypeError): pass
     return None
     
 def get_all_plp_items():
     all_items = []
     cursor = None
-    
     connect_column_ids = [f'"{col_id}"' for col_id in PLP_CONNECT_COLUMNS_MAP.values() if col_id]
     people_column_ids = [f'"{col_id}"' for col_id in PLP_PEOPLE_COLUMNS_MAP.values() if col_id]
     all_column_ids = connect_column_ids + people_column_ids
-    
-    if not all_column_ids:
-        print("FATAL ERROR: No PLP Column IDs are configured in the script. Exiting.")
-        exit()
-
+    if not all_column_ids: print("FATAL ERROR: No PLP Column IDs are configured."); exit()
     while True:
         cursor_str = f', cursor: "{cursor}"' if cursor else ""
-        query = f"""
-            query {{
-                boards(ids: {PLP_BOARD_ID}) {{
-                    items_page(limit: 50{cursor_str}) {{
-                        cursor
-                        items {{
-                            id
-                            name
-                            column_values(ids: [{", ".join(all_column_ids)}]) {{
-                                id
-                                value
-                                text
-                            }}
-                            subitems {{
-                                id
-                                creator {{ id }}
-                            }}
-                        }}
-                    }}
-                }}
-            }}
-        """
+        query = f'query {{ boards(ids: {PLP_BOARD_ID}) {{ items_page(limit: 50{cursor_str}) {{ cursor items {{ id name column_values(ids: [{", ".join(all_column_ids)}]) {{ id value text }} subitems {{ id creator {{ id }} }} }} }} }} }}'
         result = execute_monday_graphql(query)
         if not result or 'data' not in result: break
         try:
             page_info = result['data']['boards'][0]['items_page']
             all_items.extend(page_info['items'])
-            cursor = page_info.get('cursor')
+            cursor = page_info.get('cursor');
             if not cursor: break
             print(f"  Fetched {len(all_items)} student items...")
-        except (KeyError, IndexError):
-            print(f"ERROR: Could not parse items from board {PLP_BOARD_ID}.")
-            break
+        except (KeyError, IndexError): print(f"ERROR: Could not parse items from board {PLP_BOARD_ID}."); break
     return all_items
 
 def get_item_names(item_ids):
     if not item_ids: return {}
     query = f"query {{ items(ids: {list(item_ids)}) {{ id name }} }}"
     result = execute_monday_graphql(query)
-    try:
-        return {int(item['id']): item['name'] for item in result['data']['items']}
+    try: return {int(item['id']): item['name'] for item in result['data']['items']}
     except (TypeError, KeyError, IndexError): return {}
 
-def create_subitem(parent_item_id, subitem_name):
-    mutation = f'mutation {{ create_subitem (parent_item_id: {parent_item_id}, item_name: {json.dumps(subitem_name)}) {{ id }} }}'
+def create_subitem(parent_item_id, subitem_name, column_values=None):
+    column_values_str = json.dumps(column_values) if column_values else "{}"
+    mutation = f'mutation {{ create_subitem (parent_item_id: {parent_item_id}, item_name: {json.dumps(subitem_name)}, column_values: {json.dumps(column_values_str)}) {{ id }} }}'
     result = execute_monday_graphql(mutation)
     return result['data']['create_subitem'].get('id') if result and 'data' in result and result['data'].get('create_subitem') else None
 
@@ -164,6 +111,18 @@ def delete_subitem(subitem_id):
     mutation = f'mutation {{ delete_item (item_id: {subitem_id}) {{ id }} }}'
     return execute_monday_graphql(mutation)
 
+def find_or_create_subitem(parent_item_id, subitem_name, column_values=None):
+    query = f'query {{ items(ids:[{parent_item_id}]) {{ subitems {{ id name }} }} }}'
+    result = execute_monday_graphql(query)
+    try:
+        for subitem in result['data']['items'][0]['subitems']:
+            if subitem.get('name') == subitem_name:
+                print(f"  INFO: Found existing subitem '{subitem_name}' (ID: {subitem['id']}).")
+                return subitem['id']
+    except (KeyError, IndexError, TypeError): pass
+    print(f"  INFO: No existing subitem named '{subitem_name}'. Creating it.")
+    return create_subitem(parent_item_id, subitem_name, column_values=column_values)
+
 # ==============================================================================
 # 3. MAIN CLEANUP LOGIC
 # ==============================================================================
@@ -173,6 +132,10 @@ if __name__ == '__main__':
         print("=== SCRIPT IS RUNNING IN DRY RUN MODE ===")
         print("="*50 + "\n")
 
+    if not PLP_SUBITEM_ENTRY_TYPE_COLUMN_ID:
+        print("FATAL ERROR: The PLP_SUBITEM_ENTRY_TYPE_COLUMN_ID environment variable is not set.")
+        exit()
+
     print(f"Step 1: Finding user ID for '{TARGET_USER_NAME}'...")
     target_user_id = get_user_id_by_name(TARGET_USER_NAME)
     if not target_user_id:
@@ -180,10 +143,13 @@ if __name__ == '__main__':
         exit()
     print(f"Found user ID: {target_user_id}")
     
-    print("\nStep 2: Fetching all student items and their current assignments...")
+    print("\nStep 2: Fetching all student items...")
     all_students = get_all_plp_items()
-    total_students = len(all_students)
-    print(f"Found {total_students} students to process.")
+    print(f"Found {len(all_students)} students to process.")
+
+    # Define the column value payloads for entry types
+    curriculum_entry_type = {PLP_SUBITEM_ENTRY_TYPE_COLUMN_ID: {"labels": ["Curriculum"]}}
+    staff_entry_type = {PLP_SUBITEM_ENTRY_TYPE_COLUMN_ID: {"labels": ["Staff"]}}
 
     connect_id_to_cat_map = {v: k for k, v in PLP_CONNECT_COLUMNS_MAP.items()}
     people_id_to_cat_map = {v: k for k, v in PLP_PEOPLE_COLUMNS_MAP.items()}
@@ -191,9 +157,9 @@ if __name__ == '__main__':
     for i, student in enumerate(all_students, 1):
         student_id = student['id']
         student_name = student['name']
-        print(f"\n--- Processing Student {i}/{total_students}: {student_name} (ID: {student_id}) ---")
+        print(f"\n--- Processing Student {i}/{len(all_students)}: {student_name} (ID: {student_id}) ---")
 
-        # --- Build curriculum from connect columns ---
+        # --- Build and log curriculum from connect columns ---
         current_curriculum = defaultdict(set)
         all_linked_ids = set()
         for col_val in student.get('column_values', []):
@@ -208,25 +174,24 @@ if __name__ == '__main__':
         
         item_id_to_name_map = get_item_names(all_linked_ids)
 
-        for category, item_ids in current_curriculum.items():
+        for category_name, item_ids in current_curriculum.items():
             if not item_ids: continue
             course_names = sorted([f"'{item_id_to_name_map.get(item_id, f'Item {item_id}')}'" for item_id in item_ids])
             log_message = f"Current curriculum as of {datetime.now().strftime('%Y-%m-%d')}:\n" + "\n".join([f"- {name}" for name in course_names])
             
             if not DRY_RUN:
-                # Use the new "find or create" logic
-                subitem_id = find_or_create_subitem(student_id, category)
+                subitem_id = find_or_create_subitem(student_id, category_name, column_values=curriculum_entry_type)
                 if subitem_id:
                     update_result = create_monday_update(subitem_id, log_message)
                     if not update_result:
-                        print(f"  ERROR: Failed to post update to subitem '{category}' (ID: {subitem_id})")
+                        print(f"  ERROR: Failed to post update to new subitem '{category_name}' (ID: {subitem_id})")
                     time.sleep(1)
                 else:
-                    print(f"  ERROR: Could not find or create subitem for '{category}'")
+                    print(f"  ERROR: Could not find or create subitem for '{category_name}'")
             else:
-                print(f"  -> DRY RUN: Would find or create subitem '{category}' and post an update with {len(course_names)} courses.")
+                print(f"  -> DRY RUN: Would find or create subitem '{category_name}' with Entry Type 'Curriculum'.")
 
-        # --- Build staff assignments from people columns ---
+        # --- Build and log staff assignments from people columns ---
         for col_val in student.get('column_values', []):
             category_name = people_id_to_cat_map.get(col_val['id'])
             if category_name and col_val.get('text'):
@@ -234,8 +199,7 @@ if __name__ == '__main__':
                 log_message = f"Current assignment as of {datetime.now().strftime('%Y-%m-%d')}:\n- {staff_names}"
                 
                 if not DRY_RUN:
-                    # Use the new "find or create" logic
-                    subitem_id = find_or_create_subitem(student_id, category_name)
+                    subitem_id = find_or_create_subitem(student_id, category_name, column_values=staff_entry_type)
                     if subitem_id:
                         update_result = create_monday_update(subitem_id, log_message)
                         if not update_result:
@@ -244,10 +208,9 @@ if __name__ == '__main__':
                     else:
                         print(f"  ERROR: Could not find or create subitem for '{category_name}'")
                 else:
-                    print(f"  -> DRY RUN: Would find or create subitem '{category_name}' and post an update.")
-        
+                    print(f"  -> DRY RUN: Would find or create subitem '{category_name}' with Entry Type 'Staff'.")
+
         # --- Delete all old subitems created by the target user ---
-        # This logic remains the same
         subitems_to_delete = [s['id'] for s in student.get('subitems', []) if str(s.get('creator', {}).get('id')) == str(target_user_id)]
         
         if not subitems_to_delete:
@@ -255,11 +218,13 @@ if __name__ == '__main__':
             continue
             
         if not DRY_RUN:
-            # (Deletion logic)
-            pass
+            print(f"  -> Deleting {len(subitems_to_delete)} old subitems created by {TARGET_USER_NAME}...")
+            for subitem_id in subitems_to_delete:
+                delete_subitem(subitem_id)
+                time.sleep(0.5)
         else:
             print(f"  -> DRY RUN: Would delete {len(subitems_to_delete)} old subitems created by {TARGET_USER_NAME}.")
-
+    
     print("\n=====================================")
     print("=== Subitem cleanup script finished. ===")
     print("=====================================\n")
