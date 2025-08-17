@@ -194,7 +194,14 @@ if __name__ == '__main__':
             
             if not DRY_RUN:
                 new_subitem_id = create_subitem(student_id, category)
-                if new_subitem_id: create_monday_update(new_subitem_id, log_message); time.sleep(1)
+                if new_subitem_id:
+                    # MODIFIED BLOCK: Check for success
+                    update_result = create_monday_update(new_subitem_id, log_message)
+                    if not update_result:
+                        print(f"  ERROR: Failed to post update to new subitem '{category}' (ID: {new_subitem_id})")
+                    time.sleep(1)
+                else:
+                    print(f"  ERROR: Could not create new subitem for '{category}'")
             else:
                 print(f"  -> DRY RUN: Would create subitem '{category}' with {len(course_names)} courses.")
 
@@ -207,7 +214,14 @@ if __name__ == '__main__':
                 
                 if not DRY_RUN:
                     new_subitem_id = create_subitem(student_id, category_name)
-                    if new_subitem_id: create_monday_update(new_subitem_id, log_message); time.sleep(1)
+                    if new_subitem_id:
+                        # MODIFIED BLOCK: Check for success
+                        update_result = create_monday_update(new_subitem_id, log_message)
+                        if not update_result:
+                            print(f"  ERROR: Failed to post update to new subitem '{category_name}' (ID: {new_subitem_id})")
+                        time.sleep(1)
+                    else:
+                        print(f"  ERROR: Could not create new subitem for '{category_name}'")
                 else:
                     print(f"  -> DRY RUN: Would create subitem '{category_name}' with assignment: {staff_names}.")
         
