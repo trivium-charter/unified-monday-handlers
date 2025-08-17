@@ -181,6 +181,7 @@ if __name__ == '__main__':
             if not DRY_RUN:
                 subitem_id = find_or_create_subitem(student_id, category_name, column_values=curriculum_entry_type)
                 if subitem_id:
+                    # THIS BLOCK IS NOW CORRECT
                     update_result = create_monday_update(subitem_id, log_message)
                     if not update_result:
                         print(f"  ERROR: Failed to post update to new subitem '{category_name}' (ID: {subitem_id})")
@@ -188,7 +189,6 @@ if __name__ == '__main__':
                 else:
                     print(f"  ERROR: Could not find or create subitem for '{category_name}'")
             else:
-                # <<< MODIFIED DRY RUN LOGIC
                 print(f"  -> DRY RUN: Would find or create subitem '{category_name}' with Entry Type 'Curriculum'.")
                 print(f"     DRY RUN: Would post an update with {len(course_names)} courses.")
 
@@ -202,6 +202,7 @@ if __name__ == '__main__':
                 if not DRY_RUN:
                     subitem_id = find_or_create_subitem(student_id, category_name, column_values=staff_entry_type)
                     if subitem_id:
+                        # THIS BLOCK IS NOW CORRECT
                         update_result = create_monday_update(subitem_id, log_message)
                         if not update_result:
                             print(f"  ERROR: Failed to post update to subitem '{category_name}' (ID: {subitem_id})")
@@ -209,7 +210,6 @@ if __name__ == '__main__':
                     else:
                         print(f"  ERROR: Could not find or create subitem for '{category_name}'")
                 else:
-                    # <<< MODIFIED DRY RUN LOGIC
                     print(f"  -> DRY RUN: Would find or create subitem '{category_name}' with Entry Type 'Staff'.")
                     print(f"     DRY RUN: Would post an update with assignment: {staff_names}")
 
