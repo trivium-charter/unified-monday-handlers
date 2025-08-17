@@ -147,6 +147,9 @@ if __name__ == '__main__':
     all_students = get_all_plp_items()
     print(f"Found {len(all_students)} students to process.")
 
+    # --- NEW: Create a set of the new, valid subitem names ---
+    consolidated_subitem_names = set(PLP_CONNECT_COLUMNS_MAP.keys()) | set(PLP_PEOPLE_COLUMNS_MAP.keys())
+
     curriculum_entry_type = {PLP_SUBITEM_ENTRY_TYPE_COLUMN_ID: {"labels": ["Curriculum"]}}
     staff_entry_type = {PLP_SUBITEM_ENTRY_TYPE_COLUMN_ID: {"labels": ["Staff"]}}
 
@@ -181,7 +184,6 @@ if __name__ == '__main__':
             if not DRY_RUN:
                 subitem_id = find_or_create_subitem(student_id, category_name, column_values=curriculum_entry_type)
                 if subitem_id:
-                    # THIS BLOCK IS NOW CORRECT
                     update_result = create_monday_update(subitem_id, log_message)
                     if not update_result:
                         print(f"  ERROR: Failed to post update to new subitem '{category_name}' (ID: {subitem_id})")
@@ -202,7 +204,6 @@ if __name__ == '__main__':
                 if not DRY_RUN:
                     subitem_id = find_or_create_subitem(student_id, category_name, column_values=staff_entry_type)
                     if subitem_id:
-                        # THIS BLOCK IS NOW CORRECT
                         update_result = create_monday_update(subitem_id, log_message)
                         if not update_result:
                             print(f"  ERROR: Failed to post update to subitem '{category_name}' (ID: {subitem_id})")
@@ -214,7 +215,11 @@ if __name__ == '__main__':
                     print(f"     DRY RUN: Would post an update with assignment: {staff_names}")
 
         # --- Delete all old subitems created by the target user ---
-        subitems_to_delete = [s['id'] for s in student.get('subitems', []) if str(s.get('creator', {}).get('id')) == str(target_user_id)]
+        subitems_to_delete = [
+            s['id'] for s in student.get('subitems', []) 
+            if str(s.get('creator', {}).get('id')) == str(target_user_id) 
+            and s.get('name') not in consolidated_subitem_names
+        ]
         
         if not subitems_to_delete:
             print(f"  No old subitems from {TARGET_USER_NAME} to delete.")
