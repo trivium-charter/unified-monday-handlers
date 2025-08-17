@@ -12,33 +12,31 @@ from collections import defaultdict
 # Set to False to perform the actual creation and deletion.
 DRY_RUN = True
 
-# Your Monday.com API Key and Board ID
+# Your Monday.com API Key and Board ID from environment variables
 MONDAY_API_KEY = os.environ.get("MONDAY_API_KEY")
-PLP_BOARD_ID = os.environ.get("PLP_BOARD_ID")
+PLP_BOARD_ID = os.environ.get("PLP_BOARD_ID") # Should be 8993025745
 MONDAY_API_URL = "https://api.monday.com/v2"
 
 # --- SET THE TARGET USER ---
-# The script will ONLY delete subitems created by this exact user name.
+# The script will ONLY touch subitems created by this exact user name.
 TARGET_USER_NAME = "Sarah Bruce"
 
-# --- CONFIGURE YOUR PLP COLUMNS ---
+# --- CONFIGURE YOUR PLP COLUMNS (Based on your provided variables) ---
 # 1. Map for CURRICULUM "Connect Boards" columns
 PLP_CONNECT_COLUMNS_MAP = {
-    "ELA Curriculum": os.environ.get("PLP_ELA_CONNECT_COLUMN_ID"),
-    "Math Curriculum": os.environ.get("PLP_MATH_CONNECT_COLUMN_ID"),
-    "ACE Curriculum": os.environ.get("PLP_ACE_CONNECT_COLUMN_ID"),
-    "Other Curriculum": os.environ.get("PLP_OTHER_CONNECT_COLUMN_ID")
-    # Add other curriculum connect columns as needed
+    "ELA Curriculum": "board_relation_mkqnxyjd",
+    "Math Curriculum": "board_relation_mkqnbtaf",
+    "ACE Curriculum": "board_relation_mkqn34pg",
+    "Other Curriculum": "board_relation_mkr54dtg"
 }
 
 # 2. Map for STAFF "People" columns
 PLP_PEOPLE_COLUMNS_MAP = {
-    "TOR Assignments": os.environ.get("PLP_TOR_PERSON_COLUMN_ID"),
-    "Case Manager Assignments": os.environ.get("PLP_CM_PERSON_COLUMN_ID"),
-    "Connect Teacher Assignments": os.environ.get("PLP_CONNECT_PERSON_COLUMN_ID")
-    # Add other staff people columns as needed
+    "TOR Assignments": "person", # From MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS
+    "Case Manager Assignments": "multiple_person_mks1hqnj",
+    "Connect Teacher Assignments": "multiple_person_mks1hzcz",
+    "ACE Teacher Assignments": "multiple_person_mks1w5fc"
 }
-
 
 # ==============================================================================
 # 2. MONDAY.COM HELPER FUNCTIONS
@@ -46,7 +44,6 @@ PLP_PEOPLE_COLUMNS_MAP = {
 MONDAY_HEADERS = { "Authorization": MONDAY_API_KEY, "Content-Type": "application/json", "API-Version": "2023-10" }
 
 def execute_monday_graphql(query):
-    # (This is the same function from your other scripts)
     max_retries = 4; delay = 2
     for attempt in range(max_retries):
         try:
@@ -181,7 +178,7 @@ if __name__ == '__main__':
             category_name = connect_id_to_cat_map.get(col_val['id'])
             if category_name:
                 try:
-                    linked_ids = {int(item["linkedPulseId"]) for item in json.loads(col_val['value'])["linkedPulseIds"]}
+                    linked_ids = {int(item["linkedPulseId"]) for item in json.loads(col_val.get('value', '{}') or '{}').get("linkedPulseIds", [])}
                     current_curriculum[category_name].update(linked_ids)
                     all_linked_ids.update(linked_ids)
                 except (json.JSONDecodeError, TypeError, KeyError, AttributeError):
@@ -190,15 +187,13 @@ if __name__ == '__main__':
         item_id_to_name_map = get_item_names(all_linked_ids)
 
         for category, item_ids in current_curriculum.items():
+            if not item_ids: continue
             course_names = sorted([f"'{item_id_to_name_map.get(item_id, f'Item {item_id}')}'" for item_id in item_ids])
             log_message = f"Current curriculum as of {datetime.now().strftime('%Y-%m-%d')}:\n" + "\n".join([f"- {name}" for name in course_names])
             
             if not DRY_RUN:
-                # Create and update subitem
                 new_subitem_id = create_subitem(student_id, category)
-                if new_subitem_id:
-                    create_monday_update(new_subitem_id, log_message)
-                    time.sleep(1)
+                if new_subitem_id: create_monday_update(new_subitem_id, log_message); time.sleep(1)
             else:
                 print(f"  -> DRY RUN: Would create subitem '{category}' with {len(course_names)} courses.")
 
@@ -211,9 +206,7 @@ if __name__ == '__main__':
                 
                 if not DRY_RUN:
                     new_subitem_id = create_subitem(student_id, category_name)
-                    if new_subitem_id:
-                        create_monday_update(new_subitem_id, log_message)
-                        time.sleep(1)
+                    if new_subitem_id: create_monday_update(new_subitem_id, log_message); time.sleep(1)
                 else:
                     print(f"  -> DRY RUN: Would create subitem '{category_name}' with assignment: {staff_names}.")
         
