@@ -135,9 +135,7 @@ if __name__ == '__main__':
     all_students = get_all_plp_items()
     print(f"Found {len(all_students)} students to process.")
 
-    # --- Create a set of the new, valid subitem names to protect them from deletion ---
     consolidated_subitem_names = set(PLP_CONNECT_COLUMNS_MAP.keys()) | set(PLP_PEOPLE_COLUMNS_MAP.keys())
-
     curriculum_entry_type = {PLP_SUBITEM_ENTRY_TYPE_COLUMN_ID: {"labels": ["Curriculum"]}}
     staff_entry_type = {PLP_SUBITEM_ENTRY_TYPE_COLUMN_ID: {"labels": ["Staff"]}}
 
@@ -149,7 +147,7 @@ if __name__ == '__main__':
         student_name = student['name']
         print(f"\n--- Processing Student {i}/{len(all_students)}: {student_name} (ID: {student_id}) ---")
 
-        # --- Build and log curriculum from connect columns ---
+        # --- Build curriculum from connect columns ---
         current_curriculum = defaultdict(set)
         all_linked_ids = set()
         for col_val in student.get('column_values', []):
@@ -164,6 +162,7 @@ if __name__ == '__main__':
         
         item_id_to_name_map = get_item_names(all_linked_ids)
 
+        # --- Log curriculum updates ---
         for category_name, item_ids in current_curriculum.items():
             if not item_ids: continue
             course_names = sorted([f"'{item_id_to_name_map.get(item_id, f'Item {item_id}')}'" for item_id in item_ids])
@@ -173,34 +172,33 @@ if __name__ == '__main__':
                 subitem_id = find_or_create_subitem(student_id, category_name, column_values=curriculum_entry_type)
                 if subitem_id:
                     update_result = create_monday_update(subitem_id, log_message)
-                    if not update_result:
-                        print(f"  ERROR: Failed to post update to new subitem '{category_name}' (ID: {subitem_id})")
+                    if not update_result: print(f"  ERROR: Failed to post update to new subitem '{category_name}' (ID: {subitem_id})")
                     time.sleep(1)
-                else:
-                    print(f"  ERROR: Could not find or create subitem for '{category_name}'")
             else:
                 print(f"  -> DRY RUN: Would find or create subitem '{category_name}' with Entry Type 'Curriculum'.")
                 print(f"     DRY RUN: Would post an update with {len(course_names)} courses.")
 
-        # --- Build and log staff assignments from people columns ---
+        # --- CORRECTED: Build and log staff assignments from people columns ---
+        current_staff = defaultdict(list)
         for col_val in student.get('column_values', []):
             category_name = people_id_to_cat_map.get(col_val['id'])
             if category_name and col_val.get('text'):
-                staff_names = col_val['text']
-                log_message = f"Current assignment as of {datetime.now().strftime('%Y-%m-%d')}:\n- {staff_names}"
-                
-                if not DRY_RUN:
-                    subitem_id = find_or_create_subitem(student_id, category_name, column_values=staff_entry_type)
-                    if subitem_id:
-                        update_result = create_monday_update(subitem_id, log_message)
-                        if not update_result:
-                            print(f"  ERROR: Failed to post update to subitem '{category_name}' (ID: {subitem_id})")
-                        time.sleep(1)
-                    else:
-                        print(f"  ERROR: Could not find or create subitem for '{category_name}'")
-                else:
-                    print(f"  -> DRY RUN: Would find or create subitem '{category_name}' with Entry Type 'Staff'.")
-                    print(f"     DRY RUN: Would post an update with assignment: {staff_names}")
+                current_staff[category_name].append(col_val['text'])
+
+        for category_name, staff_list in current_staff.items():
+            if not staff_list: continue
+            staff_names = ", ".join(staff_list)
+            log_message = f"Current assignment as of {datetime.now().strftime('%Y-%m-%d')}:\n- {staff_names}"
+            
+            if not DRY_RUN:
+                subitem_id = find_or_create_subitem(student_id, category_name, column_values=staff_entry_type)
+                if subitem_id:
+                    update_result = create_monday_update(subitem_id, log_message)
+                    if not update_result: print(f"  ERROR: Failed to post update to subitem '{category_name}' (ID: {subitem_id})")
+                    time.sleep(1)
+            else:
+                print(f"  -> DRY RUN: Would find or create subitem '{category_name}' with Entry Type 'Staff'.")
+                print(f"     DRY RUN: Would post an update with assignment: {staff_names}")
 
         # --- Delete all old subitems created by the target user ---
         subitems_to_delete = [
