@@ -84,10 +84,42 @@ ALL_SPECIAL_COURSES = ROSTER_ONLY_COURSES.union(ROSTER_AND_CREDIT_COURSES)
 # ==============================================================================
 MONDAY_HEADERS = { "Authorization": MONDAY_API_KEY, "Content-Type": "application/json", "API-Version": "2023-10" }
 
+def get_logged_items_from_updates(subitem_id):
+    """
+    Reads all updates for a subitem to determine the current state of logged items.
+    Returns a set of item names that are currently considered "Added".
+    """
+    if not subitem_id:
+        return set()
+
+    query = f"query {{ items(ids: [{subitem_id}]) {{ updates(limit: 500) {{ body }} }} }}"
+    result = execute_monday_graphql(query)
+    
+    logged_items = {}
+    try:
+        updates = result['data']['items'][0]['updates']
+        # Process updates in chronological order (oldest to newest)
+        for update in reversed(updates):
+            body = update.get('body', '')
+            try:
+                # Extract the subject (text in single quotes)
+                subject = "'" + body.split("'")[1] + "'"
+                if "added" in body.lower():
+                    logged_items[subject] = "Added"
+                elif "removed" in body.lower():
+                    logged_items[subject] = "Removed"
+            except IndexError:
+                continue
+    except (TypeError, KeyError, IndexError):
+        pass
+
+    # Return a set of items with the final state of "Added"
+    return {subject for subject, state in logged_items.items() if state == "Added"}
+    
 def find_or_create_subitem(parent_item_id, subitem_name, column_values=None, dry_run=False):
     """
     Finds a subitem by name. If it doesn't exist, it creates it.
-    Returns the ID of the subitem.
+    Returns a tuple: (subitem_id, was_created_boolean).
     """
     # First, try to find the subitem by name
     query = f'query {{ items(ids:[{parent_item_id}]) {{ subitems {{ id name }} }} }}'
@@ -96,18 +128,20 @@ def find_or_create_subitem(parent_item_id, subitem_name, column_values=None, dry
         subitems = result['data']['items'][0]['subitems']
         for subitem in subitems:
             if subitem.get('name') == subitem_name:
-                print(f"  INFO: Found existing subitem '{subitem_name}' (ID: {subitem['id']}).")
-                return subitem['id']
+                # Found existing subitem
+                return subitem['id'], False
     except (KeyError, IndexError, TypeError):
-        pass # Subitem not found, will proceed to create
+        pass
 
     # If not found, create it
     print(f"  INFO: No existing subitem named '{subitem_name}'. Creating it.")
     if not dry_run:
-        return create_subitem(parent_item_id, subitem_name, column_values=column_values)
+        new_id = create_subitem(parent_item_id, subitem_name, column_values=column_values)
+        return new_id, True
     else:
         print(f"  -> DRY RUN: Would create subitem '{subitem_name}'.")
-        return "dry_run_placeholder_id" # Return a placeholder for dry runs
+        # Return a placeholder and True to simulate creation
+        return "dry_run_placeholder_id", True
         
 def execute_monday_graphql(query):
     max_retries = 4; delay = 2
@@ -874,56 +908,74 @@ def run_plp_sync_for_student(plp_item_id, creator_id, db_cursor, dry_run=True):
     sync_teacher_assignments(master_student_id, plp_item_id, dry_run=dry_run)
 
 def reconcile_subitems(plp_item_id, creator_id, db_cursor, dry_run=True):
-    print(f"--- Reconciling Enrollments for PLP Item: {plp_item_id} ---")
+    print(f"--- Reconciling All Data and Logs for PLP Item: {plp_item_id} ---")
     student_details = get_student_details_from_plp(plp_item_id)
     if not student_details or not student_details.get('master_id'):
         print("  SKIPPING: Could not get complete student details for reconciliation.")
         return
 
-    # --- Reconcile Course Enrollments in Canvas ---
-    print("  -> Verifying Canvas course enrollments...")
-    class_id_to_category_map = {}
+    # --- Reconcile Courses (Both Canvas Enrollments and Logging) ---
+    print("  -> Verifying course enrollments and logs...")
+    
     for category, column_id in PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.items():
-        for class_id in get_linked_items_from_board_relation(plp_item_id, int(PLP_BOARD_ID), column_id):
-            class_id_to_category_map[class_id] = category
+        # 1. Get the "Source of Truth" from the PLP connect column
+        source_of_truth_ids = get_linked_items_from_board_relation(plp_item_id, int(PLP_BOARD_ID), column_id)
+        if not source_of_truth_ids:
+            continue # No courses in this category to reconcile
 
-    for class_item_id, category_name in class_id_to_category_map.items():
-        # This function will no longer create subitems. It only ensures the student is enrolled.
-        linked_canvas_item_ids = get_linked_items_from_board_relation(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
+        id_to_name_map = get_item_names(source_of_truth_ids)
+        source_of_truth_names = {f"'{name}'" for name in id_to_name_map.values()}
         
-        if linked_canvas_item_ids and not dry_run:
-            canvas_item_id = list(linked_canvas_item_ids)[0]
-            course_id_val = get_column_value(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_COURSE_ID_COLUMN_ID)
-            canvas_course_id = course_id_val.get('text') if course_id_val else None
-            
-            if canvas_course_id:
-                # The main goal of reconciliation is just to ensure enrollment is correct.
-                # A simplified section name is used here as a fallback.
-                section = create_section_if_not_exists(canvas_course_id, "All")
-                if section:
-                    enroll_or_create_and_enroll(canvas_course_id, section.id, student_details, db_cursor)
+        # 2. Find the consolidated subitem and read its logs
+        subitem_name = category + " Curriculum"
+        subitem_id, was_created = find_or_create_subitem(plp_item_id, subitem_name, dry_run=dry_run)
+        
+        if not subitem_id:
+            continue
+
+        logged_names = get_logged_items_from_updates(subitem_id)
+        
+        # 3. Compare and log discrepancies
+        missed_additions = source_of_truth_names - logged_names
+        
+        if missed_additions:
+            print(f"  -> Found {len(missed_additions)} missed curriculum logs in '{subitem_name}'.")
+            for item_name in missed_additions:
+                update_text = f"Reconciliation: Added {item_name} on {datetime.now().strftime('%Y-%m-%d')}"
+                if not dry_run:
+                    create_monday_update(subitem_id, update_text)
+                    time.sleep(1) # API rate limiting
+                else:
+                    print(f"     DRY RUN: Would post update: {update_text}")
+
+        # 4. Verify Canvas enrollments for all courses in this category
+        if not dry_run:
+            for course_id in source_of_truth_ids:
+                linked_canvas_item_ids = get_linked_items_from_board_relation(course_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
+                if linked_canvas_item_ids:
+                    canvas_item_id = list(linked_canvas_item_ids)[0]
+                    course_id_val = get_column_value(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_COURSE_ID_COLUMN_ID)
+                    canvas_course_id = course_id_val.get('text') if course_id_val else None
+                    if canvas_course_id:
+                        section = create_section_if_not_exists(canvas_course_id, "All")
+                        if section:
+                            enroll_or_create_and_enroll(canvas_course_id, section.id, student_details, db_cursor)
 
     # --- Reconcile Staff Assignments on the PLP Board ---
-    print("  -> Verifying PLP staff assignments...")
+    print("  -> Verifying PLP staff assignments and logs...")
+    # (The same intelligent logging can be added for staff assignments if needed)
     sync_teacher_assignments(student_details['master_id'], plp_item_id, dry_run=dry_run)
 
-    print("  -> Reconciling staff assignments...")
-    master_student_id = student_details['master_id']
-    for trigger_col, mapping in MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS.items():
-        staff_role_name = mapping.get("name", "Staff")
-        master_person_val = get_column_value(master_student_id, int(MASTER_STUDENT_BOARD_ID), trigger_col)
-        if master_person_val and master_person_val.get('value'):
-            person_ids = get_people_ids_from_value(master_person_val.get('value'))
-            if person_ids:
-                person_id = list(person_ids)[0]
-                person_name = get_user_name(person_id)
-                if person_name:
-                    expected_staff_subitem = f"{staff_role_name}: {person_name}"
-                    if not check_if_subitem_exists(plp_item_id, expected_staff_subitem, creator_id):
-                        print(f"    INFO: Subitem '{expected_staff_subitem}' is missing. Creating it.")
-                        if not dry_run: create_subitem(plp_item_id, expected_staff_subitem, column_values={PLP_SUBITEM_ENTRY_TYPE_COLUMN_ID: {"labels": ["Staff Change"]}})
-                    else:
-                        print(f"    INFO: Subitem '{expected_staff_subitem}' already exists.")
+    for subitem_name, column_id in PLP_PEOPLE_COLUMNS_MAP.items():
+        staff_val = get_column_value(plp_item_id, int(PLP_BOARD_ID), column_id)
+        if staff_val and staff_val.get('text'):
+            subitem_id, was_created = find_or_create_subitem(plp_item_id, subitem_name, dry_run=dry_run)
+            if was_created and subitem_id:
+                staff_names = staff_val['text']
+                log_message = f"Reconciliation Log - Current assignment as of {datetime.now().strftime('%Y-%m-%d')}:\n- {staff_names}"
+                print(f"     -> Subitem was missing. Posting reconciliation log for assignment: {staff_names}")
+                if not dry_run:
+                    create_monday_update(subitem_id, log_message)
 
 def sync_canvas_teachers_and_tas(db_cursor, dry_run=True):
     """
