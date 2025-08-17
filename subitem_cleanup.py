@@ -11,7 +11,7 @@ from datetime import datetime
 
 # --- IMPORTANT ---
 # Set to False to perform the actual creation and deletion.
-DRY_RUN = True
+DRY_RUN = False
 
 # Your Monday.com API Key and Board ID from environment variables
 MONDAY_API_KEY = os.environ.get("MONDAY_API_KEY")
