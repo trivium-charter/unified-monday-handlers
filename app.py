@@ -518,54 +518,55 @@ def get_student_details_from_plp(plp_item_id):
         print(f"ERROR: Could not parse student details from Monday.com response: {e}")
         return None
 
-def manage_class_enrollment(action, plp_item_id, class_item_id, student_details, category_name, subitem_cols=None):
-    subitem_cols = subitem_cols or {}
-    all_courses_item_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)) or f"Item {class_item_id}"
-    linked_canvas_item_ids = get_linked_items_from_board_relation(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
-    class_name = all_courses_item_name
-    if linked_canvas_item_ids:
-        canvas_item_id = list(linked_canvas_item_ids)[0]
-        canvas_class_name = get_item_name(canvas_item_id, int(CANVAS_BOARD_ID))
-        if canvas_class_name: class_name = canvas_class_name
-    
-    if action == "enroll":
-        subitem_title = f"Added {category_name} '{class_name}'"
-        if check_if_subitem_exists_by_name(plp_item_id, subitem_title):
-            print(f"  INFO: Subitem '{subitem_title}' already exists. Skipping.")
-            return
+def manage_class_enrollment(action, plp_item_id, class_item_id, student_details, category_name, changer_name):
+    """Handles Canvas enrollment and posts a detailed update to a consolidated subitem."""
+    class_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)) or f"Item {class_item_id}"
+    date_str = datetime.now().strftime('%Y-%m-%d')
 
+    # Determine the consolidated subitem name and entry type
+    subitem_name = f"{category_name} Curriculum"
+    entry_type_column_id = "entry_type__1" # Assuming a consistent subitem entry type column ID
+    column_values = {entry_type_column_id: {"labels": ["Curriculum"]}}
+
+    # Find or create the consolidated subitem
+    subitem_id = find_or_create_subitem(plp_item_id, subitem_name, column_values=column_values)
+    if not subitem_id:
+        print(f"ERROR: Could not find or create subitem '{subitem_name}' for PLP item {plp_item_id}.")
+        return
+
+    # Get the full current list of courses for the update message
+    full_current_list_ids = get_linked_items_from_board_relation(plp_item_id, int(PLP_BOARD_ID), PLP_CATEGORY_TO_CONNECT_COLUMN_MAP[category_name])
+    id_to_name_map = get_item_names(full_current_list_ids)
+    current_names_str = ", ".join([f"'{id_to_name_map.get(cid)}'" for cid in sorted(list(full_current_list_ids)) if id_to_name_map.get(cid)]) or "Blank"
+
+    # Perform the action and create the detailed update
+    if action == "enroll":
+        update_text = f"'{class_name}' was added by {changer_name}.\nCurrent {category_name} curriculum is now: {current_names_str}."
+        # --- Canvas Enrollment Logic ---
+        linked_canvas_item_ids = get_linked_items_from_board_relation(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
         if linked_canvas_item_ids:
             canvas_item_id = list(linked_canvas_item_ids)[0]
             course_id_val = get_column_value(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_COURSE_ID_COLUMN_ID)
             canvas_course_id = course_id_val.get('text') if course_id_val else None
-            
-            if not canvas_course_id:
-                new_course = create_canvas_course(class_name, CANVAS_TERM_ID)
-                if new_course:
-                    canvas_course_id = new_course.id
-                    change_column_value_generic(int(CANVAS_BOARD_ID), canvas_item_id, CANVAS_COURSE_ID_COLUMN_ID, str(canvas_course_id))
-                    if ALL_CLASSES_CANVAS_ID_COLUMN:
-                        change_column_value_generic(int(ALL_COURSES_BOARD_ID), class_item_id, ALL_CLASSES_CANVAS_ID_COLUMN, str(canvas_course_id))
-            
             if canvas_course_id:
-                m_series_val = get_column_value(plp_item_id, int(PLP_BOARD_ID), PLP_M_SERIES_LABELS_COLUMN)
-                ag_grad_val = get_column_value(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_CLASSES_AG_GRAD_COLUMN)
-                m_series_text = (m_series_val.get('text') or "") if m_series_val else ""
-                ag_grad_text = (ag_grad_val.get('text') or "") if ag_grad_val else ""
-                sections = {"A-G" for s in ["AG"] if s in ag_grad_text} | {"Grad" for s in ["Grad"] if s in ag_grad_text} | {"M-Series" for s in ["M-series"] if s in m_series_text}
-                if not sections: sections.add("All")
-                for section_name in sections:
-                    section = create_section_if_not_exists(canvas_course_id, section_name)
-                    if section: enroll_or_create_and_enroll(canvas_course_id, section.id, student_details)
-        create_subitem(plp_item_id, subitem_title, column_values=subitem_cols)
+                section = create_section_if_not_exists(canvas_course_id, "All")
+                if section:
+                    enroll_or_create_and_enroll(canvas_course_id, section.id, student_details)
+        # --- End Canvas Logic ---
+        create_monday_update(subitem_id, update_text)
+
     elif action == "unenroll":
-        subitem_title = f"Removed {category_name} '{class_name}'"
+        update_text = f"'{class_name}' was removed by {changer_name}.\nCurrent {category_name} curriculum is now: {current_names_str}."
+        # --- Canvas Unenrollment Logic ---
+        linked_canvas_item_ids = get_linked_items_from_board_relation(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
         if linked_canvas_item_ids:
             canvas_item_id = list(linked_canvas_item_ids)[0]
             course_id_val = get_column_value(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_COURSE_ID_COLUMN_ID)
             canvas_course_id = course_id_val.get('text') if course_id_val else None
-            if canvas_course_id: unenroll_student_from_course(canvas_course_id, student_details)
-        create_subitem(plp_item_id, subitem_title, column_values=subitem_cols)
+            if canvas_course_id:
+                unenroll_student_from_course(canvas_course_id, student_details)
+        # --- End Canvas Logic ---
+        create_monday_update(subitem_id, update_text)
 
 # ==============================================================================
 # CELERY APP DEFINITION & TASKS
