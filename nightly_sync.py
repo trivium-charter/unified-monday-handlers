@@ -95,8 +95,11 @@ def get_item_names(item_ids):
     except (TypeError, KeyError, IndexError):
         return {}
 
-def find_or_create_subitem(parent_item_id, subitem_name, column_values=None):
-    """Finds a subitem by name. If it doesn't exist, it creates it with column values."""
+def find_or_create_subitem(parent_item_id, subitem_name, column_values=None, dry_run=False):
+    """
+    Finds a subitem by name. If it doesn't exist, it creates it.
+    Returns the ID of the subitem.
+    """
     query = f'query {{ items(ids:[{parent_item_id}]) {{ subitems {{ id name }} }} }}'
     result = execute_monday_graphql(query)
     try:
@@ -105,27 +108,30 @@ def find_or_create_subitem(parent_item_id, subitem_name, column_values=None):
                 return subitem['id']
     except (KeyError, IndexError, TypeError):
         pass
-    return create_subitem(parent_item_id, subitem_name, column_values=column_values)def get_logged_items_from_updates(subitem_id):
+    
+    if not dry_run:
+        return create_subitem(parent_item_id, subitem_name, column_values=column_values)
+    else:
+        print(f"  -> DRY RUN: Would create subitem '{subitem_name}'.")
+        return "dry_run_placeholder_id"
+
+def get_logged_items_from_updates(subitem_id):
     """
     Reads all updates for a subitem to determine the current state of logged items.
     Returns a set of item names that are currently considered "Added".
     """
     if not subitem_id:
         return set()
-
     query = f"query {{ items(ids: [{subitem_id}]) {{ updates(limit: 500) {{ body }} }} }}"
     result = execute_monday_graphql(query)
-    
     logged_items = {}
     try:
         updates = result['data']['items'][0]['updates']
-        # Process updates in chronological order (oldest to newest)
-        for update in reversed(updates):
+        for update in reversed(updates): # Process in chronological order
             body = update.get('body', '')
             try:
-                # Extract the subject (text in single quotes)
                 subject = "'" + body.split("'")[1] + "'"
-                if "added" in body.lower():
+                if "added" in body.lower() or "assigned" in body.lower():
                     logged_items[subject] = "Added"
                 elif "removed" in body.lower():
                     logged_items[subject] = "Removed"
@@ -133,8 +139,6 @@ def find_or_create_subitem(parent_item_id, subitem_name, column_values=None):
                 continue
     except (TypeError, KeyError, IndexError):
         pass
-
-    # Return a set of items with the final state of "Added"
     return {subject for subject, state in logged_items.items() if state == "Added"}
     
 def find_or_create_subitem(parent_item_id, subitem_name, column_values=None, dry_run=False):
@@ -937,24 +941,31 @@ def reconcile_subitems(plp_item_id, creator_id, db_cursor, dry_run=True):
 
     # --- Reconcile Courses (Both Canvas Enrollments and Logging) ---
     print("  -> Verifying course enrollments and logs...")
-    
     for category, column_id in PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.items():
+        # 1. Get the "Source of Truth" from the PLP connect column
         source_of_truth_ids = get_linked_items_from_board_relation(plp_item_id, int(PLP_BOARD_ID), column_id)
         id_to_name_map = get_item_names(source_of_truth_ids)
         source_of_truth_names = {f"'{name}'" for name in id_to_name_map.values()}
         
-        subitem_name = category + " Curriculum"
-        subitem_id, was_created = find_or_create_subitem(plp_item_id, subitem_name, dry_run=dry_run)
-        
+        # 2. Find the consolidated subitem and read its logs
+        subitem_name = f"{category} Curriculum"
+        subitem_id = find_or_create_subitem(plp_item_id, subitem_name, dry_run=dry_run)
         if not subitem_id: continue
 
         logged_names = get_logged_items_from_updates(subitem_id)
-        missed_additions = source_of_truth_names - logged_names
         
-        if missed_additions:
+        # 3. Compare and log discrepancies
+        missed_additions = source_of_truth_names - logged_names
+        missed_removals = logged_names - source_of_truth_names
+        
+        if missed_additions or missed_removals:
             current_names_str = ", ".join(sorted(list(source_of_truth_names))) or "Blank"
+            for item_name in missed_removals:
+                update_text = f"Reconciliation: Found unlogged removal of {item_name}.\nCurrent curriculum is now: {current_names_str}."
+                if not dry_run: create_monday_update(subitem_id, update_text)
+                else: print(f"     DRY RUN: Would post update: {update_text}")
             for item_name in missed_additions:
-                update_text = f"Reconciliation: Found missed enrollment for {item_name}.\nCurrent curriculum is now: {current_names_str}."
+                update_text = f"Reconciliation: Found unlogged addition of {item_name}.\nCurrent curriculum is now: {current_names_str}."
                 if not dry_run: create_monday_update(subitem_id, update_text)
                 else: print(f"     DRY RUN: Would post update: {update_text}")
 
