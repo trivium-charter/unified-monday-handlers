@@ -137,6 +137,17 @@ def get_item_name(item_id, board_id):
             return board['items_page']['items'][0].get('name')
     return None
 
+def get_item_names(item_ids):
+    """Efficiently gets names for a list of item IDs."""
+    if not item_ids:
+        return {}
+    query = f"query {{ items(ids: {list(item_ids)}) {{ id name }} }}"
+    result = execute_monday_graphql(query)
+    try:
+        return {int(item['id']): item['name'] for item in result['data']['items']}
+    except (TypeError, KeyError, IndexError):
+        return {}
+        
 def get_user_name(user_id):
     if user_id is None or user_id == -4: return None
     query = f"query {{ users(ids: [{user_id}]) {{ name }} }}"
