@@ -939,66 +939,28 @@ def reconcile_subitems(plp_item_id, creator_id, db_cursor, dry_run=True):
     print("  -> Verifying course enrollments and logs...")
     
     for category, column_id in PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.items():
-        # 1. Get the "Source of Truth" from the PLP connect column
         source_of_truth_ids = get_linked_items_from_board_relation(plp_item_id, int(PLP_BOARD_ID), column_id)
-        
         id_to_name_map = get_item_names(source_of_truth_ids)
         source_of_truth_names = {f"'{name}'" for name in id_to_name_map.values()}
         
-        # 2. Find the consolidated subitem and read its logs
         subitem_name = category + " Curriculum"
         subitem_id, was_created = find_or_create_subitem(plp_item_id, subitem_name, dry_run=dry_run)
         
-        if not subitem_id:
-            continue
+        if not subitem_id: continue
 
         logged_names = get_logged_items_from_updates(subitem_id)
-        
-        # 3. Compare and log discrepancies
         missed_additions = source_of_truth_names - logged_names
         
         if missed_additions:
-            print(f"  -> Found {len(missed_additions)} missed curriculum logs in '{subitem_name}'.")
+            current_names_str = ", ".join(sorted(list(source_of_truth_names))) or "Blank"
             for item_name in missed_additions:
-                update_text = f"Reconciliation: Added {item_name} on {datetime.now().strftime('%Y-%m-%d')}"
-                if not dry_run:
-                    create_monday_update(subitem_id, update_text)
-                    time.sleep(1) # API rate limiting
-                else:
-                    print(f"     DRY RUN: Would post update: {update_text}")
+                update_text = f"Reconciliation: Found missed enrollment for {item_name}.\nCurrent curriculum is now: {current_names_str}."
+                if not dry_run: create_monday_update(subitem_id, update_text)
+                else: print(f"     DRY RUN: Would post update: {update_text}")
 
-        # 4. Verify Canvas enrollments for all courses in this category
-        if not dry_run and source_of_truth_ids:
-            for course_id in source_of_truth_ids:
-                # (Canvas enrollment logic here...)
-                pass
-
-    # --- Reconcile Staff Assignments (Both on PLP Board and Logging) ---
+    # --- Reconcile Staff Assignments on the PLP Board ---
     print("  -> Verifying PLP staff assignments and logs...")
     sync_teacher_assignments(student_details['master_id'], plp_item_id, dry_run=dry_run)
-
-    for subitem_name, column_id in PLP_PEOPLE_COLUMNS_MAP.items():
-        staff_val = get_column_value(plp_item_id, int(PLP_BOARD_ID), column_id)
-        
-        source_of_truth_staff = set(name.strip() for name in staff_val.get('text', '').split(',')) if staff_val and staff_val.get('text') else set()
-
-        subitem_id, was_created = find_or_create_subitem(plp_item_id, subitem_name, dry_run=dry_run)
-        if not subitem_id:
-            continue
-
-        logged_staff = get_logged_items_from_updates(subitem_id)
-        
-        missed_staff_additions = {f"'{name}'" for name in source_of_truth_staff} - logged_staff
-
-        if missed_staff_additions:
-            print(f"  -> Found {len(missed_staff_additions)} missed staff logs in '{subitem_name}'.")
-            for staff_name in missed_staff_additions:
-                update_text = f"Reconciliation: Assigned {staff_name} on {datetime.now().strftime('%Y-%m-%d')}"
-                if not dry_run:
-                    create_monday_update(subitem_id, update_text)
-                    time.sleep(1)
-                else:
-                    print(f"     DRY RUN: Would post update: {update_text}")
 
 def sync_canvas_teachers_and_tas(db_cursor, dry_run=True):
     """
