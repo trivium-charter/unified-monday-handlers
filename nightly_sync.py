@@ -84,7 +84,28 @@ ALL_SPECIAL_COURSES = ROSTER_ONLY_COURSES.union(ROSTER_AND_CREDIT_COURSES)
 # ==============================================================================
 MONDAY_HEADERS = { "Authorization": MONDAY_API_KEY, "Content-Type": "application/json", "API-Version": "2023-10" }
 
-def get_logged_items_from_updates(subitem_id):
+def get_item_names(item_ids):
+    """Efficiently gets names for a list of item IDs."""
+    if not item_ids:
+        return {}
+    query = f"query {{ items(ids: {list(item_ids)}) {{ id name }} }}"
+    result = execute_monday_graphql(query)
+    try:
+        return {int(item['id']): item['name'] for item in result['data']['items']}
+    except (TypeError, KeyError, IndexError):
+        return {}
+
+def find_or_create_subitem(parent_item_id, subitem_name, column_values=None):
+    """Finds a subitem by name. If it doesn't exist, it creates it with column values."""
+    query = f'query {{ items(ids:[{parent_item_id}]) {{ subitems {{ id name }} }} }}'
+    result = execute_monday_graphql(query)
+    try:
+        for subitem in result['data']['items'][0]['subitems']:
+            if subitem.get('name') == subitem_name:
+                return subitem['id']
+    except (KeyError, IndexError, TypeError):
+        pass
+    return create_subitem(parent_item_id, subitem_name, column_values=column_values)def get_logged_items_from_updates(subitem_id):
     """
     Reads all updates for a subitem to determine the current state of logged items.
     Returns a set of item names that are currently considered "Added".
