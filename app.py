@@ -80,6 +80,27 @@ ALL_SPECIAL_COURSES = ROSTER_ONLY_COURSES.union(ROSTER_AND_CREDIT_COURSES)
 # ==============================================================================
 MONDAY_HEADERS = { "Authorization": MONDAY_API_KEY, "Content-Type": "application/json", "API-Version": "2023-10" }
 
+def find_or_create_subitem(parent_item_id, subitem_name, column_values=None):
+    """
+    Finds a subitem by name. If it doesn't exist, it creates it with column values.
+    Returns the ID of the subitem.
+    """
+    # First, try to find the subitem by name
+    query = f'query {{ items(ids:[{parent_item_id}]) {{ subitems {{ id name }} }} }}'
+    result = execute_monday_graphql(query)
+    try:
+        subitems = result['data']['items'][0]['subitems']
+        for subitem in subitems:
+            if subitem.get('name') == subitem_name:
+                # Found existing subitem, return its ID
+                return subitem['id']
+    except (KeyError, IndexError, TypeError):
+        pass # If any error, proceed to create
+
+    # If not found, create it
+    print(f"  INFO: No existing subitem named '{subitem_name}'. Creating it.")
+    return create_subitem(parent_item_id, subitem_name, column_values=column_values)
+    
 def execute_monday_graphql(query):
     max_retries = 4; delay = 2
     for attempt in range(max_retries):
