@@ -80,29 +80,6 @@ ALL_SPECIAL_COURSES = ROSTER_ONLY_COURSES.union(ROSTER_AND_CREDIT_COURSES)
 # ==============================================================================
 MONDAY_HEADERS = { "Authorization": MONDAY_API_KEY, "Content-Type": "application/json", "API-Version": "2023-10" }
 
-def get_item_names(item_ids):
-    """Efficiently gets names for a list of item IDs."""
-    if not item_ids:
-        return {}
-    query = f"query {{ items(ids: {list(item_ids)}) {{ id name }} }}"
-    result = execute_monday_graphql(query)
-    try:
-        return {int(item['id']): item['name'] for item in result['data']['items']}
-    except (TypeError, KeyError, IndexError):
-        return {}
-
-def find_or_create_subitem(parent_item_id, subitem_name, column_values=None):
-    """Finds a subitem by name. If it doesn't exist, it creates it with column values."""
-    query = f'query {{ items(ids:[{parent_item_id}]) {{ subitems {{ id name }} }} }}'
-    result = execute_monday_graphql(query)
-    try:
-        for subitem in result['data']['items'][0]['subitems']:
-            if subitem.get('name') == subitem_name:
-                return subitem['id']
-    except (KeyError, IndexError, TypeError):
-        pass
-    return create_subitem(parent_item_id, subitem_name, column_values=column_values)
-    
 def execute_monday_graphql(query):
     max_retries = 4; delay = 2
     for attempt in range(max_retries):
@@ -343,16 +320,25 @@ def find_canvas_teacher(teacher_details):
             
     return None
 
-def create_canvas_user(student_details):
+def create_canvas_user(user_details, role='student'):
+    """Creates a Canvas user and includes a final check to prevent duplicates."""
     canvas_api = initialize_canvas_api()
     if not canvas_api: return None
     try:
         account = canvas_api.get_account(1)
-        user_payload = {'user': {'name': student_details['name'], 'terms_of_use': True}, 'pseudonym': {'unique_id': student_details['email'], 'sis_user_id': student_details['ssid'], 'login_id': student_details['email'], 'authentication_provider_id': '112'}, 'communication_channel': {'type': 'email', 'address': student_details['email'], 'skip_confirmation': True}}
-        new_user = account.create_user(**user_payload)
-        return new_user
+        user_payload = {
+            'user': {'name': user_details['name'], 'terms_of_use': True},
+            'pseudonym': {
+                'unique_id': user_details['email'],
+                'sis_user_id': user_details.get('sis_id') or user_details.get('ssid') or user_details['email'],
+            }
+        }
+        return account.create_user(**user_payload)
     except CanvasException as e:
-        print(f"ERROR: Canvas user creation failed: {e}")
+        if "is already in use" in str(e) or "ID already in use" in str(e):
+            print(f"INFO: User creation failed because ID is in use. Searching again for existing user.")
+            return find_canvas_teacher(user_details) if role == 'teacher' else find_canvas_user(user_details)
+        print(f"ERROR: A critical error occurred during user creation: {e}")
         raise
 
 def update_user_ssid(user, new_ssid):
@@ -608,39 +594,42 @@ def process_canvas_full_sync_from_status(event_data):
 
 @celery_app.task(name='app.process_canvas_delta_sync_from_course_change')
 def process_canvas_delta_sync_from_course_change(event_data):
-    plp_item_id, user_id, trigger_column_id = event_data.get('pulseId'), event_data.get('userId'), event_data.get('columnId')
+    plp_item_id = event_data.get('pulseId')
+    user_id = event_data.get('userId')
+    trigger_column_id = event_data.get('columnId')
+    changer_name = get_user_name(user_id) or "automation"
+    
     student_details = get_student_details_from_plp(plp_item_id)
     if not student_details: return
-    master_student_id = student_details.get('master_id')
-    if not master_student_id:
-        print(f"ERROR: Could not find Master Student ID for PLP {plp_item_id}. Cannot sync teacher.")
-        return
-    ENTRY_TYPE_COLUMN_ID = "entry_type__1"
-    curriculum_change_values = {ENTRY_TYPE_COLUMN_ID: {"labels": ["Curriculum Change"]}}
-    current_ids, previous_ids = get_linked_ids_from_connect_column_value(event_data.get('value')), get_linked_ids_from_connect_column_value(event_data.get('previousValue'))
-    added_ids, removed_ids = current_ids - previous_ids, previous_ids - current_ids
-    category_name = {v: k for k, v in PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.items()}.get(trigger_column_id, "Course")
-    CANVAS_BOARD_CLASS_TYPE_COLUMN_ID = "status__1"
-    ACE_TEACHER_COLUMN_ID_ON_MASTER = "multiple_person_mks1wrfv"
-    CONNECT_TEACHER_COLUMN_ID_ON_MASTER = "multiple_person_mks11jeg"
-    for class_id in added_ids:
-        manage_class_enrollment("enroll", plp_item_id, class_id, student_details, category_name, subitem_cols=curriculum_change_values)
-        linked_canvas_item_ids = get_linked_items_from_board_relation(class_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
-        if linked_canvas_item_ids:
-            canvas_item_id = list(linked_canvas_item_ids)[0]
-            class_type_val = get_column_value(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_BOARD_CLASS_TYPE_COLUMN_ID)
-            class_type_text = class_type_val.get('text', '').lower() if class_type_val and class_type_val.get('text') else ''
-            target_master_col_id = None
-            if 'ace' in class_type_text: target_master_col_id = ACE_TEACHER_COLUMN_ID_ON_MASTER
-            elif 'connect' in class_type_text: target_master_col_id = CONNECT_TEACHER_COLUMN_ID_ON_MASTER
-            if target_master_col_id:
-                teacher_person_value = get_teacher_person_value_from_canvas_board(canvas_item_id)
-                if teacher_person_value:
-                    update_people_column(master_student_id, int(MASTER_STUDENT_BOARD_ID), target_master_col_id, teacher_person_value, "multiple-person")
-                else:
-                    print(f"WARNING: Could not find linked teacher for course item {class_id}.")
-    for class_id in removed_ids:
-        manage_class_enrollment("unenroll", plp_item_id, class_id, student_details, category_name, subitem_cols=curriculum_change_values)
+
+    current_ids = get_linked_ids_from_connect_column_value(event_data.get('value'))
+    previous_ids = get_linked_ids_from_connect_column_value(event_data.get('previousValue'))
+    added_ids = current_ids - previous_ids
+    removed_ids = previous_ids - current_ids
+
+    category = {v: k for k, v in PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.items()}.get(trigger_column_id, "Other/Elective")
+    subitem_name = f"{category} Curriculum"
+    
+    all_involved_ids = added_ids | removed_ids | current_ids
+    id_to_name_map = get_item_names(all_involved_ids)
+    
+    current_names_str = ", ".join([f"'{id_to_name_map.get(cid)}'" for cid in sorted(list(current_ids)) if id_to_name_map.get(cid)]) or "Blank"
+    
+    subitem_id = find_or_create_subitem(plp_item_id, subitem_name)
+    if not subitem_id: return
+
+    for rid in removed_ids:
+        name = id_to_name_map.get(rid, f"Item {rid}")
+        update_text = f"'{name}' was removed by {changer_name}.\nCurrent {category} curriculum is now: {current_names_str}."
+        create_monday_update(subitem_id, update_text)
+        manage_class_enrollment("unenroll", plp_item_id, rid, student_details, category, changer_name)
+
+    for aid in added_ids:
+        name = id_to_name_map.get(aid, f"Item {aid}")
+        update_text = f"'{name}' was added by {changer_name}.\nCurrent {category} curriculum is now: {current_names_str}."
+        create_monday_update(subitem_id, update_text)
+        manage_class_enrollment("enroll", plp_item_id, aid, student_details, category, changer_name)
+    
 
 @celery_app.task(name='app.process_plp_course_sync_webhook')
 def process_plp_course_sync_webhook(event_data):
@@ -739,29 +728,42 @@ def process_master_student_person_sync_webhook(event_data):
     current_value_raw, previous_value_raw = event_data.get('value'), event_data.get('previousValue')
     current_ids = get_people_ids_from_value(current_value_raw)
     previous_ids = get_people_ids_from_value(previous_value_raw)
-    if current_ids == previous_ids:
-        print(f"INFO: People column for item {master_item_id} was updated, but no change was made. Skipping.")
-        return
+    
+    if current_ids == previous_ids: return
+
     mappings = MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS.get(trigger_column_id)
     if not mappings: return
+    
+    # --- This part syncs the people columns to other boards ---
     for target in mappings["targets"]:
         linked_ids = get_linked_items_from_board_relation(master_item_id, int(MASTER_STUDENT_BOARD_ID), target["connect_column_id"])
         for linked_id in linked_ids:
             update_people_column(linked_id, int(target["board_id"]), target["target_column_id"], current_value_raw, target["target_column_type"])
+
+    # --- This part creates the detailed log update ---
     plp_target = next((t for t in mappings["targets"] if str(t.get("board_id")) == str(PLP_BOARD_ID)), None)
     if not plp_target: return
+    
     plp_linked_ids = get_linked_items_from_board_relation(master_item_id, int(MASTER_STUDENT_BOARD_ID), plp_target["connect_column_id"])
     if not plp_linked_ids: return
+    
     plp_item_id = list(plp_linked_ids)[0]
-    ENTRY_TYPE_COLUMN_ID = "entry_type__1"
-    staff_change_values = {ENTRY_TYPE_COLUMN_ID: {"labels": ["Staff Change"]}}
-    col_name, changer, date = mappings.get("name", "Staff"), get_user_name(user_id) or "automation", datetime.now().strftime('%Y-%m-%d')
-    for p_id in (current_ids - previous_ids):
-        name = get_user_name(p_id)
-        if name: create_subitem(plp_item_id, f"{col_name} changed to {name} on {date} by {changer}", column_values=staff_change_values)
-    for p_id in (previous_ids - current_ids):
-        name = get_user_name(p_id)
-        if name: create_subitem(plp_item_id, f"Removed {name} from {col_name} on {date} by {changer}", column_values=staff_change_values)
+    changer_name = get_user_name(user_id) or "automation"
+    col_name = mappings.get("name", "Staff")
+    subitem_name = f"{col_name} Assignments"
+    
+    current_names_str = get_column_value(master_item_id, int(MASTER_STUDENT_BOARD_ID), trigger_column_id).get('text') or "Blank"
+    
+    subitem_id = find_or_create_subitem(plp_item_id, subitem_name)
+    if not subitem_id: return
+    
+    added_names = [get_user_name(pid) for pid in (current_ids - previous_ids)]
+    removed_names = [get_user_name(pid) for pid in (previous_ids - current_ids)]
+
+    for name in removed_names:
+        if name: create_monday_update(subitem_id, f"'{name}' was removed by {changer_name}.\nCurrent {col_name} is now: {current_names_str}.")
+    for name in added_names:
+        if name: create_monday_update(subitem_id, f"'{name}' was assigned by {changer_name}.\nCurrent {col_name} is now: {current_names_str}.")
 
 @celery_app.task(name='app.process_teacher_enrollment_webhook')
 def process_teacher_enrollment_webhook(event_data):
