@@ -91,6 +91,11 @@ PLP_PEOPLE_COLUMNS_MAP = {
 # ==============================================================================
 MONDAY_HEADERS = { "Authorization": MONDAY_API_KEY, "Content-Type": "application/json", "API-Version": "2023-10" }
 
+def create_monday_update(item_id, update_text):
+    """Creates an update (comment) on a Monday.com item."""
+    mutation = f'mutation {{ create_update (item_id: {item_id}, body: {json.dumps(update_text)}) {{ id }} }}'
+    return execute_monday_graphql(mutation)
+
 def get_item_names(item_ids):
     """Efficiently gets names for a list of item IDs."""
     if not item_ids:
@@ -101,26 +106,6 @@ def get_item_names(item_ids):
         return {int(item['id']): item['name'] for item in result['data']['items']}
     except (TypeError, KeyError, IndexError):
         return {}
-
-def find_or_create_subitem(parent_item_id, subitem_name, column_values=None, dry_run=False):
-    """
-    Finds a subitem by name. If it doesn't exist, it creates it.
-    Returns the ID of the subitem.
-    """
-    query = f'query {{ items(ids:[{parent_item_id}]) {{ subitems {{ id name }} }} }}'
-    result = execute_monday_graphql(query)
-    try:
-        for subitem in result['data']['items'][0]['subitems']:
-            if subitem.get('name') == subitem_name:
-                return subitem['id']
-    except (KeyError, IndexError, TypeError):
-        pass
-    
-    if not dry_run:
-        return create_subitem(parent_item_id, subitem_name, column_values=column_values)
-    else:
-        print(f"  -> DRY RUN: Would create subitem '{subitem_name}'.")
-        return "dry_run_placeholder_id"
 
 def get_logged_items_from_updates(subitem_id):
     """
@@ -917,15 +902,22 @@ def reconcile_subitems(plp_item_id, creator_id, db_cursor, dry_run=True):
         print("  SKIPPING: Could not get complete student details for reconciliation.")
         return
 
+    # Define column values for entry types, mirroring the cleanup script
+    curriculum_entry_type = {PLP_SUBITEM_ENTRY_TYPE_COLUMN_ID: {"labels": ["Curriculum"]}}
+    staff_entry_type = {PLP_SUBITEM_ENTRY_TYPE_COLUMN_ID: {"labels": ["Staff"]}}
+
     # --- Reconcile Courses (Both Canvas Enrollments and Logging) ---
     print("  -> Verifying course enrollments and logs...")
     for category, column_id in PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.items():
         source_of_truth_ids = get_linked_items_from_board_relation(plp_item_id, int(PLP_BOARD_ID), column_id)
+        if not source_of_truth_ids: continue # Skip if no courses are in this category
+
         id_to_name_map = get_item_names(source_of_truth_ids)
         source_of_truth_names = {f"'{name}'" for name in id_to_name_map.values()}
         
         subitem_name = f"{category} Curriculum"
-        subitem_id, was_created = find_or_create_subitem(plp_item_id, subitem_name, dry_run=dry_run)
+        # Pass the correct column_values when creating the subitem
+        subitem_id, was_created = find_or_create_subitem(plp_item_id, subitem_name, column_values=curriculum_entry_type, dry_run=dry_run)
         if not subitem_id: continue
 
         logged_names = get_logged_items_from_updates(subitem_id)
@@ -934,14 +926,19 @@ def reconcile_subitems(plp_item_id, creator_id, db_cursor, dry_run=True):
         
         if missed_additions or missed_removals:
             current_names_str = ", ".join(sorted(list(source_of_truth_names))) or "Blank"
+            # Combine all changes into a single reconciliation update
+            update_text_parts = ["Reconciliation Update:"]
             for item_name in missed_removals:
-                update_text = f"Reconciliation: Found unlogged removal of {item_name}.\nCurrent curriculum is now: {current_names_str}."
-                if not dry_run: create_monday_update(subitem_id, update_text)
-                else: print(f"     DRY RUN: Would post update: {update_text}")
+                update_text_parts.append(f"- Found unlogged removal of {item_name}.")
             for item_name in missed_additions:
-                update_text = f"Reconciliation: Found unlogged addition of {item_name}.\nCurrent curriculum is now: {current_names_str}."
-                if not dry_run: create_monday_update(subitem_id, update_text)
-                else: print(f"     DRY RUN: Would post update: {update_text}")
+                update_text_parts.append(f"- Found unlogged addition of {item_name}.")
+            update_text_parts.append(f"\nCurrent curriculum is now: {current_names_str}.")
+            
+            final_update_text = "\n".join(update_text_parts)
+            if not dry_run:
+                create_monday_update(subitem_id, final_update_text)
+            else:
+                print(f"     DRY RUN: Would post update: {final_update_text}")
 
     # --- Reconcile Staff Assignments (Data Sync first, then Log Reconciliation) ---
     print("  -> Verifying PLP staff assignments and logs...")
@@ -951,19 +948,27 @@ def reconcile_subitems(plp_item_id, creator_id, db_cursor, dry_run=True):
         staff_val = get_column_value(plp_item_id, int(PLP_BOARD_ID), column_id)
         source_of_truth_staff = {f"'{name.strip()}'" for name in staff_val.get('text', '').split(',')} if staff_val and staff_val.get('text') else set()
 
-        subitem_id, was_created = find_or_create_subitem(plp_item_id, subitem_name, dry_run=dry_run)
+        # Pass the correct column_values when creating the subitem
+        subitem_id, was_created = find_or_create_subitem(plp_item_id, subitem_name, column_values=staff_entry_type, dry_run=dry_run)
         if not subitem_id: continue
 
         logged_staff = get_logged_items_from_updates(subitem_id)
         missed_staff_additions = source_of_truth_staff - logged_staff
+        # Note: You may also want to handle missed_staff_removals if staff can be unassigned
         
         if missed_staff_additions:
             current_staff_str = ", ".join(sorted(list(source_of_truth_staff))) or "Blank"
+            update_text_parts = ["Reconciliation Update:"]
             for staff_name in missed_staff_additions:
                 if not staff_name or staff_name == "''": continue
-                update_text = f"Reconciliation: Found unlogged assignment of {staff_name}.\nCurrent assignment is now: {current_staff_str}."
-                if not dry_run: create_monday_update(subitem_id, update_text)
-                else: print(f"     DRY RUN: Would post update: {update_text}")
+                update_text_parts.append(f"- Found unlogged assignment of {staff_name}.")
+            update_text_parts.append(f"\nCurrent assignment is now: {current_staff_str}.")
+
+            final_update_text = "\n".join(update_text_parts)
+            if not dry_run:
+                create_monday_update(subitem_id, final_update_text)
+            else:
+                print(f"     DRY RUN: Would post update: {final_update_text}")
 
 def sync_canvas_teachers_and_tas(db_cursor, dry_run=True):
     """
