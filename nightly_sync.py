@@ -934,37 +934,36 @@ def reconcile_subitems(plp_item_id, creator_id, db_cursor, dry_run=True):
         
         if missed_additions or missed_removals:
             current_names_str = ", ".join(sorted(list(source_of_truth_names))) or "Blank"
-            # (Log creation logic for missed removals and additions as before)
-            # ...
+            for item_name in missed_removals:
+                update_text = f"Reconciliation: Found unlogged removal of {item_name}.\nCurrent curriculum is now: {current_names_str}."
+                if not dry_run: create_monday_update(subitem_id, update_text)
+                else: print(f"     DRY RUN: Would post update: {update_text}")
+            for item_name in missed_additions:
+                update_text = f"Reconciliation: Found unlogged addition of {item_name}.\nCurrent curriculum is now: {current_names_str}."
+                if not dry_run: create_monday_update(subitem_id, update_text)
+                else: print(f"     DRY RUN: Would post update: {update_text}")
 
     # --- Reconcile Staff Assignments (Data Sync first, then Log Reconciliation) ---
     print("  -> Verifying PLP staff assignments and logs...")
     sync_teacher_assignments(student_details['master_id'], plp_item_id, dry_run=dry_run)
 
     for subitem_name, column_id in PLP_PEOPLE_COLUMNS_MAP.items():
-        # 1. Get Source of Truth from the now-synced PLP board
         staff_val = get_column_value(plp_item_id, int(PLP_BOARD_ID), column_id)
         source_of_truth_staff = {f"'{name.strip()}'" for name in staff_val.get('text', '').split(',')} if staff_val and staff_val.get('text') else set()
 
-        # 2. Find subitem and get logged state
         subitem_id, was_created = find_or_create_subitem(plp_item_id, subitem_name, dry_run=dry_run)
         if not subitem_id: continue
 
         logged_staff = get_logged_items_from_updates(subitem_id)
-
-        # 3. Compare and log discrepancies
         missed_staff_additions = source_of_truth_staff - logged_staff
         
         if missed_staff_additions:
             current_staff_str = ", ".join(sorted(list(source_of_truth_staff))) or "Blank"
             for staff_name in missed_staff_additions:
-                # Avoid logging blanks if the set contains an empty string
                 if not staff_name or staff_name == "''": continue
                 update_text = f"Reconciliation: Found unlogged assignment of {staff_name}.\nCurrent assignment is now: {current_staff_str}."
-                if not dry_run:
-                    create_monday_update(subitem_id, update_text)
-                else:
-                    print(f"     DRY RUN: Would post update: {update_text}")
+                if not dry_run: create_monday_update(subitem_id, update_text)
+                else: print(f"     DRY RUN: Would post update: {update_text}")
 
 def sync_canvas_teachers_and_tas(db_cursor, dry_run=True):
     """
