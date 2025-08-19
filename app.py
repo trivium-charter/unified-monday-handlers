@@ -147,6 +147,8 @@ def get_item_names(item_ids):
         return {int(item['id']): item['name'] for item in result['data']['items']}
     except (TypeError, KeyError, IndexError):
         return {}
+
+
         
 def get_user_name(user_id):
     if user_id is None or user_id == -4: return None
@@ -362,7 +364,7 @@ def create_canvas_user(user_details, role='student'):
             'user': {'name': user_details['name'], 'terms_of_use': True},
             'pseudonym': {
                 'unique_id': user_details['email'],
-                'sis_user_id': user_details.get('sis_id') or user_details.get('ssid') or user_details['email'],
+                'sis_user_id': user_details.get('sis_id') or user_details.get('ssid') or user_details.get('email'),
             }
         }
         return account.create_user(**user_payload)
@@ -662,6 +664,49 @@ def process_canvas_delta_sync_from_course_change(event_data):
         update_text = f"'{name}' was added by {changer_name}.\nCurrent {category} curriculum is now: {current_names_str}."
         create_monday_update(subitem_id, update_text)
         manage_class_enrollment("enroll", plp_item_id, aid, student_details, category, changer_name)
+
+@celery_app.task(name='app.process_master_student_person_sync_webhook')
+def process_master_student_person_sync_webhook(event_data):
+    master_item_id, trigger_column_id, user_id = event_data.get('pulseId'), event_data.get('columnId'), event_data.get('userId')
+    current_value_raw, previous_value_raw = event_data.get('value'), event_data.get('previousValue')
+    current_ids = get_people_ids_from_value(current_value_raw)
+    previous_ids = get_people_ids_from_value(previous_value_raw)
+    
+    if current_ids == previous_ids: return
+
+    mappings = MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS.get(trigger_column_id)
+    if not mappings: return
+    
+    # Syncs people columns to other boards
+    for target in mappings["targets"]:
+        linked_ids = get_linked_items_from_board_relation(master_item_id, int(MASTER_STUDENT_BOARD_ID), target["connect_column_id"])
+        for linked_id in linked_ids:
+            update_people_column(linked_id, int(target["board_id"]), target["target_column_id"], current_value_raw, target["target_column_type"])
+
+    # Creates the detailed log update
+    plp_target = next((t for t in mappings["targets"] if str(t.get("board_id")) == str(PLP_BOARD_ID)), None)
+    if not plp_target: return
+    
+    plp_linked_ids = get_linked_items_from_board_relation(master_item_id, int(MASTER_STUDENT_BOARD_ID), plp_target["connect_column_id"])
+    if not plp_linked_ids: return
+    
+    plp_item_id = list(plp_linked_ids)[0]
+    changer_name = get_user_name(user_id) or "automation"
+    col_name = mappings.get("name", "Staff")
+    subitem_name = f"{col_name} Assignments"
+    
+    current_names_str = get_column_value(master_item_id, int(MASTER_STUDENT_BOARD_ID), trigger_column_id).get('text') or "Blank"
+    
+    subitem_id = find_or_create_subitem(plp_item_id, subitem_name)
+    if not subitem_id: return
+    
+    added_names = [get_user_name(pid) for pid in (current_ids - previous_ids)]
+    removed_names = [get_user_name(pid) for pid in (previous_ids - current_ids)]
+
+    for name in removed_names:
+        if name: create_monday_update(subitem_id, f"'{name}' was removed by {changer_name}.\nCurrent {col_name} is now: {current_names_str}.")
+    for name in added_names:
+        if name: create_monday_update(subitem_id, f"'{name}' was assigned by {changer_name}.\nCurrent {col_name} is now: {current_names_str}.")
     
 
 @celery_app.task(name='app.process_plp_course_sync_webhook')
@@ -755,48 +800,6 @@ def process_plp_course_sync_webhook(event_data):
     downstream_event = {'pulseId': plp_item_id, 'userId': event_data.get('userId')}
     process_canvas_delta_sync_from_course_change.delay(downstream_event)
 
-@celery_app.task(name='app.process_master_student_person_sync_webhook')
-def process_master_student_person_sync_webhook(event_data):
-    master_item_id, trigger_column_id, user_id = event_data.get('pulseId'), event_data.get('columnId'), event_data.get('userId')
-    current_value_raw, previous_value_raw = event_data.get('value'), event_data.get('previousValue')
-    current_ids = get_people_ids_from_value(current_value_raw)
-    previous_ids = get_people_ids_from_value(previous_value_raw)
-    
-    if current_ids == previous_ids: return
-
-    mappings = MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS.get(trigger_column_id)
-    if not mappings: return
-    
-    # --- This part syncs the people columns to other boards ---
-    for target in mappings["targets"]:
-        linked_ids = get_linked_items_from_board_relation(master_item_id, int(MASTER_STUDENT_BOARD_ID), target["connect_column_id"])
-        for linked_id in linked_ids:
-            update_people_column(linked_id, int(target["board_id"]), target["target_column_id"], current_value_raw, target["target_column_type"])
-
-    # --- This part creates the detailed log update ---
-    plp_target = next((t for t in mappings["targets"] if str(t.get("board_id")) == str(PLP_BOARD_ID)), None)
-    if not plp_target: return
-    
-    plp_linked_ids = get_linked_items_from_board_relation(master_item_id, int(MASTER_STUDENT_BOARD_ID), plp_target["connect_column_id"])
-    if not plp_linked_ids: return
-    
-    plp_item_id = list(plp_linked_ids)[0]
-    changer_name = get_user_name(user_id) or "automation"
-    col_name = mappings.get("name", "Staff")
-    subitem_name = f"{col_name} Assignments"
-    
-    current_names_str = get_column_value(master_item_id, int(MASTER_STUDENT_BOARD_ID), trigger_column_id).get('text') or "Blank"
-    
-    subitem_id = find_or_create_subitem(plp_item_id, subitem_name)
-    if not subitem_id: return
-    
-    added_names = [get_user_name(pid) for pid in (current_ids - previous_ids)]
-    removed_names = [get_user_name(pid) for pid in (previous_ids - current_ids)]
-
-    for name in removed_names:
-        if name: create_monday_update(subitem_id, f"'{name}' was removed by {changer_name}.\nCurrent {col_name} is now: {current_names_str}.")
-    for name in added_names:
-        if name: create_monday_update(subitem_id, f"'{name}' was assigned by {changer_name}.\nCurrent {col_name} is now: {current_names_str}.")
 
 @celery_app.task(name='app.process_teacher_enrollment_webhook')
 def process_teacher_enrollment_webhook(event_data):
