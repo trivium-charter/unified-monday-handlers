@@ -520,55 +520,32 @@ def get_student_details_from_plp(plp_item_id):
         print(f"ERROR: Could not parse student details from Monday.com response: {e}")
         return None
 
-def manage_class_enrollment(action, plp_item_id, class_item_id, student_details, category_name, changer_name):
-    """Handles Canvas enrollment and posts a detailed update to a consolidated subitem."""
+def manage_class_enrollment(action, plp_item_id, class_item_id, student_details):
+    """Handles ONLY the Canvas enrollment or unenrollment action."""
     class_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)) or f"Item {class_item_id}"
-    date_str = datetime.now().strftime('%Y-%m-%d')
 
-    # Determine the consolidated subitem name and entry type
-    subitem_name = f"{category_name} Curriculum"
-    entry_type_column_id = "entry_type__1" # Assuming a consistent subitem entry type column ID
-    column_values = {entry_type_column_id: {"labels": ["Curriculum"]}}
-
-    # Find or create the consolidated subitem
-    subitem_id = find_or_create_subitem(plp_item_id, subitem_name, column_values=column_values)
-    if not subitem_id:
-        print(f"ERROR: Could not find or create subitem '{subitem_name}' for PLP item {plp_item_id}.")
+    linked_canvas_item_ids = get_linked_items_from_board_relation(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
+    if not linked_canvas_item_ids:
+        print(f"  INFO: '{class_name}' is not a Canvas course. Skipping Canvas action.")
         return
 
-    # Get the full current list of courses for the update message
-    full_current_list_ids = get_linked_items_from_board_relation(plp_item_id, int(PLP_BOARD_ID), PLP_CATEGORY_TO_CONNECT_COLUMN_MAP[category_name])
-    id_to_name_map = get_item_names(full_current_list_ids)
-    current_names_str = ", ".join([f"'{id_to_name_map.get(cid)}'" for cid in sorted(list(full_current_list_ids)) if id_to_name_map.get(cid)]) or "Blank"
+    canvas_item_id = list(linked_canvas_item_ids)[0]
+    course_id_val = get_column_value(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_COURSE_ID_COLUMN_ID)
+    canvas_course_id = course_id_val.get('text') if course_id_val else None
 
-    # Perform the action and create the detailed update
+    if not canvas_course_id:
+        print(f"  WARNING: Canvas Course ID not found for '{class_name}'. Skipping Canvas action.")
+        return
+
     if action == "enroll":
-        update_text = f"'{class_name}' was added by {changer_name}.\nCurrent {category_name} curriculum is now: {current_names_str}."
-        # --- Canvas Enrollment Logic ---
-        linked_canvas_item_ids = get_linked_items_from_board_relation(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
-        if linked_canvas_item_ids:
-            canvas_item_id = list(linked_canvas_item_ids)[0]
-            course_id_val = get_column_value(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_COURSE_ID_COLUMN_ID)
-            canvas_course_id = course_id_val.get('text') if course_id_val else None
-            if canvas_course_id:
-                section = create_section_if_not_exists(canvas_course_id, "All")
-                if section:
-                    enroll_or_create_and_enroll(canvas_course_id, section.id, student_details)
-        # --- End Canvas Logic ---
-        create_monday_update(subitem_id, update_text)
+        print(f"  -> Pushing enrollment for '{class_name}' to Canvas.")
+        section = create_section_if_not_exists(canvas_course_id, "All")
+        if section:
+            enroll_or_create_and_enroll(canvas_course_id, section.id, student_details)
 
     elif action == "unenroll":
-        update_text = f"'{class_name}' was removed by {changer_name}.\nCurrent {category_name} curriculum is now: {current_names_str}."
-        # --- Canvas Unenrollment Logic ---
-        linked_canvas_item_ids = get_linked_items_from_board_relation(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
-        if linked_canvas_item_ids:
-            canvas_item_id = list(linked_canvas_item_ids)[0]
-            course_id_val = get_column_value(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_COURSE_ID_COLUMN_ID)
-            canvas_course_id = course_id_val.get('text') if course_id_val else None
-            if canvas_course_id:
-                unenroll_student_from_course(canvas_course_id, student_details)
-        # --- End Canvas Logic ---
-        create_monday_update(subitem_id, update_text)
+        print(f"  -> Pushing unenrollment for '{class_name}' to Canvas.")
+        unenroll_student_from_course(canvas_course_id, student_details)
 
 # ==============================================================================
 # CELERY APP DEFINITION & TASKS
@@ -641,6 +618,10 @@ def process_canvas_delta_sync_from_course_change(event_data):
     previous_ids = get_linked_ids_from_connect_column_value(event_data.get('previousValue'))
     added_ids = current_ids - previous_ids
     removed_ids = previous_ids - current_ids
+    
+    # If there are no actual changes, stop here.
+    if not added_ids and not removed_ids:
+        return
 
     category = {v: k for k, v in PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.items()}.get(trigger_column_id, "Other/Elective")
     subitem_name = f"{category} Curriculum"
@@ -648,22 +629,29 @@ def process_canvas_delta_sync_from_course_change(event_data):
     all_involved_ids = added_ids | removed_ids | current_ids
     id_to_name_map = get_item_names(all_involved_ids)
     
-    current_names_str = ", ".join([f"'{id_to_name_map.get(cid)}'" for cid in sorted(list(current_ids)) if id_to_name_map.get(cid)]) or "Blank"
-    
+    # --- Consolidated Update Logic ---
     subitem_id = find_or_create_subitem(plp_item_id, subitem_name)
     if not subitem_id: return
 
+    update_messages = []
     for rid in removed_ids:
         name = id_to_name_map.get(rid, f"Item {rid}")
-        update_text = f"'{name}' was removed by {changer_name}.\nCurrent {category} curriculum is now: {current_names_str}."
-        create_monday_update(subitem_id, update_text)
-        manage_class_enrollment("unenroll", plp_item_id, rid, student_details, category, changer_name)
-
+        update_messages.append(f"'{name}' was removed by {changer_name}.")
     for aid in added_ids:
         name = id_to_name_map.get(aid, f"Item {aid}")
-        update_text = f"'{name}' was added by {changer_name}.\nCurrent {category} curriculum is now: {current_names_str}."
-        create_monday_update(subitem_id, update_text)
-        manage_class_enrollment("enroll", plp_item_id, aid, student_details, category, changer_name)
+        update_messages.append(f"'{name}' was added by {changer_name}.")
+
+    if update_messages:
+        current_names_str = ", ".join([f"'{id_to_name_map.get(cid)}'" for cid in sorted(list(current_ids)) if id_to_name_map.get(cid)]) or "Blank"
+        final_update = "\n".join(update_messages) + f"\nCurrent {category} curriculum is now: {current_names_str}."
+        create_monday_update(subitem_id, final_update)
+    
+    # --- Canvas Actions (now separate from logging) ---
+    for rid in removed_ids:
+        manage_class_enrollment("unenroll", plp_item_id, rid, student_details)
+
+    for aid in added_ids:
+        manage_class_enrollment("enroll", plp_item_id, aid, student_details)
 
 @celery_app.task(name='app.process_master_student_person_sync_webhook')
 def process_master_student_person_sync_webhook(event_data):
@@ -683,7 +671,7 @@ def process_master_student_person_sync_webhook(event_data):
         for linked_id in linked_ids:
             update_people_column(linked_id, int(target["board_id"]), target["target_column_id"], current_value_raw, target["target_column_type"])
 
-    # Creates the detailed log update
+    # Creates a single, detailed log update on the PLP board
     plp_target = next((t for t in mappings["targets"] if str(t.get("board_id")) == str(PLP_BOARD_ID)), None)
     if not plp_target: return
     
@@ -695,18 +683,22 @@ def process_master_student_person_sync_webhook(event_data):
     col_name = mappings.get("name", "Staff")
     subitem_name = f"{col_name} Assignments"
     
-    current_names_str = get_column_value(master_item_id, int(MASTER_STUDENT_BOARD_ID), trigger_column_id).get('text') or "Blank"
-    
     subitem_id = find_or_create_subitem(plp_item_id, subitem_name)
     if not subitem_id: return
     
-    added_names = [get_user_name(pid) for pid in (current_ids - previous_ids)]
-    removed_names = [get_user_name(pid) for pid in (previous_ids - current_ids)]
+    added_names = [name for name in [get_user_name(pid) for pid in (current_ids - previous_ids)] if name]
+    removed_names = [name for name in [get_user_name(pid) for pid in (previous_ids - current_ids)] if name]
 
+    update_messages = []
     for name in removed_names:
-        if name: create_monday_update(subitem_id, f"'{name}' was removed by {changer_name}.\nCurrent {col_name} is now: {current_names_str}.")
+        update_messages.append(f"'{name}' was removed by {changer_name}.")
     for name in added_names:
-        if name: create_monday_update(subitem_id, f"'{name}' was assigned by {changer_name}.\nCurrent {col_name} is now: {current_names_str}.")
+        update_messages.append(f"'{name}' was assigned by {changer_name}.")
+
+    if update_messages:
+        current_names_str = get_column_value(master_item_id, int(MASTER_STUDENT_BOARD_ID), trigger_column_id).get('text') or "Blank"
+        final_update = "\n".join(update_messages) + f"\nCurrent {col_name} is now: {current_names_str}."
+        create_monday_update(subitem_id, final_update)
     
 
 @celery_app.task(name='app.process_plp_course_sync_webhook')
