@@ -360,11 +360,19 @@ def create_canvas_user(user_details, role='student'):
     if not canvas_api: return None
     try:
         account = canvas_api.get_account(1)
+        # This payload is now aligned with the more robust version from the nightly sync script
         user_payload = {
             'user': {'name': user_details['name'], 'terms_of_use': True},
             'pseudonym': {
                 'unique_id': user_details['email'],
                 'sis_user_id': user_details.get('sis_id') or user_details.get('ssid') or user_details.get('email'),
+                'login_id': user_details['email'],
+                'authentication_provider_id': '112' # <-- The required ID is now added
+            },
+            'communication_channel': {
+                'type': 'email',
+                'address': user_details['email'],
+                'skip_confirmation': True
             }
         }
         return account.create_user(**user_payload)
