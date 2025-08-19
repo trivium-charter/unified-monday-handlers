@@ -78,6 +78,13 @@ ROSTER_ONLY_COURSES = {10298, 10297, 10299, 10300, 10301}
 ROSTER_AND_CREDIT_COURSES = {10097, 10002, 10092, 10164, 10198}
 ALL_SPECIAL_COURSES = ROSTER_ONLY_COURSES.union(ROSTER_AND_CREDIT_COURSES)
 
+# Map for STAFF "People" columns on the PLP board
+PLP_PEOPLE_COLUMNS_MAP = {
+    "TOR Assignments": "person",
+    "Case Manager Assignments": "multiple_person_mks1hqnj",
+    "Connect Teacher Assignments": "multiple_person_mks1hzcz",
+    "ACE Teacher Assignments": "multiple_person_mks1w5fc"
+}
 
 # ==============================================================================
 # 2. MONDAY.COM & CANVAS UTILITIES (ALL DEFINED FIRST)
