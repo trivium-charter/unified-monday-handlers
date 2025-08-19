@@ -825,9 +825,9 @@ def run_hs_roster_sync_for_student(hs_roster_item, dry_run=True):
 def manage_class_enrollment(action, plp_item_id, class_item_id, student_details, category_name, creator_id, db_cursor, dry_run=True):
     class_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)) or f"Item {class_item_id}"
     linked_canvas_item_ids = get_linked_items_from_board_relation(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
-    
+
     if not linked_canvas_item_ids:
-        print(f"  INFO: '{class_name}' is a non-Canvas course or no link exists. Skipping enrollment action.")
+        print(f"  INFO: '{class_name}' is a non-Canvas course. Skipping Canvas action.")
         return
 
     canvas_item_id = list(linked_canvas_item_ids)[0]
@@ -835,63 +835,37 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details,
     canvas_course_id = course_id_val.get('text') if course_id_val else None
 
     if not canvas_course_id:
-        print(f"  WARNING: Canvas Course ID not found for course '{class_name}'. Skipping enrollment action.")
+        print(f"  WARNING: Canvas Course ID not found for course '{class_name}'. Skipping Canvas action.")
         return
 
+    # This function now ONLY handles the Canvas action. All subitem logging is done in the reconcile_subitems function.
     if action == "enroll":
         print(f"  ACTION: Pushing enrollment for '{class_name}' to Canvas.")
-        canvas_api = initialize_canvas_api()
-        # Find the Canvas user once to avoid repeated API calls
-        student_canvas_user = None
         if not dry_run:
-            student_canvas_user = find_canvas_user(student_details, db_cursor)
-
-        # --- NEW LOGIC FOR SPECIAL SECTIONS ---
-        if class_item_id in ALL_SPECIAL_COURSES:
-            print("    -> Applying special section logic.")
-            student_master_id = student_details.get('master_id')
-            
-            if not student_master_id or not student_canvas_user:
-                print("    -> SKIPPING: Could not get student details or find Canvas user for special section logic.")
-                return
-
-            roster_teacher_name = get_roster_teacher_name(student_master_id)
-            if not roster_teacher_name:
-                print("    -> WARNING: Could not determine Roster Teacher. Defaulting to 'Unassigned'.")
-                roster_teacher_name = "Unassigned"
-            
-            # Create section based on Roster Teacher
-            section_teacher = create_section_if_not_exists(canvas_course_id, roster_teacher_name)
-            if section_teacher:
-                if not dry_run: enroll_student_in_section(canvas_course_id, student_canvas_user.id, section_teacher.id)
-
-            # Create credit section if applicable
-            if class_item_id in ROSTER_AND_CREDIT_COURSES:
-                course_item_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)) or ""
-                credit_section_name = "2.5 Credits" if "2.5" in course_item_name else "5 Credits"
-                
-                section_credit = create_section_if_not_exists(canvas_course_id, credit_section_name)
-                if section_credit:
-                    if not dry_run: enroll_student_in_section(canvas_course_id, student_canvas_user.id, section_credit.id)
-        else:
-            # --- ORIGINAL LOGIC FOR NORMAL COURSES ---
-            m_series_val = get_column_value(plp_item_id, int(PLP_BOARD_ID), PLP_M_SERIES_LABELS_COLUMN)
-            ag_grad_val = get_column_value(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_CLASSES_AG_GRAD_COLUMN)
-            m_series_text = (m_series_val.get('text') or "") if m_series_val else ""
-            ag_grad_text = (ag_grad_val.get('text') or "") if ag_grad_val else ""
-            sections = {"A-G" for s in ["AG"] if s in ag_grad_text} | {"Grad" for s in ["Grad"] if s in ag_grad_text} | {"M-Series" for s in ["M-series"] if s in m_series_text}
-            if not sections: sections.add("All")
-            for section_name in sections:
-                section = create_section_if_not_exists(canvas_course_id, section_name)
+            # Logic for handling special sections vs normal courses
+            if class_item_id in ALL_SPECIAL_COURSES:
+                student_canvas_user = find_canvas_user(student_details, db_cursor)
+                if student_details.get('master_id') and student_canvas_user:
+                    roster_teacher_name = get_roster_teacher_name(student_details['master_id']) or "Unassigned"
+                    section_teacher = create_section_if_not_exists(canvas_course_id, roster_teacher_name)
+                    if section_teacher:
+                        enroll_student_in_section(canvas_course_id, student_canvas_user.id, section_teacher.id)
+                    if class_item_id in ROSTER_AND_CREDIT_COURSES:
+                        course_item_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)) or ""
+                        credit_section_name = "2.5 Credits" if "2.5" in course_item_name else "5 Credits"
+                        section_credit = create_section_if_not_exists(canvas_course_id, credit_section_name)
+                        if section_credit:
+                            enroll_student_in_section(canvas_course_id, student_canvas_user.id, section_credit.id)
+            else:
+                # Standard section logic
+                section = create_section_if_not_exists(canvas_course_id, "All")
                 if section:
-                    if not dry_run: enroll_or_create_and_enroll(canvas_course_id, section.id, student_details, db_cursor)
+                    enroll_or_create_and_enroll(canvas_course_id, section.id, student_details, db_cursor)
 
     elif action == "unenroll":
-        subitem_title = f"Removed {category_name} '{class_name}'"
-        print(f"  INFO: Unenrolling student and creating log: '{subitem_title}'")
+        print(f"  ACTION: Pushing unenrollment for '{class_name}' to Canvas.")
         if not dry_run:
             unenroll_student_from_course(canvas_course_id, student_details)
-            create_subitem(plp_item_id, subitem_title)
 
 
 def sync_teacher_assignments(master_student_id, plp_item_id, dry_run=True):
