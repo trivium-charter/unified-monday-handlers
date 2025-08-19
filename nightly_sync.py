@@ -1121,9 +1121,8 @@ def sync_canvas_teachers_and_tas(db_cursor, dry_run=True):
     print("=== CANVAS TEACHER AND TA SYNC FINISHED          ===")
     print("======================================================")
 
-# ==============================================================================
-# 4. SCRIPT EXECUTION
-# ==============================================================================
+# In nightly_sync.py
+
 if __name__ == '__main__':
     PERFORM_INITIAL_CLEANUP = False
     DRY_RUN = False
@@ -1141,32 +1140,66 @@ if __name__ == '__main__':
     cursor = None
     try:
         print("INFO: Connecting to the database...")
-        # ssl_opts = {'ssl_ca': 'ca.pem', 'ssl_verify_cert': True} # Enable for production with SSL
-        db = mysql.connector.connect( host=DB_HOST, user=DB_USER, password=DB_PASSWORD, database=DB_NAME, port=int(DB_PORT) ) #, **ssl_opts 
+        db = mysql.connector.connect( host=DB_HOST, user=DB_USER, password=DB_PASSWORD, database=DB_NAME, port=int(DB_PORT) )
         cursor = db.cursor()
         print("INFO: Fetching last sync times for processed students...")
         cursor.execute("CREATE TABLE IF NOT EXISTS processed_students (student_id BIGINT PRIMARY KEY, last_synced_at TIMESTAMP, canvas_id VARCHAR(255))")
         cursor.execute("SELECT student_id, last_synced_at, canvas_id FROM processed_students")
         processed_map = {row[0]: {'last_synced': row[1], 'canvas_id': row[2]} for row in cursor.fetchall()}
         print(f"INFO: Found {len(processed_map)} students in the database.")
-        print("INFO: Finding creator ID for subitem management...")
-        creator_id = get_user_id(TARGET_USER_NAME)
-        if not creator_id: raise Exception(f"Halting script: Target user '{TARGET_USER_NAME}' could not be found.")
+
+        # --- MODIFIED LOGIC STARTS HERE ---
+
+        # Step 1: Get PLP items that have been updated directly
         print("INFO: Fetching all PLP board items from Monday.com...")
         all_plp_items = get_all_board_items(PLP_BOARD_ID)
-        print("INFO: Filtering for new or updated students on PLP Board...")
-        items_to_process = []
+        plp_ids_to_process = set()
+
+        print("INFO: Filtering for students with updated PLP items...")
         for item in all_plp_items:
             item_id = int(item['id'])
             updated_at = parse_flexible_timestamp(item['updated_at'])
             sync_data = processed_map.get(item_id)
-            last_synced = sync_data['last_synced'] if sync_data else None
-            if last_synced: last_synced = last_synced.replace(tzinfo=timezone.utc)
+            last_synced = sync_data['last_synced'].replace(tzinfo=timezone.utc) if sync_data and sync_data['last_synced'] else None
+            
             if not last_synced or updated_at > last_synced:
-                items_to_process.append(item)
-        total_to_process = len(items_to_process)
-        print(f"INFO: Found {total_to_process} PLP students that are new or have been updated.")
+                plp_ids_to_process.add(item_id)
+
+        # Step 2: Get PLP items linked to recently updated HS Rosters
+        print("INFO: Fetching all HS Roster items to check for recent updates...")
+        all_hs_roster_items = get_all_board_items(HS_ROSTER_BOARD_ID)
         
+        print("INFO: Filtering for PLP items linked to updated HS Rosters...")
+        for hs_item in all_hs_roster_items:
+            hs_item_id = int(hs_item['id'])
+            # We assume an update to the HS Roster means the PLP might be out of sync
+            # A more advanced check could compare timestamps, but this is safer.
+            linked_plp_ids = get_linked_items_from_board_relation(hs_item_id, int(HS_ROSTER_BOARD_ID), HS_ROSTER_MAIN_ITEM_to_PLP_CONNECT_COLUMN_ID)
+            if linked_plp_ids:
+                 # Check if the HS item has been updated since the linked PLP item was last synced
+                plp_id = list(linked_plp_ids)[0]
+                sync_data = processed_map.get(plp_id)
+                last_synced = sync_data['last_synced'].replace(tzinfo=timezone.utc) if sync_data and sync_data['last_synced'] else None
+                hs_updated_at = parse_flexible_timestamp(hs_item['updated_at'])
+
+                if not last_synced or hs_updated_at > last_synced:
+                    plp_ids_to_process.update(linked_plp_ids)
+
+        # Step 3: Combine and fetch the final list of items to process
+        total_to_process = len(plp_ids_to_process)
+        print(f"INFO: Found {total_to_process} unique students to process from PLP and HS Roster updates.")
+        
+        items_to_process = []
+        if plp_ids_to_process:
+            # Fetch the full item objects for the unique IDs
+            all_items_on_board = {int(i['id']): i for i in all_plp_items}
+            items_to_process = [all_items_on_board[pid] for pid in plp_ids_to_process if pid in all_items_on_board]
+
+        # --- MODIFIED LOGIC ENDS HERE ---
+        
+        creator_id = get_user_id(TARGET_USER_NAME)
+        if not creator_id: raise Exception(f"Halting script: Target user '{TARGET_USER_NAME}' could not be found.")
+
         for i, plp_item in enumerate(items_to_process, 1):
             plp_item_id = int(plp_item['id'])
             print(f"\n===== Processing Student {i}/{total_to_process} (PLP ID: {plp_item_id}) =====")
@@ -1178,9 +1211,9 @@ if __name__ == '__main__':
                 hs_roster_ids = get_linked_ids_from_connect_column_value(hs_roster_connect_val.get('value')) if hs_roster_connect_val else set()
                 if hs_roster_ids:
                     hs_roster_item_id = list(hs_roster_ids)[0]
-                    hs_roster_item_object = get_all_board_items(HS_ROSTER_BOARD_ID, item_ids=[hs_roster_item_id])
+                    # Find the specific hs_roster_item from the list we already fetched
+                    hs_roster_item_object = next((item for item in all_hs_roster_items if int(item['id']) == hs_roster_item_id), None)
                     if hs_roster_item_object:
-                        hs_roster_item_object = hs_roster_item_object[0]
                         run_hs_roster_sync_for_student(hs_roster_item_object, dry_run=DRY_RUN)
                     else:
                         print(f"WARNING: Could not fetch HS Roster item object for ID {hs_roster_item_id}")
