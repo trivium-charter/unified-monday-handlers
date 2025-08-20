@@ -912,73 +912,58 @@ def reconcile_subitems(plp_item_id, creator_id, db_cursor, dry_run=True):
         print("  SKIPPING: Could not get complete student details for reconciliation.")
         return
 
-    # Define column values for entry types, mirroring the cleanup script
-    curriculum_entry_type = {PLP_SUBITEM_ENTRY_TYPE_COLUMN_ID: {"labels": ["Curriculum"]}}
-    staff_entry_type = {PLP_SUBITEM_ENTRY_TYPE_COLUMN_ID: {"labels": ["Staff"]}}
-
-    # --- Reconcile Courses (Both Canvas Enrollments and Logging) ---
+    # --- Reconcile Courses ---
     print("  -> Verifying course enrollments and logs...")
     for category, column_id in PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.items():
         source_of_truth_ids = get_linked_items_from_board_relation(plp_item_id, int(PLP_BOARD_ID), column_id)
-        if not source_of_truth_ids: continue # Skip if no courses are in this category
-
-        id_to_name_map = get_item_names(source_of_truth_ids)
-        source_of_truth_names = {f"'{name}'" for name in id_to_name_map.values()}
         
-        subitem_name = f"{category} Curriculum"
-        # Pass the correct column_values when creating the subitem
-        subitem_id, was_created = find_or_create_subitem(plp_item_id, subitem_name, column_values=curriculum_entry_type, dry_run=dry_run)
-        if not subitem_id: continue
-
-        logged_names = get_logged_items_from_updates(subitem_id)
-        missed_additions = source_of_truth_names - logged_names
-        missed_removals = logged_names - source_of_truth_names
-        
-        if missed_additions or missed_removals:
-            current_names_str = ", ".join(sorted(list(source_of_truth_names))) or "Blank"
-            # Combine all changes into a single reconciliation update
-            update_text_parts = ["Reconciliation Update:"]
-            for item_name in missed_removals:
-                update_text_parts.append(f"- Found unlogged removal of {item_name}.")
-            for item_name in missed_additions:
-                update_text_parts.append(f"- Found unlogged addition of {item_name}.")
-            update_text_parts.append(f"\nCurrent curriculum is now: {current_names_str}.")
+        # --- NEW: Only create subitem if the column has courses in it ---
+        if source_of_truth_ids:
+            id_to_name_map = get_item_names(source_of_truth_ids)
+            source_of_truth_names = {f"'{name}'" for name in id_to_name_map.values()}
             
-            final_update_text = "\n".join(update_text_parts)
-            if not dry_run:
-                create_monday_update(subitem_id, final_update_text)
-            else:
-                print(f"     DRY RUN: Would post update: {final_update_text}")
+            subitem_name = f"{category} Curriculum"
+            subitem_id, was_created = find_or_create_subitem(plp_item_id, subitem_name, dry_run=dry_run)
+            if not subitem_id: continue
 
-    # --- Reconcile Staff Assignments (Data Sync first, then Log Reconciliation) ---
+            logged_names = get_logged_items_from_updates(subitem_id)
+            
+            if source_of_truth_names != logged_names:
+                current_names_str = ", ".join(sorted(list(source_of_truth_names))) or "Blank"
+                update_text = f"Reconciliation sync: Current {category} curriculum is now: {current_names_str}."
+                
+                if not dry_run:
+                    create_monday_update(subitem_id, update_text)
+                    print(f"  -> Discrepancy found for '{subitem_name}'. Posting update.")
+                else:
+                    print(f"     DRY RUN: Discrepancy found for '{subitem_name}'. Would post update: {update_text}")
+
+    # --- Reconcile Staff Assignments ---
     print("  -> Verifying PLP staff assignments and logs...")
     sync_teacher_assignments(student_details['master_id'], plp_item_id, dry_run=dry_run)
 
     for subitem_name, column_id in PLP_PEOPLE_COLUMNS_MAP.items():
         staff_val = get_column_value(plp_item_id, int(PLP_BOARD_ID), column_id)
-        source_of_truth_staff = {f"'{name.strip()}'" for name in staff_val.get('text', '').split(',')} if staff_val and staff_val.get('text') else set()
 
-        # Pass the correct column_values when creating the subitem
-        subitem_id, was_created = find_or_create_subitem(plp_item_id, subitem_name, column_values=staff_entry_type, dry_run=dry_run)
-        if not subitem_id: continue
+        # --- NEW: Only create subitem if the column has a person assigned ---
+        if staff_val and staff_val.get('text'):
+            source_of_truth_staff = {f"'{name.strip()}'" for name in staff_val.get('text', '').split(',')}
+            
+            subitem_id, was_created = find_or_create_subitem(plp_item_id, subitem_name, dry_run=dry_run)
+            if not subitem_id: continue
 
-        logged_staff = get_logged_items_from_updates(subitem_id)
-        missed_staff_additions = source_of_truth_staff - logged_staff
-        # Note: You may also want to handle missed_staff_removals if staff can be unassigned
-        
-        if missed_staff_additions:
-            current_staff_str = ", ".join(sorted(list(source_of_truth_staff))) or "Blank"
-            update_text_parts = ["Reconciliation Update:"]
-            for staff_name in missed_staff_additions:
-                if not staff_name or staff_name == "''": continue
-                update_text_parts.append(f"- Found unlogged assignment of {staff_name}.")
-            update_text_parts.append(f"\nCurrent assignment is now: {current_staff_str}.")
+            logged_staff = get_logged_items_from_updates(subitem_id)
 
-            final_update_text = "\n".join(update_text_parts)
-            if not dry_run:
-                create_monday_update(subitem_id, final_update_text)
-            else:
-                print(f"     DRY RUN: Would post update: {final_update_text}")
+            if source_of_truth_staff != logged_staff:
+                current_staff_str = ", ".join(sorted(list(source_of_truth_staff))) or "Blank"
+                col_name = subitem_name.replace(" Assignments", "")
+                update_text = f"Reconciliation sync: Current {col_name} assignment is now: {current_staff_str}."
+
+                if not dry_run:
+                    create_monday_update(subitem_id, update_text)
+                    print(f"  -> Discrepancy found for '{subitem_name}'. Posting update.")
+                else:
+                    print(f"     DRY RUN: Discrepancy found for '{subitem_name}'. Would post update: {update_text}")
 
 def sync_canvas_teachers_and_tas(db_cursor, dry_run=True):
     """
