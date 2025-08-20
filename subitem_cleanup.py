@@ -18,7 +18,7 @@ PLP_CONNECT_COLUMNS_MAP = {
     "ELA Curriculum": "board_relation_mkqnxyjd",
     "Math Curriculum": "board_relation_mkqnbtaf",
     "ACE Curriculum": "board_relation_mkqn34pg",
-    "Other Curriculum": "board_relation_mkr54dtg"
+    "Other/Elective Curriculum": "board_relation_mkr54dtg" # <-- Change this line
 }
 PLP_PEOPLE_COLUMNS_MAP = {
     "TOR Assignments": "person",
