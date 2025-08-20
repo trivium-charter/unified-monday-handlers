@@ -109,29 +109,39 @@ def get_item_names(item_ids):
 
 def get_logged_items_from_updates(subitem_id):
     """
-    Reads all updates for a subitem to determine the current state of logged items.
-    Returns a set of item names that are currently considered "Added".
+    Reads the most recent 'Current state' update to determine the logged state of items.
+    Returns a set of item names (e.g., "'Course A'", "'Staff B'").
     """
     if not subitem_id:
         return set()
-    query = f"query {{ items(ids: [{subitem_id}]) {{ updates(limit: 500) {{ body }} }} }}"
+    query = f"query {{ items(ids: [{subitem_id}]) {{ updates(limit: 50) {{ body }} }} }}"
     result = execute_monday_graphql(query)
-    logged_items = {}
+    
     try:
         updates = result['data']['items'][0]['updates']
-        for update in reversed(updates): # Process in chronological order
+        # Updates are newest first, so we don't need to reverse
+        for update in updates:
             body = update.get('body', '')
-            try:
-                subject = "'" + body.split("'")[1] + "'"
-                if "added" in body.lower() or "assigned" in body.lower():
-                    logged_items[subject] = "Added"
-                elif "removed" in body.lower():
-                    logged_items[subject] = "Removed"
-            except IndexError:
-                continue
+            # Check for the key phrases that declare the final state
+            if "curriculum is now:" in body or "assignment is now:" in body:
+                # Find the part of the string after the key phrase
+                state_string = ""
+                if "curriculum is now:" in body:
+                    state_string = body.split("curriculum is now:")[1]
+                elif "assignment is now:" in body:
+                    state_string = body.split("assignment is now:")[1]
+                
+                # Use a regular expression to find all items enclosed in single quotes
+                # This is robust and handles names with spaces or special characters
+                logged_items = re.findall(r"'([^']*)'", state_string)
+                # Return the set of names, formatted with quotes to match the source of truth
+                return {f"'{item}'" for item in logged_items}
+                
     except (TypeError, KeyError, IndexError):
         pass
-    return {subject for subject, state in logged_items.items() if state == "Added"}
+        
+    # If no state-declaring update is found, return an empty set
+    return set()
     
 def find_or_create_subitem(parent_item_id, subitem_name, column_values=None, dry_run=False):
     """
