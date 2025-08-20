@@ -80,6 +80,41 @@ ALL_SPECIAL_COURSES = ROSTER_ONLY_COURSES.union(ROSTER_AND_CREDIT_COURSES)
 # ==============================================================================
 MONDAY_HEADERS = { "Authorization": MONDAY_API_KEY, "Content-Type": "application/json", "API-Version": "2023-10" }
 
+def get_logged_items_from_updates(subitem_id):
+    """
+    Reads the most recent 'Current state' update to determine the logged state of items.
+    Returns a set of item names (e.g., "'Course A'", "'Staff B'").
+    """
+    if not subitem_id:
+        return set()
+    query = f"query {{ items(ids: [{subitem_id}]) {{ updates(limit: 50) {{ body }} }} }}"
+    result = execute_monday_graphql(query)
+    
+    try:
+        updates = result['data']['items'][0]['updates']
+        # Updates are newest first, so we don't need to reverse
+        for update in updates:
+            body = update.get('body', '')
+            # Check for the key phrases that declare the final state
+            if "curriculum is now:" in body or "assignment is now:" in body:
+                # Find the part of the string after the key phrase
+                state_string = ""
+                if "curriculum is now:" in body:
+                    state_string = body.split("curriculum is now:")[1]
+                elif "assignment is now:" in body:
+                    state_string = body.split("assignment is now:")[1]
+                
+                # Use a regular expression to find all items enclosed in single quotes
+                logged_items = re.findall(r"'([^']*)'", state_string)
+                # Return the set of names, formatted with quotes to match the source of truth
+                return {f"'{item}'" for item in logged_items}
+                
+    except (TypeError, KeyError, IndexError):
+        pass
+        
+    # If no state-declaring update is found, return an empty set
+    return set()
+
 def find_or_create_subitem(parent_item_id, subitem_name, column_values=None):
     """
     Finds a subitem by name. If it doesn't exist, it creates it with column values.
@@ -592,25 +627,73 @@ def process_general_webhook(event_data, config_rule):
             name = get_item_name(link_id, linked_board_id)
             if name: create_subitem(item_id, f"Removed {prefix} '{name}' on {date} by {changer}", subitem_cols)
 
+# In app.py
+
 @celery_app.task(name='app.process_canvas_full_sync_from_status')
 def process_canvas_full_sync_from_status(event_data):
-    if event_data.get('value', {}).get('label', {}).get('text', '') != PLP_CANVAS_SYNC_STATUS_VALUE: return
+    if event_data.get('value', {}).get('label', {}).get('text', '') != PLP_CANVAS_SYNC_STATUS_VALUE:
+        return
+        
     plp_item_id = event_data.get('pulseId')
+    changer_name = get_user_name(event_data.get('userId')) or "Full Sync Automation"
     student_details = get_student_details_from_plp(plp_item_id)
-    if not student_details: return
-    subitem_cols = {}
-    first_rule = next((rule for rule in LOG_CONFIGS if str(rule.get("trigger_board_id")) == PLP_BOARD_ID and rule.get("log_type") == "ConnectBoardChange"), None)
-    if first_rule and "params" in first_rule:
-        params = first_rule["params"]
-        if params.get("entry_type_column_id") and params.get("subitem_entry_type"):
-            subitem_cols[params["entry_type_column_id"]] = {"labels": [str(params["subitem_entry_type"])]}
+    if not student_details:
+        return
+
+    # --- 1. GATHER ALL CLASSES FROM THE PLP BOARD ---
     class_id_to_category_map = {}
     for category, column_id in PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.items():
         for class_id in get_linked_items_from_board_relation(plp_item_id, int(PLP_BOARD_ID), column_id):
             class_id_to_category_map[class_id] = category
-    if not class_id_to_category_map: return
+            
+    if not class_id_to_category_map:
+        print(f"INFO: Full Sync for PLP {plp_item_id} found no classes to enroll.")
+        return
+
+    # --- 2. PERFORM ALL CANVAS ENROLLMENTS SILENTLY ---
+    print(f"INFO: Starting Full Canvas Sync for PLP ID {plp_item_id}. Enrolling in {len(class_id_to_category_map)} courses.")
     for class_item_id, category_name in class_id_to_category_map.items():
-        manage_class_enrollment("enroll", plp_item_id, class_item_id, student_details, category_name, subitem_cols=subitem_cols)
+        linked_canvas_item_ids = get_linked_items_from_board_relation(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
+        if linked_canvas_item_ids:
+            canvas_item_id = list(linked_canvas_item_ids)[0]
+            course_id_val = get_column_value(canvas_item_id, int(CANVAS_BOARD_ID), CANVAS_COURSE_ID_COLUMN_ID)
+            canvas_course_id = course_id_val.get('text') if course_id_val else None
+            
+            if canvas_course_id:
+                # Determine the correct section name using the established logic
+                section_name = "General Enrollment"
+                if is_high_school_student(student_details.get('grade_text')):
+                    m_series_val = get_column_value(plp_item_id, int(PLP_BOARD_ID), PLP_M_SERIES_LABELS_COLUMN)
+                    m_series_text = m_series_val.get('text') if m_series_val else None
+                    if m_series_text:
+                        section_name = m_series_text
+                    else:
+                        ag_grad_val = get_column_value(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_CLASSES_AG_GRAD_COLUMN)
+                        section_name = ag_grad_val.get('text') if ag_grad_val and ag_grad_val.get('text') else "General Enrollment"
+                
+                section = create_section_if_not_exists(canvas_course_id, section_name)
+                if section:
+                    enroll_or_create_and_enroll(canvas_course_id, section.id, student_details)
+
+    # --- 3. POST CONSOLIDATED MONDAY.COM LOGS ---
+    print(f"INFO: Posting consolidated logs for PLP ID {plp_item_id}.")
+    
+    # Invert the map to group classes by category
+    category_to_class_ids_map = defaultdict(list)
+    for class_id, category in class_id_to_category_map.items():
+        category_to_class_ids_map[category].append(class_id)
+        
+    all_class_ids = list(class_id_to_category_map.keys())
+    id_to_name_map = get_item_names(all_class_ids)
+
+    # Loop through each category and post one consolidated update
+    for category, class_ids in category_to_class_ids_map.items():
+        subitem_name = f"{category} Curriculum"
+        subitem_id = find_or_create_subitem(plp_item_id, subitem_name)
+        if subitem_id:
+            current_names_str = ", ".join([f"'{id_to_name_map.get(cid)}'" for cid in sorted(class_ids) if id_to_name_map.get(cid)]) or "Blank"
+            update_text = f"Full Canvas Sync triggered by {changer_name}. Current {category} curriculum is now: {current_names_str}."
+            create_monday_update(subitem_id, update_text)
 
 @celery_app.task(name='app.process_canvas_delta_sync_from_course_change')
 def process_canvas_delta_sync_from_course_change(event_data):
