@@ -227,10 +227,15 @@ def find_item_by_person(board_id, person_column_id, person_id):
         if items: return items[0]['id']
     return None
 
+# In app.py, replace the existing update_item_name function
+
 def update_item_name(item_id, board_id, new_name):
-    graphql_value = json.dumps(json.dumps({"name": new_name}))
+    # This removes the incorrect, extra json.dumps() wrapper
+    column_values_obj = {"name": new_name}
+    graphql_value = json.dumps(json.dumps(column_values_obj))
     mutation = f"mutation {{ change_multiple_column_values(board_id: {board_id}, item_id: {item_id}, column_values: {graphql_value}) {{ id }} }}"
     return execute_monday_graphql(mutation) is not None
+    
 
 def change_column_value_generic(board_id, item_id, column_id, value):
     graphql_value = json.dumps(str(value))
