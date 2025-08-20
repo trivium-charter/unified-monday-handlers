@@ -330,6 +330,17 @@ def check_if_subitem_exists_by_name(parent_item_id, subitem_name_to_check):
 def initialize_canvas_api():
     return Canvas(CANVAS_API_URL, CANVAS_API_KEY) if CANVAS_API_URL and CANVAS_API_KEY else None
 
+# In app.py, add this function to the CANVAS UTILITIES section
+
+def is_high_school_student(grade_text):
+    """Checks if a student is in high school based on their grade text."""
+    if not grade_text: return False
+    match = re.search(r'\d+', grade_text)
+    if match:
+        grade_level = int(match.group(0))
+        return 9 <= grade_level <= 12
+    return False
+    
 def find_canvas_user(student_details):
     canvas_api = initialize_canvas_api()
     if not canvas_api: return None
