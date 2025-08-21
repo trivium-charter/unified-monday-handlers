@@ -287,18 +287,47 @@ def create_item(board_id, item_name, column_values=None):
 
 def update_people_column(item_id, board_id, people_column_id, new_people_value, target_column_type):
     new_persons_and_teams = new_people_value.get('personsAndTeams', [])
-    if not new_persons_and_teams: return False
-    new_person_id = new_persons_and_teams[0].get('id')
-    if not new_person_id: return False
+
+    # Get the ID of the person being assigned from the webhook event
+    new_person_id = None
+    if new_persons_and_teams:
+        new_person_id = new_persons_and_teams[0].get('id')
+
+    # Get the IDs of the people currently in the column on Monday.com
     current_col_val = get_column_value(item_id, board_id, people_column_id)
     current_people_ids = set()
     if current_col_val and current_col_val.get('value'):
         current_people_ids = get_people_ids_from_value(current_col_val['value'])
-    current_people_ids.add(new_person_id)
-    updated_people_list = [{"id": int(pid), "kind": "person"} for pid in current_people_ids]
-    if target_column_type == "person": final_value = {"personId": int(new_person_id)}
-    elif target_column_type == "multiple-person": final_value = {"personsAndTeams": updated_people_list}
-    else: return False
+
+    # --- NEW: Check if an update is needed before proceeding ---
+    if target_column_type == "person":
+        if new_person_id and current_people_ids == {new_person_id}:
+            print(f"  -> INFO: Person {new_person_id} is already assigned. No update needed.")
+            return True # Exit because the correct person is already there
+        if not new_person_id and not current_people_ids:
+            print("  -> INFO: Column is already empty. No update needed.")
+            return True # Exit because the column is already empty
+            
+    elif target_column_type == "multiple-person":
+        # For multiple person, the logic is additive, so we only check if the person is already there
+        if new_person_id in current_people_ids:
+            print(f"  -> INFO: Person {new_person_id} is already in the list. No update needed.")
+            return True # Exit because the person is already in the list
+
+    # If an update is needed, proceed with the original logic
+    print(f"  -> INFO: Updating person column {people_column_id}...")
+    if not new_persons_and_teams:
+        final_value = {} # Clear the column if the new value is empty
+    else:
+        if target_column_type == "person":
+            final_value = {"persons": [int(new_person_id)]}
+        elif target_column_type == "multiple-person":
+            current_people_ids.add(new_person_id)
+            updated_people_list = [{"id": int(pid), "kind": "person"} for pid in current_people_ids]
+            final_value = {"personsAndTeams": updated_people_list}
+        else:
+            return False
+
     graphql_value = json.dumps(json.dumps(final_value))
     mutation = f"mutation {{ change_column_value(board_id: {board_id}, item_id: {item_id}, column_id: \"{people_column_id}\", value: {graphql_value}) {{ id }} }}"
     return execute_monday_graphql(mutation) is not None
