@@ -12,13 +12,12 @@ DRY_RUN = False
 MONDAY_API_KEY = os.environ.get("MONDAY_API_KEY")
 PLP_BOARD_ID = os.environ.get("PLP_BOARD_ID")
 MONDAY_API_URL = "https://api.monday.com/v2"
-PLP_SUBITEM_ENTRY_TYPE_COLUMN_ID = os.environ.get("PLP_SUBITEM_ENTRY_TYPE_COLUMN_ID")
-TARGET_USER_NAME = "Sarah Bruce"
+TARGET_USER_NAME = "Sarah Bruce" # User to target for deletions
 PLP_CONNECT_COLUMNS_MAP = {
     "ELA Curriculum": "board_relation_mkqnxyjd",
     "Math Curriculum": "board_relation_mkqnbtaf",
     "ACE Curriculum": "board_relation_mkqn34pg",
-    "Other/Elective Curriculum": "board_relation_mkr54dtg" # <-- Change this line
+    "Other/Elective Curriculum": "board_relation_mkr54dtg"
 }
 PLP_PEOPLE_COLUMNS_MAP = {
     "TOR Assignments": "person",
@@ -56,7 +55,7 @@ def get_user_id_by_name(user_name):
             if user['name'].lower() == user_name.lower(): return user['id']
     except (KeyError, IndexError, TypeError): pass
     return None
-    
+
 def get_all_plp_items():
     all_items = []
     cursor = None
@@ -66,6 +65,7 @@ def get_all_plp_items():
     if not all_column_ids: print("FATAL ERROR: No PLP Column IDs are configured."); exit()
     while True:
         cursor_str = f', cursor: "{cursor}"' if cursor else ""
+        # Added creator { id } to the subitems query
         query = f'query {{ boards(ids: {PLP_BOARD_ID}) {{ items_page(limit: 50{cursor_str}) {{ cursor items {{ id name column_values(ids: [{", ".join(all_column_ids)}]) {{ id value text }} subitems {{ id name creator {{ id }} }} }} }} }} }}'
         result = execute_monday_graphql(query)
         if not result or 'data' not in result: break
@@ -78,38 +78,9 @@ def get_all_plp_items():
         except (KeyError, IndexError): print(f"ERROR: Could not parse items from board {PLP_BOARD_ID}."); break
     return all_items
 
-def get_item_names(item_ids):
-    if not item_ids: return {}
-    query = f"query {{ items(ids: {list(item_ids)}) {{ id name }} }}"
-    result = execute_monday_graphql(query)
-    try: return {int(item['id']): item['name'] for item in result['data']['items']}
-    except (TypeError, KeyError, IndexError): return {}
-
-def create_subitem(parent_item_id, subitem_name, column_values=None):
-    column_values_str = json.dumps(column_values) if column_values else "{}"
-    mutation = f'mutation {{ create_subitem (parent_item_id: {parent_item_id}, item_name: {json.dumps(subitem_name)}, column_values: {json.dumps(column_values_str)}) {{ id }} }}'
-    result = execute_monday_graphql(mutation)
-    return result['data']['create_subitem'].get('id') if result and 'data' in result and result['data'].get('create_subitem') else None
-
-def create_monday_update(item_id, update_text):
-    mutation = f'mutation {{ create_update (item_id: {item_id}, body: {json.dumps(update_text)}) {{ id }} }}'
-    return execute_monday_graphql(mutation)
-
 def delete_subitem(subitem_id):
     mutation = f'mutation {{ delete_item (item_id: {subitem_id}) {{ id }} }}'
     return execute_monday_graphql(mutation)
-
-def find_or_create_subitem(parent_item_id, subitem_name, column_values=None):
-    query = f'query {{ items(ids:[{parent_item_id}]) {{ subitems {{ id name }} }} }}'
-    result = execute_monday_graphql(query)
-    try:
-        for subitem in result['data']['items'][0]['subitems']:
-            if subitem.get('name') == subitem_name:
-                print(f"  INFO: Found existing subitem '{subitem_name}' (ID: {subitem['id']}).")
-                return subitem['id']
-    except (KeyError, IndexError, TypeError): pass
-    print(f"  INFO: No existing subitem named '{subitem_name}'. Creating it.")
-    return create_subitem(parent_item_id, subitem_name, column_values=column_values)
 
 # ==============================================================================
 # 3. MAIN CLEANUP LOGIC
@@ -120,105 +91,83 @@ if __name__ == '__main__':
         print("=== SCRIPT IS RUNNING IN DRY RUN MODE ===")
         print("="*50 + "\n")
 
-    if not PLP_SUBITEM_ENTRY_TYPE_COLUMN_ID:
-        print("FATAL ERROR: The PLP_SUBITEM_ENTRY_TYPE_COLUMN_ID environment variable is not set.")
-        exit()
-
-    print(f"Step 1: Finding user ID for '{TARGET_USER_NAME}'...")
+    print(f"Step 1: Finding user ID for '{TARGET_USER_NAME}' to target for deletions...")
     target_user_id = get_user_id_by_name(TARGET_USER_NAME)
     if not target_user_id:
         print(f"FATAL ERROR: Could not find user '{TARGET_USER_NAME}'.")
         exit()
     print(f"Found user ID: {target_user_id}")
-    
+
     print("\nStep 2: Fetching all student items...")
     all_students = get_all_plp_items()
     print(f"Found {len(all_students)} students to process.")
 
-    consolidated_subitem_names = set(PLP_CONNECT_COLUMNS_MAP.keys()) | set(PLP_PEOPLE_COLUMNS_MAP.keys())
-    curriculum_entry_type = {PLP_SUBITEM_ENTRY_TYPE_COLUMN_ID: {"labels": ["Curriculum"]}}
-    staff_entry_type = {PLP_SUBITEM_ENTRY_TYPE_COLUMN_ID: {"labels": ["Staff"]}}
-
-    connect_id_to_cat_map = {v: k for k, v in PLP_CONNECT_COLUMNS_MAP.items()}
     people_id_to_cat_map = {v: k for k, v in PLP_PEOPLE_COLUMNS_MAP.items()}
 
     for i, student in enumerate(all_students, 1):
         student_id = student['id']
         student_name = student['name']
         print(f"\n--- Processing Student {i}/{len(all_students)}: {student_name} (ID: {student_id}) ---")
-
-        # --- Build curriculum from connect columns ---
-        current_curriculum = defaultdict(set)
-        all_linked_ids = set()
-        for col_val in student.get('column_values', []):
-            category_name = connect_id_to_cat_map.get(col_val['id'])
-            if category_name:
-                try:
-                    linked_ids = {int(item["linkedPulseId"]) for item in json.loads(col_val.get('value', '{}') or '{}').get("linkedPulseIds", [])}
-                    current_curriculum[category_name].update(linked_ids)
-                    all_linked_ids.update(linked_ids)
-                except (json.JSONDecodeError, TypeError, KeyError, AttributeError):
-                    continue
         
-        item_id_to_name_map = get_item_names(all_linked_ids)
+        # --- TARGETED DELETION LOGIC ---
+        print("  -> Running cleanup checks...")
+        all_student_subitems = student.get('subitems', [])
+        subitem_names = {s['name'] for s in all_student_subitems}
+        subitems_to_delete = []
 
-        # --- Log curriculum updates ---
-        for category_name, item_ids in current_curriculum.items():
-            if not item_ids: continue
-            course_names = sorted([f"'{item_id_to_name_map.get(item_id, f'Item {item_id}')}'" for item_id in item_ids])
-            log_message = f"Current curriculum as of {datetime.now().strftime('%Y-%m-%d')}:\n" + "\n".join([f"- {name}" for name in course_names])
-            
-            if not DRY_RUN:
-                subitem_id = find_or_create_subitem(student_id, category_name, column_values=curriculum_entry_type)
-                if subitem_id:
-                    update_result = create_monday_update(subitem_id, log_message)
-                    if not update_result: print(f"  ERROR: Failed to post update to new subitem '{category_name}' (ID: {subitem_id})")
-                    time.sleep(1)
-            else:
-                print(f"  -> DRY RUN: Would find or create subitem '{category_name}' with Entry Type 'Curriculum'.")
-                print(f"     DRY RUN: Would post an update with {len(course_names)} courses.")
-
-        # --- CORRECTED: Build and log staff assignments from people columns ---
-        current_staff = defaultdict(list)
-        for col_val in student.get('column_values', []):
-            category_name = people_id_to_cat_map.get(col_val['id'])
-            if category_name and col_val.get('text'):
-                current_staff[category_name].append(col_val['text'])
-
-        for category_name, staff_list in current_staff.items():
-            if not staff_list: continue
-            staff_names = ", ".join(staff_list)
-            log_message = f"Current assignment as of {datetime.now().strftime('%Y-%m-%d')}:\n- {staff_names}"
-            
-            if not DRY_RUN:
-                subitem_id = find_or_create_subitem(student_id, category_name, column_values=staff_entry_type)
-                if subitem_id:
-                    update_result = create_monday_update(subitem_id, log_message)
-                    if not update_result: print(f"  ERROR: Failed to post update to subitem '{category_name}' (ID: {subitem_id})")
-                    time.sleep(1)
-            else:
-                print(f"  -> DRY RUN: Would find or create subitem '{category_name}' with Entry Type 'Staff'.")
-                print(f"     DRY RUN: Would post an update with assignment: {staff_names}")
-
-        # --- Delete all old subitems created by the target user ---
-        subitems_to_delete = [
-            s['id'] for s in student.get('subitems', []) 
-            if str(s.get('creator', {}).get('id')) == str(target_user_id) 
-            and s.get('name') not in consolidated_subitem_names
-        ]
+        # Rule 1: Delete specific empty staff subitems created by the target user
+        staff_roles_to_check = ["Case Manager Assignments", "Connect Teacher Assignments"]
+        for role in staff_roles_to_check:
+            is_assigned = any(
+                people_id_to_cat_map.get(cv['id']) == role and cv.get('text')
+                for cv in student.get('column_values', [])
+            )
+            if role in subitem_names and not is_assigned:
+                for subitem in all_student_subitems:
+                    # ADDED CHECK: Only delete if created by the target user
+                    if subitem.get('name') == role and str(subitem.get('creator', {}).get('id')) == str(target_user_id):
+                        subitems_to_delete.append(subitem['id'])
+                        print(f"     INFO: Marked empty '{role}' subitem for deletion (Creator: {TARGET_USER_NAME}).")
+                        break
         
+        # Rule 2: Handle "Other Curriculum" if it was created by the target user
+        if "Other Curriculum" in subitem_names and "Other/Elective Curriculum" in subitem_names:
+            for subitem in all_student_subitems:
+                 # ADDED CHECK: Only delete if created by the target user
+                if subitem.get('name') == "Other Curriculum" and str(subitem.get('creator', {}).get('id')) == str(target_user_id):
+                    subitems_to_delete.append(subitem['id'])
+                    print(f"     INFO: Marked legacy 'Other Curriculum' subitem for deletion (Creator: {TARGET_USER_NAME}).")
+                    break
+        
+        # Rule 3: Handle exact duplicates created by the target user
+        subitem_name_map = defaultdict(list)
+        for subitem in all_student_subitems:
+            # Only consider subitems created by the target user for the duplicate check
+            if str(subitem.get('creator', {}).get('id')) == str(target_user_id):
+                name = subitem.get('name')
+                subitem_id_val = subitem.get('id')
+                if name and subitem_id_val and subitem_id_val not in subitems_to_delete:
+                    subitem_name_map[name].append(subitem_id_val)
+
+        for name, ids in subitem_name_map.items():
+            if len(ids) > 1:
+                ids_to_delete = ids[1:]
+                subitems_to_delete.extend(ids_to_delete)
+                print(f"     INFO: Found exact duplicate of '{name}'. Marked {len(ids_to_delete)} for deletion (Creator: {TARGET_USER_NAME}).")
+
+        # --- Execute Deletion ---
         if not subitems_to_delete:
-            print(f"  No old subitems from {TARGET_USER_NAME} to delete.")
-            continue
-            
-        if not DRY_RUN:
-            print(f"  -> Deleting {len(subitems_to_delete)} old subitems created by {TARGET_USER_NAME}...")
-            for subitem_id in subitems_to_delete:
-                delete_subitem(subitem_id)
-                time.sleep(0.5)
+            print(f"  No subitems marked for deletion.")
         else:
-            print(f"  -> DRY RUN: Would delete {len(subitems_to_delete)} old subitems created by {TARGET_USER_NAME}.")
-    
+            unique_ids_to_delete = list(set(subitems_to_delete))
+            if not DRY_RUN:
+                print(f"  -> Deleting {len(unique_ids_to_delete)} subitems...")
+                for subitem_id_to_delete in unique_ids_to_delete:
+                    delete_subitem(subitem_id_to_delete)
+                    time.sleep(0.5)
+            else:
+                print(f"  -> DRY RUN: Would delete {len(unique_ids_to_delete)} subitems based on cleanup rules.")
+
     print("\n=====================================")
     print("=== Subitem cleanup script finished. ===")
     print("=====================================\n")
