@@ -394,20 +394,32 @@ def find_canvas_user(student_details):
         except (ResourceDoesNotExist, CanvasException): pass
     return None
 
+# In app.py
+
 def find_canvas_teacher(teacher_details):
     """
     Finds a Canvas user based on provided details without checking their role.
     Prioritizes Canvas ID, then SIS ID, then email.
+    Handles cases where canvas_id might be a username instead of an integer.
     """
     canvas_api = initialize_canvas_api()
     if not canvas_api: return None
 
-    # Search by internal Canvas ID
-    if teacher_details.get('canvas_id'):
+    canvas_id = teacher_details.get('canvas_id')
+    
+    # --- NEW: Improved Canvas ID handling ---
+    if canvas_id:
         try:
-            return canvas_api.get_user(teacher_details['canvas_id'])
-        except (ResourceDoesNotExist, ValueError):
-            pass
+            # First, try to use it as an integer ID
+            return canvas_api.get_user(int(canvas_id))
+        except (ValueError, TypeError):
+            # If that fails, it's likely a username (login_id)
+            try:
+                return canvas_api.get_user(canvas_id, 'login_id')
+            except ResourceDoesNotExist:
+                pass # Continue to the next check
+        except ResourceDoesNotExist:
+            pass # Continue to the next check
 
     # Search by SIS ID
     if teacher_details.get('sis_id'):
