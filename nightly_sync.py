@@ -42,6 +42,7 @@ MASTER_STUDENT_EMAIL_COLUMN = os.environ.get("MASTER_STUDENT_EMAIL_COLUMN")
 MASTER_STUDENT_CANVAS_ID_COLUMN = "text_mktgs1ax"
 HS_ROSTER_SUBITEM_DROPDOWN_COLUMN_ID = os.environ.get("HS_ROSTER_SUBITEM_DROPDOWN_COLUMN_ID")
 HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID = os.environ.get("HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID")
+HS_ROSTER_TRACK_COLUMN_ID = "status7"
 CANVAS_COURSE_ID_COLUMN_ID = os.environ.get("CANVAS_COURSE_ID_COLUMN_ID")
 ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID = os.environ.get("ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID")
 ALL_CLASSES_CANVAS_ID_COLUMN = os.environ.get("ALL_CLASSES_CANVAS_ID_COLUMN")
@@ -101,6 +102,15 @@ def is_middle_or_high_school(grade_text):
     if match:
         grade_level = int(match.group(0))
         return 6 <= grade_level <= 12
+    return False
+
+def is_high_school_student(grade_text):
+    """Checks if a student is in high school based on their grade text."""
+    if not grade_text: return False
+    match = re.search(r'\d+', grade_text)
+    if match:
+        grade_level = int(match.group(0))
+        return 9 <= grade_level <= 12
     return False
 
 def delete_item(item_id):
@@ -623,6 +633,26 @@ def parse_flexible_timestamp(ts_string):
 # ==============================================================================
 # 3. CORE LOGIC FUNCTIONS
 # ==============================================================================
+def get_canvas_section_name(plp_item_id, class_item_id, student_details, course_to_track_map):
+    """
+    Determines the correct Canvas section name for a student based on a clear priority order.
+    """
+    # Default for K-8 students or if no other rules apply
+    section_name = "General Enrollment"
+    
+    if is_high_school_student(student_details.get('grade_text')):
+        # PRIORITY 1: Check M-Series/Op2 column on the PLP board
+        m_series_val = get_column_value(plp_item_id, int(PLP_BOARD_ID), PLP_M_SERIES_LABELS_COLUMN)
+        m_series_text = m_series_val.get('text') if m_series_val else None
+        
+        if m_series_text:
+            section_name = m_series_text
+        else:
+            # PRIORITY 2: Fallback to the HS Roster "Track" status column
+            section_name = course_to_track_map.get(class_item_id, "General Enrollment")
+            
+    return section_name
+
 def enroll_or_create_and_enroll(course_id, section_id, student_details, db_cursor):
     canvas_api = initialize_canvas_api()
     if not canvas_api: return "Failed"
@@ -854,7 +884,7 @@ def run_hs_roster_sync_for_student(hs_roster_item, dry_run=True):
             bulk_add_to_connect_column(plp_item_id, int(PLP_BOARD_ID), col_id, courses)
             time.sleep(1)
 
-def manage_class_enrollment(action, plp_item_id, class_item_id, student_details, category_name, creator_id, db_cursor, dry_run=True):
+def manage_class_enrollment(action, plp_item_id, class_item_id, student_details, section_name, category_name, creator_id, db_cursor, dry_run=True):
     class_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)) or f"Item {class_item_id}"
     linked_canvas_item_ids = get_linked_items_from_board_relation(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
 
@@ -870,11 +900,9 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details,
         print(f"  WARNING: Canvas Course ID not found for course '{class_name}'. Skipping Canvas action.")
         return
 
-    # This function now ONLY handles the Canvas action. All subitem logging is done in the reconcile_subitems function.
     if action == "enroll":
-        print(f"  ACTION: Pushing enrollment for '{class_name}' to Canvas.")
+        print(f"  ACTION: Pushing enrollment for '{class_name}' to Canvas section '{section_name}'.")
         if not dry_run:
-            # Logic for handling special sections vs normal courses
             if class_item_id in ALL_SPECIAL_COURSES:
                 student_canvas_user = find_canvas_user(student_details, db_cursor)
                 if student_details.get('master_id') and student_canvas_user:
@@ -889,8 +917,7 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details,
                         if section_credit:
                             enroll_student_in_section(canvas_course_id, student_canvas_user.id, section_credit.id)
             else:
-                # Standard section logic
-                section = create_section_if_not_exists(canvas_course_id, "All")
+                section = create_section_if_not_exists(canvas_course_id, section_name)
                 if section:
                     enroll_or_create_and_enroll(canvas_course_id, section.id, student_details, db_cursor)
 
@@ -921,18 +948,50 @@ def run_plp_sync_for_student(plp_item_id, creator_id, db_cursor, dry_run=True):
     if not student_details: return
     master_student_id = student_details.get('master_id')
     if not master_student_id: return
-    curriculum_change_values = {PLP_SUBITEM_ENTRY_TYPE_COLUMN_ID: {"labels": ["Curriculum Change"]}}
+    
+    # --- PRE-COMPUTE HS SECTION NAMES ---
+    course_to_track_map = {}
+    if is_high_school_student(student_details.get('grade_text')):
+        hs_roster_ids = get_linked_items_from_board_relation(plp_item_id, int(PLP_BOARD_ID), PLP_TO_HS_ROSTER_CONNECT_COLUMN)
+        if hs_roster_ids:
+            hs_roster_id = list(hs_roster_ids)[0]
+            subitems_query = f"""query {{ items(ids: [{hs_roster_id}]) {{ subitems {{
+                column_values(ids: ["{HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID}", "{HS_ROSTER_TRACK_COLUMN_ID}"]) {{ id text value }}
+            }} }} }}"""
+            subitems_result = execute_monday_graphql(subitems_query)
+            if subitems_result:
+                try:
+                    subitems = subitems_result['data']['items'][0]['subitems']
+                    for subitem in subitems:
+                        track_name = ''
+                        linked_course_ids = set()
+                        for cv in subitem['column_values']:
+                            if cv['id'] == HS_ROSTER_TRACK_COLUMN_ID:
+                                track_name = cv['text']
+                            elif cv['id'] == HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID:
+                                linked_course_ids = get_linked_ids_from_connect_column_value(cv['value'])
+                        if track_name:
+                            for course_id in linked_course_ids:
+                                course_to_track_map[course_id] = track_name
+                except (KeyError, IndexError):
+                    pass
+
+    # --- Sync Class Enrollments ---
     print("INFO: Syncing class enrollments...")
     class_id_to_category_map = {}
     for category, column_id in PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.items():
         for class_id in get_linked_items_from_board_relation(plp_item_id, int(PLP_BOARD_ID), column_id):
             class_id_to_category_map[class_id] = category
+            
     if not class_id_to_category_map:
         print("INFO: No classes to sync.")
+        
     for class_item_id, category_name in class_id_to_category_map.items():
         class_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)) or f"Item {class_item_id}"
         print(f"INFO: Processing class: '{class_name}'")
-        manage_class_enrollment("enroll", plp_item_id, class_item_id, student_details, category_name, creator_id, db_cursor, dry_run=dry_run)
+        section_name = get_canvas_section_name(plp_item_id, class_item_id, student_details, course_to_track_map)
+        manage_class_enrollment("enroll", plp_item_id, class_item_id, student_details, section_name, category_name, creator_id, db_cursor, dry_run=dry_run)
+        
     sync_teacher_assignments(master_student_id, plp_item_id, dry_run=dry_run)
 
 def deduplicate_subitems_for_student(plp_item_id, creator_id_to_check, dry_run=True):
@@ -959,14 +1018,15 @@ def deduplicate_subitems_for_student(plp_item_id, creator_id_to_check, dry_run=T
 
     if other_curr_items and other_elec_items:
         for item in other_curr_items:
-            creator = item.get('creator') or {}
-            if str(creator.get('id')) == str(creator_id_to_check):
-                items_to_delete.add(int(item['id']))
-                print(f"     MARKING FOR DELETION: 'Other Curriculum' (ID: {item['id']}) created by target user, and 'Other/Elective' exists.")
+                 creator = item.get('creator') or {}
+                 if str(creator.get('id')) == str(creator_id_to_check):
+                     items_to_delete.add(int(item['id']))
+                     print(f"     MARKING FOR DELETION: 'Other Curriculum' (ID: {item['id']}) created by target user, and 'Other/Elective' exists.")
 
     # Case 2: General duplicates created by the target user
     for name, items in subitems_by_name.items():
         if len(items) > 1:
+            # filter for items created by Sarah Bruce
             items_by_creator = [item for item in items if str((item.get('creator') or {}).get('id')) == str(creator_id_to_check)]
             # If there's more than one item with the same name by the target creator, delete all but the first one
             if len(items_by_creator) > 1:
