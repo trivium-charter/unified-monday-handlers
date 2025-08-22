@@ -28,6 +28,7 @@ PLP_CANVAS_SYNC_COLUMN_ID = os.environ.get("PLP_CANVAS_SYNC_COLUMN_ID")
 PLP_CANVAS_SYNC_STATUS_VALUE = os.environ.get("PLP_CANVAS_SYNC_STATUS_VALUE", "Done")
 PLP_ALL_CLASSES_CONNECT_COLUMNS_STR = os.environ.get("PLP_ALL_CLASSES_CONNECT_COLUMNS_STR", "")
 PLP_TO_MASTER_STUDENT_CONNECT_COLUMN = os.environ.get("PLP_TO_MASTER_STUDENT_CONNECT_COLUMN")
+PLP_TO_HS_ROSTER_CONNECT_COLUMN = os.environ.get("PLP_TO_HS_ROSTER_CONNECT_COLUMN")
 PLP_M_SERIES_LABELS_COLUMN = os.environ.get("PLP_M_SERIES_LABELS_COLUMN")
 MASTER_STUDENT_BOARD_ID = os.environ.get("MASTER_STUDENT_BOARD_ID")
 MASTER_STUDENT_SSID_COLUMN = os.environ.get("MASTER_STUDENT_SSID_COLUMN")
@@ -42,6 +43,7 @@ ALL_CLASSES_AG_GRAD_COLUMN = os.environ.get("ALL_CLASSES_AG_GRAD_COLUMN")
 HS_ROSTER_BOARD_ID = os.environ.get("HS_ROSTER_BOARD_ID")
 HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID = os.environ.get("HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID")
 HS_ROSTER_SUBITEM_DROPDOWN_COLUMN_ID = os.environ.get("HS_ROSTER_SUBITEM_DROPDOWN_COLUMN_ID")
+HS_ROSTER_TRACK_COLUMN_ID = "status7"
 HS_ROSTER_MAIN_ITEM_to_PLP_CONNECT_COLUMN_ID = os.environ.get("HS_ROSTER_MAIN_ITEM_to_PLP_CONNECT_COLUMN_ID")
 ALL_STAFF_BOARD_ID = os.environ.get("ALL_STAFF_BOARD_ID")
 ALL_STAFF_EMAIL_COLUMN_ID = os.environ.get("ALL_STAFF_EMAIL_COLUMN_ID")
@@ -408,8 +410,6 @@ def find_canvas_user(student_details):
         except (ResourceDoesNotExist, CanvasException): pass
     return None
 
-# In app.py
-
 def find_canvas_teacher(teacher_details):
     """
     Finds a Canvas user based on provided details without checking their role.
@@ -584,6 +584,26 @@ def get_teacher_person_value_from_canvas_board(canvas_item_id):
 # CORE LOGIC FUNCTIONS
 # ==============================================================================
 
+def get_canvas_section_name(plp_item_id, class_item_id, student_details, course_to_track_map):
+    """
+    Determines the correct Canvas section name for a student based on a clear priority order.
+    """
+    # Default for K-8 students or if no other rules apply
+    section_name = "General Enrollment"
+    
+    if is_high_school_student(student_details.get('grade_text')):
+        # PRIORITY 1: Check M-Series/Op2 column on the PLP board
+        m_series_val = get_column_value(plp_item_id, int(PLP_BOARD_ID), PLP_M_SERIES_LABELS_COLUMN)
+        m_series_text = m_series_val.get('text') if m_series_val else None
+        
+        if m_series_text:
+            section_name = m_series_text
+        else:
+            # PRIORITY 2: Fallback to the HS Roster "Track" status column
+            section_name = course_to_track_map.get(class_item_id, "General Enrollment")
+            
+    return section_name
+
 def enroll_or_create_and_enroll(course_id, section_id, student_details):
     canvas_api = initialize_canvas_api()
     if not canvas_api: return "Failed"
@@ -635,7 +655,7 @@ def get_student_details_from_plp(plp_item_id):
         print(f"ERROR: Could not parse student details from Monday.com response: {e}")
         return None
 
-def manage_class_enrollment(action, plp_item_id, class_item_id, student_details):
+def manage_class_enrollment(action, plp_item_id, class_item_id, student_details, section_name="All"):
     """Handles ONLY the Canvas enrollment or unenrollment action."""
     class_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)) or f"Item {class_item_id}"
 
@@ -653,8 +673,8 @@ def manage_class_enrollment(action, plp_item_id, class_item_id, student_details)
         return
 
     if action == "enroll":
-        print(f"  -> Pushing enrollment for '{class_name}' to Canvas.")
-        section = create_section_if_not_exists(canvas_course_id, "All")
+        print(f"  -> Pushing enrollment for '{class_name}' to Canvas section '{section_name}'.")
+        section = create_section_if_not_exists(canvas_course_id, section_name)
         if section:
             enroll_or_create_and_enroll(canvas_course_id, section.id, student_details)
 
@@ -699,8 +719,6 @@ def process_general_webhook(event_data, config_rule):
             name = get_item_name(link_id, linked_board_id)
             if name: create_subitem(item_id, f"Removed {prefix} '{name}' on {date} by {changer}", subitem_cols)
 
-# In app.py
-
 @celery_app.task(name='app.process_canvas_full_sync_from_status')
 def process_canvas_full_sync_from_status(event_data):
     if event_data.get('value', {}).get('label', {}).get('text', '') != PLP_CANVAS_SYNC_STATUS_VALUE:
@@ -718,10 +736,6 @@ def process_canvas_full_sync_from_status(event_data):
         for class_id in get_linked_items_from_board_relation(plp_item_id, int(PLP_BOARD_ID), column_id):
             class_id_to_category_map[class_id] = category
             
-    if not class_id_to_category_map:
-        print(f"INFO: Full Sync for PLP {plp_item_id} found no classes to enroll.")
-        # Continue to process special enrollments even if no regular classes are found
-    
     # --- 1B. HANDLE SPECIAL ENROLLMENTS (ACE STUDY HALL) ---
     print(f"INFO: Checking special enrollments for PLP ID {plp_item_id}.")
     grade_text = student_details.get('grade_text', '')
@@ -738,7 +752,34 @@ def process_canvas_full_sync_from_status(event_data):
             print(f"  -> Student is K-5th grade. Unenrolling from ACE Study Hall.")
             unenroll_student_from_course(ace_sh_canvas_id, student_details)
 
-    # --- 2. PERFORM ALL CANVAS ENROLLMENTS SILENTLY ---
+    # --- 2. PRE-COMPUTE HS SECTION NAMES ---
+    course_to_track_map = {}
+    if is_high_school_student(student_details.get('grade_text')):
+        hs_roster_ids = get_linked_items_from_board_relation(plp_item_id, int(PLP_BOARD_ID), PLP_TO_HS_ROSTER_CONNECT_COLUMN)
+        if hs_roster_ids:
+            hs_roster_id = list(hs_roster_ids)[0]
+            subitems_query = f"""query {{ items(ids: [{hs_roster_id}]) {{ subitems {{
+                column_values(ids: ["{HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID}", "{HS_ROSTER_TRACK_COLUMN_ID}"]) {{ id text value }}
+            }} }} }}"""
+            subitems_result = execute_monday_graphql(subitems_query)
+            if subitems_result:
+                try:
+                    subitems = subitems_result['data']['items'][0]['subitems']
+                    for subitem in subitems:
+                        track_name = ''
+                        linked_course_ids = set()
+                        for cv in subitem['column_values']:
+                            if cv['id'] == HS_ROSTER_TRACK_COLUMN_ID:
+                                track_name = cv['text']
+                            elif cv['id'] == HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID:
+                                linked_course_ids = get_linked_ids_from_connect_column_value(cv['value'])
+                        if track_name:
+                            for course_id in linked_course_ids:
+                                course_to_track_map[course_id] = track_name
+                except (KeyError, IndexError):
+                    pass 
+
+    # --- 3. PERFORM ALL CANVAS ENROLLMENTS ---
     print(f"INFO: Starting Full Canvas Sync for PLP ID {plp_item_id}. Enrolling in {len(class_id_to_category_map)} courses.")
     for class_item_id, category_name in class_id_to_category_map.items():
         linked_canvas_item_ids = get_linked_items_from_board_relation(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
@@ -748,34 +789,22 @@ def process_canvas_full_sync_from_status(event_data):
             canvas_course_id = course_id_val.get('text') if course_id_val else None
             
             if canvas_course_id:
-                # Determine the correct section name using the established logic
-                section_name = "General Enrollment" # Default for K-8
-                if is_high_school_student(student_details.get('grade_text')):
-                    m_series_val = get_column_value(plp_item_id, int(PLP_BOARD_ID), PLP_M_SERIES_LABELS_COLUMN)
-                    m_series_text = m_series_val.get('text') if m_series_val else None
-                    if m_series_text:
-                        section_name = m_series_text
-                    else:
-                        ag_grad_val = get_column_value(class_item_id, int(ALL_COURSES_BOARD_ID), ALL_CLASSES_AG_GRAD_COLUMN)
-                        section_name = ag_grad_val.get('text') if ag_grad_val and ag_grad_val.get('text') else "General Enrollment"
-                
+                section_name = get_canvas_section_name(plp_item_id, class_item_id, student_details, course_to_track_map)
                 section = create_section_if_not_exists(canvas_course_id, section_name)
                 if section:
                     enroll_or_create_and_enroll(canvas_course_id, section.id, student_details)
 
-    # --- 3. POST CONSOLIDATED MONDAY.COM LOGS ---
+    # --- 4. POST CONSOLIDATED MONDAY.COM LOGS ---
     print(f"INFO: Posting consolidated logs for PLP ID {plp_item_id}.")
     
-    # Invert the map to group classes by category
-    category_to_class_ids_map = defaultdict(list)
+    category_to_class_ids_map_logs = defaultdict(list)
     for class_id, category in class_id_to_category_map.items():
-        category_to_class_ids_map[category].append(class_id)
+        category_to_class_ids_map_logs[category].append(class_id)
         
     all_class_ids = list(class_id_to_category_map.keys())
     id_to_name_map = get_item_names(all_class_ids)
 
-    # Loop through each category and post one consolidated update
-    for category, class_ids in category_to_class_ids_map.items():
+    for category, class_ids in category_to_class_ids_map_logs.items():
         subitem_name = f"{category} Curriculum"
         subitem_id = find_or_create_subitem(plp_item_id, subitem_name)
         if subitem_id:
@@ -798,17 +827,43 @@ def process_canvas_delta_sync_from_course_change(event_data):
     added_ids = current_ids - previous_ids
     removed_ids = previous_ids - current_ids
     
-    # If there are no actual changes, stop here.
     if not added_ids and not removed_ids:
         return
 
+    # --- PRE-COMPUTE HS SECTION NAMES (for consistency with full sync) ---
+    course_to_track_map = {}
+    if is_high_school_student(student_details.get('grade_text')):
+        hs_roster_ids = get_linked_items_from_board_relation(plp_item_id, int(PLP_BOARD_ID), PLP_TO_HS_ROSTER_CONNECT_COLUMN)
+        if hs_roster_ids:
+            hs_roster_id = list(hs_roster_ids)[0]
+            subitems_query = f"""query {{ items(ids: [{hs_roster_id}]) {{ subitems {{
+                column_values(ids: ["{HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID}", "{HS_ROSTER_TRACK_COLUMN_ID}"]) {{ id text value }}
+            }} }} }}"""
+            subitems_result = execute_monday_graphql(subitems_query)
+            if subitems_result:
+                try:
+                    subitems = subitems_result['data']['items'][0]['subitems']
+                    for subitem in subitems:
+                        track_name = ''
+                        linked_course_ids = set()
+                        for cv in subitem['column_values']:
+                            if cv['id'] == HS_ROSTER_TRACK_COLUMN_ID:
+                                track_name = cv['text']
+                            elif cv['id'] == HS_ROSTER_CONNECT_ALL_COURSES_COLUMN_ID:
+                                linked_course_ids = get_linked_ids_from_connect_column_value(cv['value'])
+                        if track_name:
+                            for course_id in linked_course_ids:
+                                course_to_track_map[course_id] = track_name
+                except (KeyError, IndexError):
+                    pass
+
+    # --- LOGGING ---
     category = {v: k for k, v in PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.items()}.get(trigger_column_id, "Other/Elective")
     subitem_name = f"{category} Curriculum"
     
     all_involved_ids = added_ids | removed_ids | current_ids
     id_to_name_map = get_item_names(all_involved_ids)
     
-    # --- Consolidated Update Logic ---
     subitem_id = find_or_create_subitem(plp_item_id, subitem_name)
     if not subitem_id: return
 
@@ -825,12 +880,13 @@ def process_canvas_delta_sync_from_course_change(event_data):
         final_update = "\n".join(update_messages) + f"\nCurrent {category} curriculum is now: {current_names_str}."
         create_monday_update(subitem_id, final_update)
     
-    # --- Canvas Actions (now separate from logging) ---
+    # --- CANVAS ACTIONS ---
     for rid in removed_ids:
         manage_class_enrollment("unenroll", plp_item_id, rid, student_details)
 
     for aid in added_ids:
-        manage_class_enrollment("enroll", plp_item_id, aid, student_details)
+        section_name = get_canvas_section_name(plp_item_id, aid, student_details, course_to_track_map)
+        manage_class_enrollment("enroll", plp_item_id, aid, student_details, section_name=section_name)
 
 @celery_app.task(name='app.process_master_student_person_sync_webhook')
 def process_master_student_person_sync_webhook(event_data):
