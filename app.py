@@ -490,15 +490,21 @@ def create_canvas_user(user_details, role='student'):
         raise
 
 def update_user_ssid(user, new_ssid):
+    """
+    CORRECTED: Fetches the full user object to ensure .get_logins() is available.
+    """
     try:
-        logins = user.get_logins()
+        canvas_api = initialize_canvas_api()
+        # This line ensures the full, detailed user object is fetched
+        full_user_obj = canvas_api.get_user(user.id)
+        logins = full_user_obj.get_logins()
         if logins:
             login_to_update = logins[0]
             login_to_update.edit(login={'sis_user_id': new_ssid})
             return True
         return False
-    except CanvasException as e:
-        print(f"ERROR: API error updating SSID for user '{user.name}': {e}")
+    except (CanvasException, AttributeError) as e:
+        print(f"ERROR: API error updating SSID for user ID '{user.id}': {e}")
     return False
 
 def create_canvas_course(course_name, term_id):
@@ -790,9 +796,7 @@ def process_canvas_full_sync_from_status(event_data):
             
             if canvas_course_id:
                 section_name = get_canvas_section_name(plp_item_id, class_item_id, student_details, course_to_track_map)
-                section = create_section_if_not_exists(canvas_course_id, section_name)
-                if section:
-                    enroll_or_create_and_enroll(canvas_course_id, section.id, student_details)
+                manage_class_enrollment("enroll", plp_item_id, class_item_id, student_details, section_name=section_name)
 
     # --- 4. POST CONSOLIDATED MONDAY.COM LOGS ---
     print(f"INFO: Posting consolidated logs for PLP ID {plp_item_id}.")
