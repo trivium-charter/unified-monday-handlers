@@ -91,6 +91,25 @@ PLP_PEOPLE_COLUMNS_MAP = {
 # ==============================================================================
 MONDAY_HEADERS = { "Authorization": MONDAY_API_KEY, "Content-Type": "application/json", "API-Version": "2023-10" }
 
+def is_middle_or_high_school(grade_text):
+    """Checks if a student is in middle or high school (grades 6-12)."""
+    if not grade_text: return False
+    # Handle TK and K explicitly as not middle/high
+    if grade_text.upper() in ["TK", "K"]:
+        return False
+    match = re.search(r'\d+', grade_text)
+    if match:
+        grade_level = int(match.group(0))
+        return 6 <= grade_level <= 12
+    return False
+
+def delete_item(item_id):
+    """Deletes a Monday.com item (or subitem)."""
+    mutation = f"mutation {{ delete_item (item_id: {item_id}) {{ id }} }}"
+    print(f"  -> DELETING Monday.com item: {item_id}")
+    result = execute_monday_graphql(mutation)
+    return result is not None
+
 def create_monday_update(item_id, update_text):
     """Creates an update (comment) on a Monday.com item."""
     mutation = f'mutation {{ create_update (item_id: {item_id}, body: {json.dumps(update_text)}) {{ id }} }}'
@@ -513,12 +532,17 @@ def enroll_user_in_course(course_id, user_id, role='StudentEnrollment'):
 def unenroll_student_from_course(course_id, student_details):
     canvas_api = initialize_canvas_api()
     if not canvas_api: return False
-    user = find_canvas_user(student_details, cursor=None) # No cursor needed for unenrollment
+    # Create a dummy cursor for the find_canvas_user call as it's not essential here
+    class DummyCursor:
+        def execute(self, *args): pass
+        def fetchone(self): return None
+    user = find_canvas_user(student_details, cursor=DummyCursor())
     if not user: return True
     try:
         course = canvas_api.get_course(course_id)
         for enrollment in course.get_enrollments(user_id=user.id):
             if enrollment.role == 'StudentEnrollment':
+                print(f"  -> Deactivating enrollment {enrollment.id} for user {user.id} in course {course_id}")
                 enrollment.deactivate(task='conclude')
         return True
     except CanvasException as e:
@@ -649,7 +673,7 @@ def get_student_details_from_plp(plp_item_id):
         print(f"  [DIAGNOSTIC] FAILED: Could not get the Master Student ID. Error: {e}")
         return None
     try:
-        details_query = f'query {{ items (ids: [{master_student_id}]) {{ id name column_values(ids: ["{MASTER_STUDENT_SSID_COLUMN}", "{MASTER_STUDENT_EMAIL_COLUMN}", "{MASTER_STUDENT_CANVAS_ID_COLUMN}"]) {{ id text }} }} }}'
+        details_query = f'query {{ items (ids: [{master_student_id}]) {{ id name column_values(ids: ["{MASTER_STUDENT_SSID_COLUMN}", "{MASTER_STUDENT_EMAIL_COLUMN}", "{MASTER_STUDENT_CANVAS_ID_COLUMN}", "{MASTER_STUDENT_GRADE_COLUMN_ID}"]) {{ id text }} }} }}'
         details_result = execute_monday_graphql(details_query)
         item_details = details_result['data']['items'][0]
         student_name = item_details.get('name')
@@ -666,8 +690,9 @@ def get_student_details_from_plp(plp_item_id):
         email = unicodedata.normalize('NFKC', raw_email).strip()
         ssid = column_map.get(MASTER_STUDENT_SSID_COLUMN, '')
         canvas_id = column_map.get(MASTER_STUDENT_CANVAS_ID_COLUMN, '')
+        grade_text = column_map.get(MASTER_STUDENT_GRADE_COLUMN_ID, '')
         print("  [DIAGNOSTIC] Successfully gathered all required details.")
-        return {'name': student_name, 'ssid': ssid, 'email': email, 'canvas_id': canvas_id, 'master_id': item_details['id'], 'plp_id': plp_item_id}
+        return {'name': student_name, 'ssid': ssid, 'email': email, 'canvas_id': canvas_id, 'master_id': item_details['id'], 'plp_id': plp_item_id, 'grade_text': grade_text}
     except (TypeError, KeyError, IndexError) as e:
         print(f"  [DIAGNOSTIC] FAILED: Could not parse details from the Master Student board. Error: {e}")
         return None
@@ -680,13 +705,13 @@ def process_student_special_enrollments(plp_item, db_cursor, dry_run=True):
         print("  SKIPPING: Could not get student details.")
         return
     master_id = student_details['master_id']
-    master_details_query = f'query {{ items(ids:[{master_id}]) {{ column_values(ids:["{MASTER_STUDENT_TOR_COLUMN_ID}", "{MASTER_STUDENT_GRADE_COLUMN_ID}"]) {{ id text value }} }} }}'
+    grade_text = student_details.get('grade_text', '')
+
+    master_details_query = f'query {{ items(ids:[{master_id}]) {{ column_values(ids:["{MASTER_STUDENT_TOR_COLUMN_ID}"]) {{ id text value }} }} }}'
     master_result = execute_monday_graphql(master_details_query)
     tor_last_name = "Orientation"
-    grade_text = ""
     if master_result and master_result.get('data', {}).get('items'):
         cols = {cv['id']: cv for cv in master_result['data']['items'][0].get('column_values', [])}
-        grade_text = cols.get(MASTER_STUDENT_GRADE_COLUMN_ID, {}).get('text', '')
         tor_val_str = cols.get(MASTER_STUDENT_TOR_COLUMN_ID, {}).get('value')
         if tor_val_str:
             try:
@@ -696,6 +721,8 @@ def process_student_special_enrollments(plp_item, db_cursor, dry_run=True):
                     if tor_full_name: tor_last_name = tor_full_name.split()[-1]
             except (json.JSONDecodeError, TypeError):
                 print(f"  WARNING: Could not parse TOR value for master item {master_id}.")
+    
+    # --- JUMPSTART ENROLLMENT (No changes here) ---
     jumpstart_canvas_id = SPECIAL_COURSE_CANVAS_IDS.get("Jumpstart")
     if jumpstart_canvas_id:
         print(f"  Processing Jumpstart enrollment, section: {tor_last_name}")
@@ -704,16 +731,19 @@ def process_student_special_enrollments(plp_item, db_cursor, dry_run=True):
             if section:
                 result = enroll_or_create_and_enroll(jumpstart_canvas_id, section.id, student_details, db_cursor)
                 print(f"  -> Enrollment status: {result}")
-    sh_section_name = get_study_hall_section_from_grade(grade_text)
-    target_sh_name = "ACE Study Hall"
-    target_sh_canvas_id = SPECIAL_COURSE_CANVAS_IDS.get(target_sh_name)
-    if target_sh_canvas_id:
-        print(f"  Processing {target_sh_name} enrollment, section: {sh_section_name}")
-        if not dry_run:
-            section = create_section_if_not_exists(target_sh_canvas_id, sh_section_name)
-            if section:
-                result = enroll_or_create_and_enroll(target_sh_canvas_id, section.id, student_details, db_cursor)
-                print(f"  -> Enrollment status: {result}")
+
+    # --- ACE STUDY HALL ENROLLMENT (MODIFIED LOGIC) ---
+    ace_sh_canvas_id = SPECIAL_COURSE_CANVAS_IDS.get("ACE Study Hall")
+    if ace_sh_canvas_id:
+        if is_middle_or_high_school(grade_text):
+            print(f"  Processing ACE Study Hall enrollment for 6-12th grader, section: {tor_last_name}")
+            if not dry_run:
+                section = create_section_if_not_exists(ace_sh_canvas_id, tor_last_name)
+                if section:
+                    result = enroll_or_create_and_enroll(ace_sh_canvas_id, section.id, student_details, db_cursor)
+                    print(f"  -> Enrollment status: {result}")
+        else:
+            print(f"  SKIPPING: Student grade '{grade_text}' is not 6-12. Not enrolling in ACE Study Hall.")
 
 def run_hs_roster_sync_for_student(hs_roster_item, dry_run=True):
     parent_item_id = int(hs_roster_item['id'])
@@ -905,8 +935,92 @@ def run_plp_sync_for_student(plp_item_id, creator_id, db_cursor, dry_run=True):
         manage_class_enrollment("enroll", plp_item_id, class_item_id, student_details, category_name, creator_id, db_cursor, dry_run=dry_run)
     sync_teacher_assignments(master_student_id, plp_item_id, dry_run=dry_run)
 
+def deduplicate_subitems_for_student(plp_item_id, creator_id_to_check, dry_run=True):
+    """Finds and removes specific duplicate subitems created by a target user."""
+    print(f"  -> Checking for duplicate subitems for PLP item {plp_item_id}...")
+    query = f'query {{ items(ids:[{plp_item_id}]) {{ subitems {{ id name creator {{ id }} }} }} }}'
+    result = execute_monday_graphql(query)
+    
+    try:
+        subitems = result['data']['items'][0]['subitems']
+    except (KeyError, IndexError, TypeError):
+        print("     No subitems found to check.")
+        return
+
+    subitems_by_name = defaultdict(list)
+    for item in subitems:
+        subitems_by_name[item.get('name')].append(item)
+
+    items_to_delete = set()
+
+    # Case 1: Specific 'Other Curriculum' vs 'Other/Elective'
+    other_curr_items = subitems_by_name.get("Other Curriculum", [])
+    other_elec_items = subitems_by_name.get("Other/Elective", [])
+
+    if other_curr_items and other_elec_items:
+        for item in other_curr_items:
+            creator = item.get('creator') or {}
+            if str(creator.get('id')) == str(creator_id_to_check):
+                items_to_delete.add(int(item['id']))
+                print(f"     MARKING FOR DELETION: 'Other Curriculum' (ID: {item['id']}) created by target user, and 'Other/Elective' exists.")
+
+    # Case 2: General duplicates created by the target user
+    for name, items in subitems_by_name.items():
+        if len(items) > 1:
+            items_by_creator = [item for item in items if str((item.get('creator') or {}).get('id')) == str(creator_id_to_check)]
+            # If there's more than one item with the same name by the target creator, delete all but the first one
+            if len(items_by_creator) > 1:
+                for item_to_delete in items_by_creator[1:]: # Keep the first, delete the rest
+                    items_to_delete.add(int(item_to_delete['id']))
+                    print(f"     MARKING FOR DELETION: Duplicate '{name}' (ID: {item_to_delete['id']}) created by target user.")
+    
+    if not items_to_delete:
+        print("     No duplicate subitems found to remove.")
+        return
+
+    if not dry_run:
+        for item_id in items_to_delete:
+            delete_item(item_id)
+            time.sleep(1) # Be kind to the API
+    else:
+        print(f"     DRY RUN: Would delete {len(items_to_delete)} subitems: {list(items_to_delete)}")
+
+def cleanup_elementary_ace_study_hall(all_plp_items, dry_run=True):
+    """Finds all K-5 students and ensures they are not in the ACE Study Hall."""
+    print("\n======================================================")
+    print("=== CLEANING K-5 STUDENTS FROM ACE STUDY HALL    ===")
+    print("======================================================")
+    
+    ace_sh_canvas_id = SPECIAL_COURSE_CANVAS_IDS.get("ACE Study Hall")
+    if not ace_sh_canvas_id:
+        print("  ERROR: ACE Study Hall Canvas ID not configured. Skipping cleanup.")
+        return
+
+    count = 0
+    for i, plp_item in enumerate(all_plp_items, 1):
+        plp_item_id = int(plp_item['id'])
+        student_details = get_student_details_from_plp(plp_item_id)
+        if not student_details:
+            continue
+        
+        grade_text = student_details.get('grade_text', '')
+        
+        if grade_text and not is_middle_or_high_school(grade_text):
+            count += 1
+            print(f"  -> Found K-5 student to process: {plp_item['name']} (Grade: {grade_text})")
+            if not dry_run:
+                unenroll_student_from_course(ace_sh_canvas_id, student_details)
+            else:
+                print(f"     DRY RUN: Would unenroll student {student_details.get('email')} from ACE Study Hall ({ace_sh_canvas_id}).")
+    
+    print(f"--- Found {count} total K-5 students to process for ACE Study Hall unenrollment. ---")
+
 def reconcile_subitems(plp_item_id, creator_id, db_cursor, dry_run=True):
     print(f"--- Reconciling All Data and Logs for PLP Item: {plp_item_id} ---")
+    
+    # Run deduplication first before reconciling logs
+    deduplicate_subitems_for_student(plp_item_id, creator_id, dry_run=dry_run)
+
     student_details = get_student_details_from_plp(plp_item_id)
     if not student_details or not student_details.get('master_id'):
         print("  SKIPPING: Could not get complete student details for reconciliation.")
@@ -1144,10 +1258,17 @@ if __name__ == '__main__':
         print(f"INFO: Found {len(processed_map)} students in the database.")
 
         # --- MODIFIED LOGIC STARTS HERE ---
+        creator_id = get_user_id(TARGET_USER_NAME)
+        if not creator_id: raise Exception(f"Halting script: Target user '{TARGET_USER_NAME}' could not be found.")
 
-        # Step 1: Get PLP items that have been updated directly
+        # Step 1: Get all PLP items for cleanup and reconciliation steps
         print("INFO: Fetching all PLP board items from Monday.com...")
         all_plp_items = get_all_board_items(PLP_BOARD_ID)
+        
+        # Step 1.5: Run cleanup for K-5 students in ACE Study Hall
+        cleanup_elementary_ace_study_hall(all_plp_items, dry_run=DRY_RUN)
+
+        # Step 2: Get PLP items that have been updated directly
         plp_ids_to_process = set()
 
         print("INFO: Filtering for students with updated PLP items...")
@@ -1160,7 +1281,7 @@ if __name__ == '__main__':
             if not last_synced or updated_at > last_synced:
                 plp_ids_to_process.add(item_id)
 
-        # Step 2: Get PLP items linked to recently updated HS Rosters
+        # Step 3: Get PLP items linked to recently updated HS Rosters
         print("INFO: Fetching all HS Roster items to check for recent updates...")
         all_hs_roster_items = get_all_board_items(HS_ROSTER_BOARD_ID)
         
@@ -1180,7 +1301,7 @@ if __name__ == '__main__':
                 if not last_synced or hs_updated_at > last_synced:
                     plp_ids_to_process.update(linked_plp_ids)
 
-        # Step 3: Combine and fetch the final list of items to process
+        # Step 4: Combine and fetch the final list of items to process
         total_to_process = len(plp_ids_to_process)
         print(f"INFO: Found {total_to_process} unique students to process from PLP and HS Roster updates.")
         
@@ -1191,10 +1312,6 @@ if __name__ == '__main__':
             items_to_process = [all_items_on_board[pid] for pid in plp_ids_to_process if pid in all_items_on_board]
 
         # --- MODIFIED LOGIC ENDS HERE ---
-        
-        creator_id = get_user_id(TARGET_USER_NAME)
-        if not creator_id: raise Exception(f"Halting script: Target user '{TARGET_USER_NAME}' could not be found.")
-
         for i, plp_item in enumerate(items_to_process, 1):
             plp_item_id = int(plp_item['id'])
             print(f"\n===== Processing Student {i}/{total_to_process} (PLP ID: {plp_item_id}) =====")
