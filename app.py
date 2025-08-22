@@ -34,6 +34,7 @@ MASTER_STUDENT_SSID_COLUMN = os.environ.get("MASTER_STUDENT_SSID_COLUMN")
 MASTER_STUDENT_EMAIL_COLUMN = os.environ.get("MASTER_STUDENT_EMAIL_COLUMN")
 MASTER_STUDENT_CANVAS_ID_COLUMN = "text_mktgs1ax"
 MASTER_STUDENT_TOR_COLUMN_ID = os.environ.get("MASTER_STUDENT_TOR_COLUMN_ID")
+MASTER_STUDENT_GRADE_COLUMN_ID = "color_mksy8hcw"
 ALL_COURSES_BOARD_ID = os.environ.get("ALL_COURSES_BOARD_ID")
 ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID = os.environ.get("ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID")
 ALL_CLASSES_CANVAS_ID_COLUMN = os.environ.get("ALL_CLASSES_CANVAS_ID_COLUMN")
@@ -57,6 +58,9 @@ CANVAS_TO_STAFF_CONNECT_COLUMN_ID = os.environ.get("CANVAS_TO_STAFF_CONNECT_COLU
 CANVAS_TERM_ID = os.environ.get("CANVAS_TERM_ID")
 CANVAS_SUBACCOUNT_ID = os.environ.get("CANVAS_SUBACCOUNT_ID")
 CANVAS_TEMPLATE_COURSE_ID = os.environ.get("CANVAS_TEMPLATE_COURSE_ID")
+
+SPECIAL_COURSE_CANVAS_IDS = { "Jumpstart": 10069, "ACE Study Hall": 10128, "Connect English Study Hall": 10109, "Connect Math Study Hall": 9966, "Prep Math and ELA Study Hall": 9960, "EL Support Study Hall": 10046 }
+
 try:
     PLP_CATEGORY_TO_CONNECT_COLUMN_MAP = json.loads(os.environ.get("PLP_CATEGORY_TO_CONNECT_COLUMN_MAP", "{}"))
     MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS = json.loads(os.environ.get("MASTER_STUDENT_PEOPLE_COLUMN_MAPPINGS", "{}"))
@@ -364,8 +368,18 @@ def check_if_subitem_exists_by_name(parent_item_id, subitem_name_to_check):
 def initialize_canvas_api():
     return Canvas(CANVAS_API_URL, CANVAS_API_KEY) if CANVAS_API_URL and CANVAS_API_KEY else None
 
-# In app.py, add this function to the CANVAS UTILITIES section
-
+def is_middle_or_high_school(grade_text):
+    """Checks if a student is in middle or high school (grades 6-12)."""
+    if not grade_text: return False
+    # Handle TK and K explicitly as not middle/high
+    if grade_text.upper() in ["TK", "K"]:
+        return False
+    match = re.search(r'\d+', grade_text)
+    if match:
+        grade_level = int(match.group(0))
+        return 6 <= grade_level <= 12
+    return False
+    
 def is_high_school_student(grade_text):
     """Checks if a student is in high school based on their grade text."""
     if not grade_text: return False
@@ -606,7 +620,7 @@ def get_student_details_from_plp(plp_item_id):
         linked_ids = [item['linkedPulseId'] for item in connect_column_value.get('linkedPulseIds', [])]
         if not linked_ids: return None
         master_student_id = linked_ids[0]
-        details_query = f"""query {{ items (ids: [{master_student_id}]) {{ name column_values(ids: ["{MASTER_STUDENT_SSID_COLUMN}", "{MASTER_STUDENT_EMAIL_COLUMN}", "{MASTER_STUDENT_CANVAS_ID_COLUMN}"]) {{ id text }} }} }}"""
+        details_query = f"""query {{ items (ids: [{master_student_id}]) {{ name column_values(ids: ["{MASTER_STUDENT_SSID_COLUMN}", "{MASTER_STUDENT_EMAIL_COLUMN}", "{MASTER_STUDENT_CANVAS_ID_COLUMN}", "{MASTER_STUDENT_GRADE_COLUMN_ID}"]) {{ id text }} }} }}"""
         details_result = execute_monday_graphql(details_query)
         item_details = details_result['data']['items'][0]
         student_name = item_details['name']
@@ -614,8 +628,9 @@ def get_student_details_from_plp(plp_item_id):
         ssid = column_map.get(MASTER_STUDENT_SSID_COLUMN, '')
         email = column_map.get(MASTER_STUDENT_EMAIL_COLUMN, '')
         canvas_id = column_map.get(MASTER_STUDENT_CANVAS_ID_COLUMN, '')
+        grade_text = column_map.get(MASTER_STUDENT_GRADE_COLUMN_ID, '')
         if not all([student_name, email]): return None
-        return {'name': student_name, 'ssid': ssid, 'email': email, 'canvas_id': canvas_id, 'master_id': master_student_id}
+        return {'name': student_name, 'ssid': ssid, 'email': email, 'canvas_id': canvas_id, 'master_id': master_student_id, 'grade_text': grade_text}
     except (TypeError, KeyError, IndexError, json.JSONDecodeError) as e:
         print(f"ERROR: Could not parse student details from Monday.com response: {e}")
         return None
@@ -705,7 +720,23 @@ def process_canvas_full_sync_from_status(event_data):
             
     if not class_id_to_category_map:
         print(f"INFO: Full Sync for PLP {plp_item_id} found no classes to enroll.")
-        return
+        # Continue to process special enrollments even if no regular classes are found
+    
+    # --- 1B. HANDLE SPECIAL ENROLLMENTS (ACE STUDY HALL) ---
+    print(f"INFO: Checking special enrollments for PLP ID {plp_item_id}.")
+    grade_text = student_details.get('grade_text', '')
+    tor_last_name = get_roster_teacher_name(student_details.get('master_id')) or "Orientation"
+    ace_sh_canvas_id = SPECIAL_COURSE_CANVAS_IDS.get("ACE Study Hall")
+    
+    if ace_sh_canvas_id:
+        if is_middle_or_high_school(grade_text):
+            print(f"  -> Student is 6-12th grade. Enrolling in ACE Study Hall section '{tor_last_name}'.")
+            section = create_section_if_not_exists(ace_sh_canvas_id, tor_last_name)
+            if section:
+                enroll_or_create_and_enroll(ace_sh_canvas_id, section.id, student_details)
+        else:
+            print(f"  -> Student is K-5th grade. Unenrolling from ACE Study Hall.")
+            unenroll_student_from_course(ace_sh_canvas_id, student_details)
 
     # --- 2. PERFORM ALL CANVAS ENROLLMENTS SILENTLY ---
     print(f"INFO: Starting Full Canvas Sync for PLP ID {plp_item_id}. Enrolling in {len(class_id_to_category_map)} courses.")
@@ -718,7 +749,7 @@ def process_canvas_full_sync_from_status(event_data):
             
             if canvas_course_id:
                 # Determine the correct section name using the established logic
-                section_name = "General Enrollment"
+                section_name = "General Enrollment" # Default for K-8
                 if is_high_school_student(student_details.get('grade_text')):
                     m_series_val = get_column_value(plp_item_id, int(PLP_BOARD_ID), PLP_M_SERIES_LABELS_COLUMN)
                     m_series_text = m_series_val.get('text') if m_series_val else None
