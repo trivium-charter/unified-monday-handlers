@@ -812,8 +812,10 @@ def process_student_special_enrollments(plp_item, db_cursor, dry_run=True):
             print(f"  Processing ACE Study Hall enrollment for 6-12th grader, section: {tor_last_name}")
             sync_study_hall_enrollment(ace_sh_canvas_id, student_details, tor_last_name, db_cursor, dry_run=dry_run)
         else:
-            # Logic to unenroll K-5 students has been removed as per request.
-            print(f"  SKIPPING: Student grade '{grade_text}' is not 6-12. Not enrolling in ACE Study Hall.")
+            # Unenroll K-5 students if they are found in the course.
+            print(f"  -> Student grade '{grade_text}' is not 6-12. Ensuring they are UNENROLLED from ACE Study Hall.")
+            if not dry_run:
+                unenroll_student_from_course(ace_sh_canvas_id, student_details)
 
 def run_hs_roster_sync_for_student(hs_roster_item, dry_run=True):
     parent_item_id = int(hs_roster_item['id'])
@@ -1258,7 +1260,10 @@ def sync_canvas_teachers_and_tas(db_cursor, dry_run=True):
 # In nightly_sync.py
 
 if __name__ == '__main__':
-    PERFORM_INITIAL_CLEANUP = False
+    # Set this to True to run the script on ALL students, not just recently updated ones.
+    # Should only be used for a one-time full sync after a cleanup.
+    FORCE_FULL_SYNC = False
+    
     DRY_RUN = False
     TARGET_USER_NAME = "Sarah Bruce"
 
@@ -1285,48 +1290,48 @@ if __name__ == '__main__':
         creator_id = get_user_id(TARGET_USER_NAME)
         if not creator_id: raise Exception(f"Halting script: Target user '{TARGET_USER_NAME}' could not be found.")
 
-        # Step 1: Get all PLP items for reconciliation
         print("INFO: Fetching all PLP board items from Monday.com...")
         all_plp_items = get_all_board_items(PLP_BOARD_ID)
         
-        # Step 2: Get PLP items that have been updated directly
-        plp_ids_to_process = set()
-
-        print("INFO: Filtering for students with updated PLP items...")
-        for item in all_plp_items:
-            item_id = int(item['id'])
-            updated_at = parse_flexible_timestamp(item['updated_at'])
-            sync_data = processed_map.get(item_id)
-            last_synced = sync_data['last_synced'].replace(tzinfo=timezone.utc) if sync_data and sync_data['last_synced'] else None
-            
-            if not last_synced or updated_at > last_synced:
-                plp_ids_to_process.add(item_id)
-
-        # Step 3: Get PLP items linked to recently updated HS Rosters
-        print("INFO: Fetching all HS Roster items to check for recent updates...")
-        all_hs_roster_items = get_all_board_items(HS_ROSTER_BOARD_ID)
-        
-        print("INFO: Filtering for PLP items linked to updated HS Rosters...")
-        for hs_item in all_hs_roster_items:
-            hs_item_id = int(hs_item['id'])
-            linked_plp_ids = get_linked_items_from_board_relation(hs_item_id, int(HS_ROSTER_BOARD_ID), HS_ROSTER_MAIN_ITEM_to_PLP_CONNECT_COLUMN_ID)
-            if linked_plp_ids:
-                plp_id = list(linked_plp_ids)[0]
-                sync_data = processed_map.get(plp_id)
-                last_synced = sync_data['last_synced'].replace(tzinfo=timezone.utc) if sync_data and sync_data['last_synced'] else None
-                hs_updated_at = parse_flexible_timestamp(hs_item['updated_at'])
-
-                if not last_synced or hs_updated_at > last_synced:
-                    plp_ids_to_process.update(linked_plp_ids)
-
-        # Step 4: Combine and fetch the final list of items to process
-        total_to_process = len(plp_ids_to_process)
-        print(f"INFO: Found {total_to_process} unique students to process from PLP and HS Roster updates.")
-        
         items_to_process = []
-        if plp_ids_to_process:
-            all_items_on_board = {int(i['id']): i for i in all_plp_items}
-            items_to_process = [all_items_on_board[pid] for pid in plp_ids_to_process if pid in all_items_on_board]
+        if FORCE_FULL_SYNC:
+            print("\n*** FORCE FULL SYNC IS ENABLED. PROCESSING ALL STUDENTS. ***\n")
+            items_to_process = all_plp_items
+        else:
+            plp_ids_to_process = set()
+
+            print("INFO: Filtering for students with updated PLP items...")
+            for item in all_plp_items:
+                item_id = int(item['id'])
+                updated_at = parse_flexible_timestamp(item['updated_at'])
+                sync_data = processed_map.get(item_id)
+                last_synced = sync_data['last_synced'].replace(tzinfo=timezone.utc) if sync_data and sync_data['last_synced'] else None
+                
+                if not last_synced or updated_at > last_synced:
+                    plp_ids_to_process.add(item_id)
+
+            print("INFO: Fetching all HS Roster items to check for recent updates...")
+            all_hs_roster_items = get_all_board_items(HS_ROSTER_BOARD_ID)
+            
+            print("INFO: Filtering for PLP items linked to updated HS Rosters...")
+            for hs_item in all_hs_roster_items:
+                hs_item_id = int(hs_item['id'])
+                linked_plp_ids = get_linked_items_from_board_relation(hs_item_id, int(HS_ROSTER_BOARD_ID), HS_ROSTER_MAIN_ITEM_to_PLP_CONNECT_COLUMN_ID)
+                if linked_plp_ids:
+                    plp_id = list(linked_plp_ids)[0]
+                    sync_data = processed_map.get(plp_id)
+                    last_synced = sync_data['last_synced'].replace(tzinfo=timezone.utc) if sync_data and sync_data['last_synced'] else None
+                    hs_updated_at = parse_flexible_timestamp(hs_item['updated_at'])
+
+                    if not last_synced or hs_updated_at > last_synced:
+                        plp_ids_to_process.update(linked_plp_ids)
+            
+            if plp_ids_to_process:
+                all_items_on_board = {int(i['id']): i for i in all_plp_items}
+                items_to_process = [all_items_on_board[pid] for pid in plp_ids_to_process if pid in all_items_on_board]
+        
+        total_to_process = len(items_to_process)
+        print(f"INFO: Found {total_to_process} unique students to process.")
 
         for i, plp_item in enumerate(items_to_process, 1):
             plp_item_id = int(plp_item['id'])
