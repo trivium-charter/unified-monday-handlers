@@ -13,25 +13,22 @@ CANVAS_API_KEY = os.environ.get("CANVAS_API_KEY")
 # 2. The specific Canvas Course ID for the ACE Study Hall
 ACE_STUDY_HALL_COURSE_ID = 10128
 
-# 3. The exact name of the section you want to clear out
-SECTION_TO_CLEANUP = "Elementary School"
-
-# 4. SAFETY SWITCH: Set to False to perform the actual unenrollments.
+# 3. SAFETY SWITCH: Set to False to perform the actual unenrollments.
 #    When True, it will only list the students it would remove.
-DRY_RUN = False
+DRY_RUN = True
 
 # ==============================================================================
 # SCRIPT LOGIC
 # ==============================================================================
 
-def cleanup_study_hall_section():
-    """Finds a specific section in a course and removes all student enrollments."""
+def reset_study_hall_enrollments():
+    """Finds a course and removes ALL student enrollments from ALL sections within it."""
 
     if not all([CANVAS_API_URL, CANVAS_API_KEY]):
         print("ERROR: CANVAS_API_URL and CANVAS_API_KEY must be set in your environment variables.")
         return
 
-    print("--- Starting Study Hall Cleanup Script ---")
+    print("--- Starting Full Study Hall Reset Script ---")
     if DRY_RUN:
         print("\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
         print("!!!               DRY RUN MODE IS ON               !!!")
@@ -48,31 +45,18 @@ def cleanup_study_hall_section():
         course = canvas.get_course(ACE_STUDY_HALL_COURSE_ID)
         print(f"SUCCESS: Found course -> '{course.name}'")
 
-        # 2. Find the specific section within the course
-        print(f"INFO: Searching for section named '{SECTION_TO_CLEANUP}'...")
-        target_section = None
-        for section in course.get_sections():
-            if section.name == SECTION_TO_CLEANUP:
-                target_section = section
-                break
-        
-        if not target_section:
-            print(f"ERROR: Could not find a section named '{SECTION_TO_CLEANUP}' in this course. Exiting.")
-            return
-            
-        print(f"SUCCESS: Found section -> ID: {target_section.id}, Name: '{target_section.name}'")
-
-        # 3. Get all student enrollments in that specific section
-        enrollments = target_section.get_enrollments(type=['StudentEnrollment'])
+        # 2. Get all student enrollments in the entire course
+        print("INFO: Fetching all student enrollments from all sections...")
+        enrollments = course.get_enrollments(type=['StudentEnrollment'])
         
         student_enrollments = list(enrollments)
         if not student_enrollments:
-            print("INFO: No student enrollments found in this section. Nothing to do.")
+            print("INFO: No student enrollments found in this course. Nothing to do.")
             return
             
-        print(f"INFO: Found {len(student_enrollments)} students to remove from this section.")
+        print(f"INFO: Found {len(student_enrollments)} total students to remove from this course.")
 
-        # 4. Loop through and unenroll each student
+        # 3. Loop through and unenroll each student
         for enrollment in student_enrollments:
             try:
                 user = canvas.get_user(enrollment.user_id)
@@ -101,4 +85,4 @@ def cleanup_study_hall_section():
 
 
 if __name__ == '__main__':
-    cleanup_study_hall_section()
+    reset_study_hall_enrollments()
