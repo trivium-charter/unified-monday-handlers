@@ -15,7 +15,7 @@ ACE_STUDY_HALL_COURSE_ID = 10128
 
 # 3. SAFETY SWITCH: Set to False to perform the actual unenrollments.
 #    When True, it will only list the students it would remove.
-DRY_RUN = True
+DRY_RUN = False
 
 # ==============================================================================
 # SCRIPT LOGIC
