@@ -233,10 +233,7 @@ def find_item_by_person(board_id, person_column_id, person_id):
         if items: return items[0]['id']
     return None
 
-# In app.py, replace the existing update_item_name function
-
 def update_item_name(item_id, board_id, new_name):
-    # This removes the incorrect, extra json.dumps() wrapper
     column_values_obj = {"name": new_name}
     graphql_value = json.dumps(json.dumps(column_values_obj))
     mutation = f"mutation {{ change_multiple_column_values(board_id: {board_id}, item_id: {item_id}, column_values: {graphql_value}) {{ id }} }}"
@@ -590,10 +587,37 @@ def get_teacher_person_value_from_canvas_board(canvas_item_id):
 # CORE LOGIC FUNCTIONS
 # ==============================================================================
 
-def get_canvas_section_name(plp_item_id, class_item_id, student_details, course_to_track_map):
+def get_canvas_section_name(plp_item_id, class_item_id, class_name, student_details, course_to_track_map, class_id_to_category_map, id_to_name_map):
     """
     Determines the correct Canvas section name for a student based on a clear priority order.
     """
+    # Rule for Connect Math Study Hall
+    if "Connect Math Study Hall" in class_name:
+        for course_id, category in class_id_to_category_map.items():
+            course_name = id_to_name_map.get(course_id, "")
+            if category == "Math" and "Connect" in course_name:
+                return course_name
+        return "General Math Connect"
+
+    # Rule for Connect English Study Hall
+    if "Connect English Study Hall" in class_name:
+        for course_id, category in class_id_to_category_map.items():
+            course_name = id_to_name_map.get(course_id, "")
+            if category == "ELA" and "Connect" in course_name:
+                return course_name
+        return "General English Connect"
+
+    # Rule for Prep Math and ELA Study Hall
+    if "Prep Math and ELA Study Hall" in class_name:
+        prep_subjects = []
+        for course_id, category in class_id_to_category_map.items():
+            course_name = id_to_name_map.get(course_id, "")
+            if category in ["Math", "ELA"] and "Connect" in course_name:
+                prep_subjects.append(course_name)
+        if not prep_subjects:
+            return "General Prep"
+        return " & ".join(sorted(prep_subjects))
+
     # Default for K-8 students or if no other rules apply
     section_name = "General Enrollment"
     
@@ -741,6 +765,7 @@ def process_canvas_full_sync_from_status(event_data):
     for category, column_id in PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.items():
         for class_id in get_linked_items_from_board_relation(plp_item_id, int(PLP_BOARD_ID), column_id):
             class_id_to_category_map[class_id] = category
+    id_to_name_map = get_item_names(class_id_to_category_map.keys())
             
     # --- 1B. HANDLE SPECIAL ENROLLMENTS (ACE STUDY HALL) ---
     print(f"INFO: Checking special enrollments for PLP ID {plp_item_id}.")
@@ -795,7 +820,8 @@ def process_canvas_full_sync_from_status(event_data):
             canvas_course_id = course_id_val.get('text') if course_id_val else None
             
             if canvas_course_id:
-                section_name = get_canvas_section_name(plp_item_id, class_item_id, student_details, course_to_track_map)
+                class_name = id_to_name_map.get(class_item_id, "")
+                section_name = get_canvas_section_name(plp_item_id, class_item_id, class_name, student_details, course_to_track_map, class_id_to_category_map, id_to_name_map)
                 manage_class_enrollment("enroll", plp_item_id, class_item_id, student_details, section_name=section_name)
 
     # --- 4. POST CONSOLIDATED MONDAY.COM LOGS ---
@@ -805,9 +831,6 @@ def process_canvas_full_sync_from_status(event_data):
     for class_id, category in class_id_to_category_map.items():
         category_to_class_ids_map_logs[category].append(class_id)
         
-    all_class_ids = list(class_id_to_category_map.keys())
-    id_to_name_map = get_item_names(all_class_ids)
-
     for category, class_ids in category_to_class_ids_map_logs.items():
         subitem_name = f"{category} Curriculum"
         subitem_id = find_or_create_subitem(plp_item_id, subitem_name)
@@ -826,15 +849,13 @@ def process_canvas_delta_sync_from_course_change(event_data):
     student_details = get_student_details_from_plp(plp_item_id)
     if not student_details: return
 
-    current_ids = get_linked_ids_from_connect_column_value(event_data.get('value'))
-    previous_ids = get_linked_ids_from_connect_column_value(event_data.get('previousValue'))
-    added_ids = current_ids - previous_ids
-    removed_ids = previous_ids - current_ids
-    
-    if not added_ids and not removed_ids:
-        return
+    # --- GET FULL CONTEXT FOR SECTIONING ---
+    class_id_to_category_map = {}
+    for category, column_id in PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.items():
+        for class_id in get_linked_items_from_board_relation(plp_item_id, int(PLP_BOARD_ID), column_id):
+            class_id_to_category_map[class_id] = category
+    id_to_name_map = get_item_names(class_id_to_category_map.keys())
 
-    # --- PRE-COMPUTE HS SECTION NAMES (for consistency with full sync) ---
     course_to_track_map = {}
     if is_high_school_student(student_details.get('grade_text')):
         hs_roster_ids = get_linked_items_from_board_relation(plp_item_id, int(PLP_BOARD_ID), PLP_TO_HS_ROSTER_CONNECT_COLUMN)
@@ -862,25 +883,31 @@ def process_canvas_delta_sync_from_course_change(event_data):
                     pass
 
     # --- LOGGING ---
+    current_ids = get_linked_ids_from_connect_column_value(event_data.get('value'))
+    previous_ids = get_linked_ids_from_connect_column_value(event_data.get('previousValue'))
+    added_ids = current_ids - previous_ids
+    removed_ids = previous_ids - current_ids
+    
+    if not added_ids and not removed_ids:
+        return
+
     category = {v: k for k, v in PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.items()}.get(trigger_column_id, "Other/Elective")
     subitem_name = f"{category} Curriculum"
-    
-    all_involved_ids = added_ids | removed_ids | current_ids
-    id_to_name_map = get_item_names(all_involved_ids)
-    
+        
     subitem_id = find_or_create_subitem(plp_item_id, subitem_name)
     if not subitem_id: return
 
     update_messages = []
+    log_id_map = get_item_names(added_ids | removed_ids | current_ids)
     for rid in removed_ids:
-        name = id_to_name_map.get(rid, f"Item {rid}")
+        name = log_id_map.get(rid, f"Item {rid}")
         update_messages.append(f"'{name}' was removed by {changer_name}.")
     for aid in added_ids:
-        name = id_to_name_map.get(aid, f"Item {aid}")
+        name = log_id_map.get(aid, f"Item {aid}")
         update_messages.append(f"'{name}' was added by {changer_name}.")
 
     if update_messages:
-        current_names_str = ", ".join([f"'{id_to_name_map.get(cid)}'" for cid in sorted(list(current_ids)) if id_to_name_map.get(cid)]) or "Blank"
+        current_names_str = ", ".join([f"'{log_id_map.get(cid)}'" for cid in sorted(list(current_ids)) if log_id_map.get(cid)]) or "Blank"
         final_update = "\n".join(update_messages) + f"\nCurrent {category} curriculum is now: {current_names_str}."
         create_monday_update(subitem_id, final_update)
     
@@ -889,7 +916,8 @@ def process_canvas_delta_sync_from_course_change(event_data):
         manage_class_enrollment("unenroll", plp_item_id, rid, student_details)
 
     for aid in added_ids:
-        section_name = get_canvas_section_name(plp_item_id, aid, student_details, course_to_track_map)
+        class_name = id_to_name_map.get(aid, "")
+        section_name = get_canvas_section_name(plp_item_id, aid, class_name, student_details, course_to_track_map, class_id_to_category_map, id_to_name_map)
         manage_class_enrollment("enroll", plp_item_id, aid, student_details, section_name=section_name)
 
 @celery_app.task(name='app.process_master_student_person_sync_webhook')
