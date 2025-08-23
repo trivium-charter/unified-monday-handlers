@@ -389,67 +389,63 @@ def find_canvas_teacher(teacher_details):
     Finds a Canvas user based on provided details without checking their role.
     Prioritizes Canvas ID, then SIS ID, then email.
     """
-    print("    [DEBUG] --- Top of find_canvas_teacher function ---")
-    try:
-        canvas_api = initialize_canvas_api()
-        if not canvas_api:
-            print("    [DEBUG] FAILURE: Canvas API could not be initialized.")
-            return None
-        print("    [DEBUG] Canvas API initialized successfully.")
-    except Exception as e:
-        print(f"    [DEBUG] CRITICAL FAILURE during API initialization: {e}")
-        return None
+    canvas_api = initialize_canvas_api()
+    if not canvas_api: return None
 
     # Search by internal Canvas ID
     if teacher_details.get('canvas_id'):
-        print(f"    [DEBUG] Attempting search with Canvas ID: {teacher_details['canvas_id']}")
         try:
-            user = canvas_api.get_user(teacher_details['canvas_id'])
-            print(f"    [DEBUG] SUCCESS: Found user by Canvas ID: {user}")
-            return user
-        except Exception as e:
-            print(f"    [DEBUG] FAILURE on Canvas ID search: {e}")
+            return canvas_api.get_user(teacher_details['canvas_id'])
+        except (ResourceDoesNotExist, ValueError):
             pass
 
     # Search by SIS ID
     if teacher_details.get('sis_id'):
-        print(f"    [DEBUG] Attempting search with SIS ID: {teacher_details['sis_id']}")
         try:
-            user = canvas_api.get_user(teacher_details['sis_id'], 'sis_user_id')
-            print(f"    [DEBUG] SUCCESS: Found user by SIS ID: {user}")
-            return user
-        except Exception as e:
-            print(f"    [DEBUG] FAILURE on SIS ID search: {e}")
+            return canvas_api.get_user(teacher_details['sis_id'], 'sis_user_id')
+        except ResourceDoesNotExist:
             pass
 
     # Search by email
     if teacher_details.get('email'):
-        print(f"    [DEBUG] Attempting search with Email: {teacher_details['email']}")
         try:
-            user = canvas_api.get_user(teacher_details['email'], 'login_id')
-            print(f"    [DEBUG] SUCCESS: Found user by Email: {user}")
-            return user
-        except Exception as e:
-            print(f"    [DEBUG] FAILURE on Email search: {e}")
+            return canvas_api.get_user(teacher_details['email'], 'login_id')
+        except ResourceDoesNotExist:
             pass
 
     # Broader email search (fallback)
     if teacher_details.get('email'):
-        print(f"    [DEBUG] Attempting BROAD search with Email: {teacher_details['email']}")
         try:
             users = [u for u in canvas_api.get_account(1).get_users(search_term=teacher_details['email'])]
-            print(f"    [DEBUG] SUCCESS: Broad search found {len(users)} user(s).")
             if len(users) == 1:
                 return users[0]
-        except Exception as e:
-            print(f"    [DEBUG] FAILURE on broad Email search: {e}")
+        except (ResourceDoesNotExist, CanvasException):
             pass
             
-    print("    [DEBUG] --- Bottom of find_canvas_teacher function, no user found ---")
     return None
 
+def find_or_create_canvas_user(student_details, db_cursor):
+    """Finds an existing Canvas user or creates a new one, returning the user object."""
+    user = find_canvas_user(student_details, db_cursor)
+    if user:
+        return user
+    
+    print(f"INFO: Canvas user not found for {student_details['email']}. Attempting to create new user.")
+    try:
+        user = create_canvas_user(student_details, db_cursor=db_cursor)
+        if user:
+             # If creation succeeds, update the DB cache immediately
+            db_cursor.execute("UPDATE processed_students SET canvas_id = %s WHERE student_id = %s", (str(user.id), student_details['plp_id']))
+        return user
+    except CanvasException as e:
+        if ("sis_user_id" in str(e) and "is already in use" in str(e)) or \
+           ("unique_id" in str(e) and "ID already in use" in str(e)):
+            print(f"INFO: User creation failed because ID is in use. Searching again for existing user.")
+            return find_canvas_user(student_details, db_cursor)
+        else:
+            print(f"ERROR: A critical error occurred during user creation: {e}")
+            return None
 
-# <<< BUG FIX: Added db_cursor argument to pass to find_canvas_user in exception
 def create_canvas_user(user_details, role='student', db_cursor=None):
     canvas_api = initialize_canvas_api()
     if not canvas_api: return None
@@ -476,7 +472,6 @@ def create_canvas_user(user_details, role='student', db_cursor=None):
         if ("sis_user_id" in str(e) and "is already in use" in str(e)) or \
            ("unique_id" in str(e) and "ID already in use" in str(e)):
             print(f"INFO: User creation failed because ID is in use. Attempting to find existing user.")
-            # <<< BUG FIX: Pass the db_cursor to the fallback function
             return find_canvas_teacher(user_details) if role == 'teacher' else find_canvas_user(user_details, db_cursor)
         raise
 
@@ -566,29 +561,22 @@ def enroll_teacher_in_course(course_id, teacher_details, role='TeacherEnrollment
 
     teacher_name = teacher_details.get('name', teacher_details.get('email', 'Unknown'))
     
-    print(f"  [DEBUG] Enrolling teacher '{teacher_name}'. Finding user object...")
     user_to_enroll = find_canvas_teacher(teacher_details)
-    print(f"  [DEBUG] After find_canvas_teacher, user_to_enroll is: {user_to_enroll} (Type: {type(user_to_enroll)})")
 
     if not user_to_enroll:
-        print(f"  [DEBUG] User not found. Attempting to create.")
+        print(f"  INFO: Teacher '{teacher_name}' not found. Attempting to create.")
         try:
             user_to_enroll = create_canvas_user(teacher_details, role='teacher', db_cursor=None)
-            print(f"  [DEBUG] After create_canvas_user, user_to_enroll is: {user_to_enroll} (Type: {type(user_to_enroll)})")
         except CanvasException as e:
             if ("sis_user_id" in str(e) and "is already in use" in str(e)) or \
                ("unique_id" in str(e) and "ID already in use" in str(e)):
-                print(f"  [DEBUG] Create failed, user exists. Searching again.")
+                print(f"  INFO: Create failed, user exists. Searching again.")
                 user_to_enroll = find_canvas_teacher(teacher_details)
-                print(f"  [DEBUG] After second find_canvas_teacher, user_to_enroll is: {user_to_enroll} (Type: {type(user_to_enroll)})")
             else:
                 return f"Failed: Could not create teacher '{teacher_name}'. Error: {e}"
 
     if not user_to_enroll:
         return f"Failed: Could not find or create teacher '{teacher_name}' with the provided details."
-
-    # Final check before the API call that is crashing
-    print(f"  [DEBUG] PRE-ENROLLMENT CHECK: User is '{user_to_enroll}', Type is '{type(user_to_enroll)}'. Attempting enrollment...")
     
     try:
         course = canvas_api.get_course(course_id)
@@ -682,21 +670,10 @@ def get_canvas_section_name(plp_item_id, class_item_id, class_name, student_deta
 def enroll_or_create_and_enroll(course_id, section_id, student_details, db_cursor):
     canvas_api = initialize_canvas_api()
     if not canvas_api: return "Failed"
-    user = find_canvas_user(student_details, db_cursor)
-    if not user:
-        print(f"INFO: Canvas user not found for {student_details['email']}. Attempting to create new user.")
-        try:
-            user = create_canvas_user(student_details, db_cursor=db_cursor)
-        except CanvasException as e:
-            if ("sis_user_id" in str(e) and "is already in use" in str(e)) or \
-               ("unique_id" in str(e) and "ID already in use" in str(e)):
-                print(f"INFO: User creation failed because SIS ID is in use. Searching again for existing user.")
-                user = find_canvas_user(student_details, db_cursor)
-            else:
-                print(f"ERROR: A critical error occurred during user creation: {e}")
-                user = None
+    user = find_or_create_canvas_user(student_details, db_cursor)
     if user:
         try:
+            # Re-fetch the full user object to ensure all attributes are present
             full_user = canvas_api.get_user(user.id)
             db_cursor.execute("UPDATE processed_students SET canvas_id = %s WHERE student_id = %s", (str(full_user.id), student_details['plp_id']))
             if student_details.get('ssid') and hasattr(full_user, 'sis_user_id') and full_user.sis_user_id != student_details['ssid']:
@@ -707,6 +684,51 @@ def enroll_or_create_and_enroll(course_id, section_id, student_details, db_curso
             return "Failed"
     print(f"ERROR: Could not find or create a Canvas user for {student_details.get('name')}. Final enrollment failed.")
     return "Failed"
+
+def sync_study_hall_enrollment(course_id, student_details, target_section_name, db_cursor, dry_run=False):
+    """
+    Ensures a student is enrolled in the correct study hall section and removed from all others.
+    """
+    if dry_run:
+        print(f"  DRY RUN: Would sync student {student_details['email']} to section '{target_section_name}' in course {course_id}.")
+        return
+
+    canvas_api = initialize_canvas_api()
+    if not canvas_api: return
+
+    user = find_or_create_canvas_user(student_details, db_cursor)
+    if not user:
+        print(f"  ERROR: Could not find or create Canvas user for {student_details['email']}. Skipping section sync.")
+        return
+    
+    try:
+        course = canvas_api.get_course(course_id)
+        target_section = create_section_if_not_exists(course_id, target_section_name)
+        if not target_section: return
+
+        enrollments = course.get_enrollments(user_id=user.id)
+        is_correctly_enrolled = False
+        
+        for enrollment in enrollments:
+            if enrollment.role == 'StudentEnrollment':
+                if enrollment.course_section_id == target_section.id:
+                    is_correctly_enrolled = True
+                    print(f"  INFO: Student already in correct section '{target_section_name}'.")
+                else:
+                    # Get section name for logging before removing
+                    try:
+                        old_section = canvas.get_section(enrollment.course_section_id)
+                        print(f"  ACTION: Removing student from incorrect section '{old_section.name}'.")
+                    except ResourceDoesNotExist:
+                        print(f"  ACTION: Removing student from old/deleted section ID {enrollment.course_section_id}.")
+                    enrollment.deactivate(task='conclude')
+
+        if not is_correctly_enrolled:
+            print(f"  ACTION: Enrolling student in correct section '{target_section_name}'.")
+            enroll_student_in_section(course.id, user.id, target_section.id)
+
+    except CanvasException as e:
+        print(f"ERROR: Failed during study hall section sync for user {user.id} in course {course_id}. Details: {e}")
 
 def get_student_details_from_plp(plp_item_id):
     print(f"  [DIAGNOSTIC] Starting detail fetch for PLP item: {plp_item_id}")
@@ -777,27 +799,20 @@ def process_student_special_enrollments(plp_item, db_cursor, dry_run=True):
             except (json.JSONDecodeError, TypeError):
                 print(f"  WARNING: Could not parse TOR value for master item {master_id}.")
     
-    # --- JUMPSTART ENROLLMENT (No changes here) ---
+    # --- JUMPSTART ENROLLMENT ---
     jumpstart_canvas_id = SPECIAL_COURSE_CANVAS_IDS.get("Jumpstart")
     if jumpstart_canvas_id:
         print(f"  Processing Jumpstart enrollment, section: {tor_last_name}")
-        if not dry_run:
-            section = create_section_if_not_exists(jumpstart_canvas_id, tor_last_name)
-            if section:
-                result = enroll_or_create_and_enroll(jumpstart_canvas_id, section.id, student_details, db_cursor)
-                print(f"  -> Enrollment status: {result}")
+        sync_study_hall_enrollment(jumpstart_canvas_id, student_details, tor_last_name, db_cursor, dry_run=dry_run)
 
-    # --- ACE STUDY HALL ENROLLMENT (MODIFIED LOGIC) ---
+    # --- ACE STUDY HALL ENROLLMENT/UNENROLLMENT ---
     ace_sh_canvas_id = SPECIAL_COURSE_CANVAS_IDS.get("ACE Study Hall")
     if ace_sh_canvas_id:
         if is_middle_or_high_school(grade_text):
             print(f"  Processing ACE Study Hall enrollment for 6-12th grader, section: {tor_last_name}")
-            if not dry_run:
-                section = create_section_if_not_exists(ace_sh_canvas_id, tor_last_name)
-                if section:
-                    result = enroll_or_create_and_enroll(ace_sh_canvas_id, section.id, student_details, db_cursor)
-                    print(f"  -> Enrollment status: {result}")
+            sync_study_hall_enrollment(ace_sh_canvas_id, student_details, tor_last_name, db_cursor, dry_run=dry_run)
         else:
+            # Logic to unenroll K-5 students has been removed as per request.
             print(f"  SKIPPING: Student grade '{grade_text}' is not 6-12. Not enrolling in ACE Study Hall.")
 
 def run_hs_roster_sync_for_student(hs_roster_item, dry_run=True):
@@ -1071,36 +1086,6 @@ def deduplicate_subitems_for_student(plp_item_id, creator_id_to_check, dry_run=T
     else:
         print(f"     DRY RUN: Would delete {len(items_to_delete)} subitems: {list(items_to_delete)}")
 
-def cleanup_elementary_ace_study_hall(all_plp_items, dry_run=True):
-    """Finds all K-5 students and ensures they are not in the ACE Study Hall."""
-    print("\n======================================================")
-    print("=== CLEANING K-5 STUDENTS FROM ACE STUDY HALL    ===")
-    print("======================================================")
-    
-    ace_sh_canvas_id = SPECIAL_COURSE_CANVAS_IDS.get("ACE Study Hall")
-    if not ace_sh_canvas_id:
-        print("  ERROR: ACE Study Hall Canvas ID not configured. Skipping cleanup.")
-        return
-
-    count = 0
-    for i, plp_item in enumerate(all_plp_items, 1):
-        plp_item_id = int(plp_item['id'])
-        student_details = get_student_details_from_plp(plp_item_id)
-        if not student_details:
-            continue
-        
-        grade_text = student_details.get('grade_text', '')
-        
-        if grade_text and not is_middle_or_high_school(grade_text):
-            count += 1
-            print(f"  -> Found K-5 student to process: {plp_item['name']} (Grade: {grade_text})")
-            if not dry_run:
-                unenroll_student_from_course(ace_sh_canvas_id, student_details)
-            else:
-                print(f"     DRY RUN: Would unenroll student {student_details.get('email')} from ACE Study Hall ({ace_sh_canvas_id}).")
-    
-    print(f"--- Found {count} total K-5 students to process for ACE Study Hall unenrollment. ---")
-
 def reconcile_subitems(plp_item_id, creator_id, db_cursor, dry_run=True):
     print(f"--- Reconciling All Data and Logs for PLP Item: {plp_item_id} ---")
     
@@ -1174,16 +1159,6 @@ def sync_canvas_teachers_and_tas(db_cursor, dry_run=True):
     print("=== STARTING CANVAS TEACHER AND TA SYNC          ===")
     print("======================================================")
 
-    # --- THIS PART STAYS COMMENTED OUT FOR TESTING ---
-    # Define fixed TA accounts
-    # ta_accounts = [
-    #     {'name': 'Substitute TA', 'email': TA_SUB_EMAIL, 'sis_id': 'TA-SUB'},
-    #     {'name': 'Aide TA', 'email': TA_AIDE_EMAIL, 'sis_id': 'TA-AIDE'}
-    # ]
-    # --- END OF COMMENTED OUT BLOCK ---
-
-    # --- THIS PART MUST BE ACTIVE ---
-    # 1. Get all active Canvas Courses from Monday.com's CANVAS_BOARD_ID
     canvas_course_items_query = f"""
         query {{
             boards(ids: {CANVAS_BOARD_ID}) {{
@@ -1204,7 +1179,6 @@ def sync_canvas_teachers_and_tas(db_cursor, dry_run=True):
     while True:
         current_query = canvas_course_items_query
         if cursor:
-            # THIS IS THE CORRECTED LINE
             current_query = current_query.replace('limit: 500)', f'limit: 500, cursor: "{cursor}"')
         
         result = execute_monday_graphql(current_query)
@@ -1217,30 +1191,8 @@ def sync_canvas_teachers_and_tas(db_cursor, dry_run=True):
         if not cursor:
             break
         print(f"  Fetched {len(all_canvas_course_items)} Canvas course items...")
-    # --- END OF ACTIVE BLOCK ---
 
     print(f"Found {len(all_canvas_course_items)} Canvas courses on Monday.com to process.")
-
-    # --- THIS PART STAYS COMMENTED OUT FOR TESTING ---
-    # 1b. Pre-create TA users to avoid redundant lookups
-    # universal_ta_users = []
-    # for ta_data in ta_accounts:
-    #     ta_user = find_canvas_teacher(ta_data)
-    #     if not ta_user:
-    #         print(f"INFO: Universal TA user {ta_data['email']} not found. Attempting to create.")
-    #         try:
-    #             ta_user = create_canvas_user(ta_data, role='teacher', db_cursor=db_cursor)
-    #         except Exception as e:
-    #             print(f"ERROR: Failed to create universal TA {ta_data['email']}: {e}")
-    #             ta_user = None
-    #     if ta_user:
-    #         universal_ta_users.append(ta_user)
-    #     else:
-    #         print(f"WARNING: Could not find or create universal TA {ta_data['email']}. They will not be enrolled.")
-
-    # if not universal_ta_users:
-    #     print("WARNING: No universal TA users available for enrollment. Skipping universal TA sync.")
-    # --- END OF COMMENTED OUT BLOCK ---
 
     for i, canvas_item in enumerate(all_canvas_course_items, 1):
         canvas_item_id = int(canvas_item['id'])
@@ -1256,19 +1208,6 @@ def sync_canvas_teachers_and_tas(db_cursor, dry_run=True):
 
         canvas_course_id = int(canvas_course_id_val)
 
-        # --- THIS PART STAYS COMMENTED OUT FOR TESTING ---
-        # Enroll Universal TAs in this course
-        # if universal_ta_users:
-        #     print("  -> Ensuring TA accounts are enrolled...")
-        #     for ta_user in universal_ta_users:
-        #         if not dry_run:
-        #             enroll_status = enroll_user_in_course(canvas_course_id, ta_user.id, role='TaEnrollment')
-        #             print(f"    -> Enrollment status for {ta_user.name} ({ta_user.id}) in course {canvas_course_id}: {enroll_status}")
-        #         else:
-        #             print(f"  DRY RUN: Would enroll universal TA {ta_user.name} ({ta_user.id}) in course {canvas_course_id} as TA.")
-        # --- END OF COMMENTED OUT BLOCK ---
-
-        # 2. Sync Assigned Teachers (This will now run correctly)
         print("  -> Syncing assigned teachers...")
         linked_staff_ids = get_linked_ids_from_connect_column_value(column_values.get(CANVAS_TO_STAFF_CONNECT_COLUMN_ID, {}).get('value'))
         
@@ -1343,17 +1282,13 @@ if __name__ == '__main__':
         processed_map = {row[0]: {'last_synced': row[1], 'canvas_id': row[2]} for row in cursor.fetchall()}
         print(f"INFO: Found {len(processed_map)} students in the database.")
 
-        # --- MODIFIED LOGIC STARTS HERE ---
         creator_id = get_user_id(TARGET_USER_NAME)
         if not creator_id: raise Exception(f"Halting script: Target user '{TARGET_USER_NAME}' could not be found.")
 
-        # Step 1: Get all PLP items for cleanup and reconciliation steps
+        # Step 1: Get all PLP items for reconciliation
         print("INFO: Fetching all PLP board items from Monday.com...")
         all_plp_items = get_all_board_items(PLP_BOARD_ID)
         
-        # Step 1.5: Run cleanup for K-5 students in ACE Study Hall
-        cleanup_elementary_ace_study_hall(all_plp_items, dry_run=DRY_RUN)
-
         # Step 2: Get PLP items that have been updated directly
         plp_ids_to_process = set()
 
@@ -1374,11 +1309,8 @@ if __name__ == '__main__':
         print("INFO: Filtering for PLP items linked to updated HS Rosters...")
         for hs_item in all_hs_roster_items:
             hs_item_id = int(hs_item['id'])
-            # We assume an update to the HS Roster means the PLP might be out of sync
-            # A more advanced check could compare timestamps, but this is safer.
             linked_plp_ids = get_linked_items_from_board_relation(hs_item_id, int(HS_ROSTER_BOARD_ID), HS_ROSTER_MAIN_ITEM_to_PLP_CONNECT_COLUMN_ID)
             if linked_plp_ids:
-                 # Check if the HS item has been updated since the linked PLP item was last synced
                 plp_id = list(linked_plp_ids)[0]
                 sync_data = processed_map.get(plp_id)
                 last_synced = sync_data['last_synced'].replace(tzinfo=timezone.utc) if sync_data and sync_data['last_synced'] else None
@@ -1393,11 +1325,9 @@ if __name__ == '__main__':
         
         items_to_process = []
         if plp_ids_to_process:
-            # Fetch the full item objects for the unique IDs
             all_items_on_board = {int(i['id']): i for i in all_plp_items}
             items_to_process = [all_items_on_board[pid] for pid in plp_ids_to_process if pid in all_items_on_board]
 
-        # --- MODIFIED LOGIC ENDS HERE ---
         for i, plp_item in enumerate(items_to_process, 1):
             plp_item_id = int(plp_item['id'])
             print(f"\n===== Processing Student {i}/{total_to_process} (PLP ID: {plp_item_id}) =====")
@@ -1409,7 +1339,6 @@ if __name__ == '__main__':
                 hs_roster_ids = get_linked_ids_from_connect_column_value(hs_roster_connect_val.get('value')) if hs_roster_connect_val else set()
                 if hs_roster_ids:
                     hs_roster_item_id = list(hs_roster_ids)[0]
-                    # Find the specific hs_roster_item from the list we already fetched
                     hs_roster_item_object = next((item for item in all_hs_roster_items if int(item['id']) == hs_roster_item_id), None)
                     if hs_roster_item_object:
                         run_hs_roster_sync_for_student(hs_roster_item_object, dry_run=DRY_RUN)
