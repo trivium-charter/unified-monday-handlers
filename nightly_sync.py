@@ -264,7 +264,6 @@ def get_user_name(user_id):
     try: return result['data']['users'][0].get('name')
     except (TypeError, KeyError, IndexError): return None
 
-# <<< ADDED FROM app.py
 def get_roster_teacher_name(master_student_id):
     tor_val = get_column_value(master_student_id, int(MASTER_STUDENT_BOARD_ID), MASTER_STUDENT_TOR_COLUMN_ID)
     if tor_val and tor_val.get('value'):
@@ -540,7 +539,6 @@ def enroll_user_in_course(course_id, user_id, role='StudentEnrollment'):
         print(f"ERROR: Failed to enroll user {user_id} with role {role} in course {course_id}. Details: {e}")
         return "Failed"
 
-# <<< ADDED FROM app.py
 def unenroll_student_from_course(course_id, student_details):
     canvas_api = initialize_canvas_api()
     if not canvas_api: return False
@@ -561,7 +559,6 @@ def unenroll_student_from_course(course_id, student_details):
         print(f"ERROR: Canvas unenrollment failed: {e}")
         return False
 
-# <<< ADDED FROM app.py
 def enroll_teacher_in_course(course_id, teacher_details, role='TeacherEnrollment'):
     canvas_api = initialize_canvas_api()
     if not canvas_api:
@@ -635,10 +632,37 @@ def parse_flexible_timestamp(ts_string):
 # ==============================================================================
 # 3. CORE LOGIC FUNCTIONS
 # ==============================================================================
-def get_canvas_section_name(plp_item_id, class_item_id, student_details, course_to_track_map):
+def get_canvas_section_name(plp_item_id, class_item_id, class_name, student_details, course_to_track_map, class_id_to_category_map, id_to_name_map):
     """
     Determines the correct Canvas section name for a student based on a clear priority order.
     """
+    # Rule for Connect Math Study Hall
+    if "Connect Math Study Hall" in class_name:
+        for c_id, category in class_id_to_category_map.items():
+            course_name = id_to_name_map.get(c_id, "")
+            if category == "Math" and "Connect" in course_name:
+                return course_name
+        return "General Math Connect"
+
+    # Rule for Connect English Study Hall
+    if "Connect English Study Hall" in class_name:
+        for c_id, category in class_id_to_category_map.items():
+            course_name = id_to_name_map.get(c_id, "")
+            if category == "ELA" and "Connect" in course_name:
+                return course_name
+        return "General English Connect"
+
+    # Rule for Prep Math and ELA Study Hall
+    if "Prep Math and ELA Study Hall" in class_name:
+        prep_subjects = []
+        for c_id, category in class_id_to_category_map.items():
+            course_name = id_to_name_map.get(c_id, "")
+            if category in ["Math", "ELA"] and "Connect" in course_name:
+                prep_subjects.append(course_name)
+        if not prep_subjects:
+            return "General Prep"
+        return " & ".join(sorted(prep_subjects))
+
     # Default for K-8 students or if no other rules apply
     section_name = "General Enrollment"
     
@@ -662,7 +686,6 @@ def enroll_or_create_and_enroll(course_id, section_id, student_details, db_curso
     if not user:
         print(f"INFO: Canvas user not found for {student_details['email']}. Attempting to create new user.")
         try:
-            # <<< BUG FIX: Pass the db_cursor to create_canvas_user
             user = create_canvas_user(student_details, db_cursor=db_cursor)
         except CanvasException as e:
             if ("sis_user_id" in str(e) and "is already in use" in str(e)) or \
@@ -951,7 +974,13 @@ def run_plp_sync_for_student(plp_item_id, creator_id, db_cursor, dry_run=True):
     master_student_id = student_details.get('master_id')
     if not master_student_id: return
     
-    # --- PRE-COMPUTE HS SECTION NAMES ---
+    # --- GET FULL CONTEXT FOR SECTIONING ---
+    class_id_to_category_map = {}
+    for category, column_id in PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.items():
+        for class_id in get_linked_items_from_board_relation(plp_item_id, int(PLP_BOARD_ID), column_id):
+            class_id_to_category_map[class_id] = category
+    id_to_name_map = get_item_names(class_id_to_category_map.keys())
+
     course_to_track_map = {}
     if is_high_school_student(student_details.get('grade_text')):
         hs_roster_ids = get_linked_items_from_board_relation(plp_item_id, int(PLP_BOARD_ID), PLP_TO_HS_ROSTER_CONNECT_COLUMN)
@@ -980,18 +1009,13 @@ def run_plp_sync_for_student(plp_item_id, creator_id, db_cursor, dry_run=True):
 
     # --- Sync Class Enrollments ---
     print("INFO: Syncing class enrollments...")
-    class_id_to_category_map = {}
-    for category, column_id in PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.items():
-        for class_id in get_linked_items_from_board_relation(plp_item_id, int(PLP_BOARD_ID), column_id):
-            class_id_to_category_map[class_id] = category
-            
     if not class_id_to_category_map:
         print("INFO: No classes to sync.")
         
     for class_item_id, category_name in class_id_to_category_map.items():
-        class_name = get_item_name(class_item_id, int(ALL_COURSES_BOARD_ID)) or f"Item {class_item_id}"
+        class_name = id_to_name_map.get(class_item_id, "")
         print(f"INFO: Processing class: '{class_name}'")
-        section_name = get_canvas_section_name(plp_item_id, class_item_id, student_details, course_to_track_map)
+        section_name = get_canvas_section_name(plp_item_id, class_item_id, class_name, student_details, course_to_track_map, class_id_to_category_map, id_to_name_map)
         manage_class_enrollment("enroll", plp_item_id, class_item_id, student_details, section_name, category_name, creator_id, db_cursor, dry_run=dry_run)
         
     sync_teacher_assignments(master_student_id, plp_item_id, dry_run=dry_run)
