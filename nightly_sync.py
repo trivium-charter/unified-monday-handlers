@@ -1045,12 +1045,16 @@ def deduplicate_subitems_for_student(plp_item_id, creator_id_to_check, dry_run=T
     
     try:
         subitems = result['data']['items'][0]['subitems']
+        print(f"     [DEBUG] Found {len(subitems)} subitems to check.")
     except (KeyError, IndexError, TypeError):
         print("     No subitems found to check.")
         return
 
     subitems_by_name = defaultdict(list)
     for item in subitems:
+        creator = item.get('creator') or {}
+        creator_id = creator.get('id')
+        print(f"       - Found subitem: '{item.get('name')}' (Creator ID: {creator_id})")
         subitems_by_name[item.get('name')].append(item)
 
     items_to_delete = set()
@@ -1060,22 +1064,24 @@ def deduplicate_subitems_for_student(plp_item_id, creator_id_to_check, dry_run=T
     other_elec_items = subitems_by_name.get("Other/Elective", [])
 
     if other_curr_items and other_elec_items:
+        print("     [DEBUG] Found both 'Other Curriculum' and 'Other/Elective'. Checking creators.")
         for item in other_curr_items:
-                 creator = item.get('creator') or {}
-                 if str(creator.get('id')) == str(creator_id_to_check):
-                     items_to_delete.add(int(item['id']))
-                     print(f"     MARKING FOR DELETION: 'Other Curriculum' (ID: {item['id']}) created by target user, and 'Other/Elective' exists.")
+            creator = item.get('creator') or {}
+            if str(creator.get('id')) == str(creator_id_to_check):
+                items_to_delete.add(int(item['id']))
+                print(f"     MARKING FOR DELETION: 'Other Curriculum' (ID: {item['id']}) created by target user.")
+            else:
+                print(f"     SKIPPING: 'Other Curriculum' (ID: {item['id']}) not created by target user (Creator ID: {creator.get('id')}).")
 
     # Case 2: General duplicates created by the target user
     for name, items in subitems_by_name.items():
         if len(items) > 1:
-            # filter for items created by Sarah Bruce
             items_by_creator = [item for item in items if str((item.get('creator') or {}).get('id')) == str(creator_id_to_check)]
-            # If there's more than one item with the same name by the target creator, delete all but the first one
             if len(items_by_creator) > 1:
+                print(f"     [DEBUG] Found {len(items_by_creator)} duplicates for '{name}' created by target user.")
                 for item_to_delete in items_by_creator[1:]: # Keep the first, delete the rest
                     items_to_delete.add(int(item_to_delete['id']))
-                    print(f"     MARKING FOR DELETION: Duplicate '{name}' (ID: {item_to_delete['id']}) created by target user.")
+                    print(f"     MARKING FOR DELETION: Duplicate '{name}' (ID: {item_to_delete['id']}).")
     
     if not items_to_delete:
         print("     No duplicate subitems found to remove.")
@@ -1104,7 +1110,6 @@ def reconcile_subitems(plp_item_id, creator_id, db_cursor, dry_run=True):
     for category, column_id in PLP_CATEGORY_TO_CONNECT_COLUMN_MAP.items():
         source_of_truth_ids = get_linked_items_from_board_relation(plp_item_id, int(PLP_BOARD_ID), column_id)
         
-        # --- NEW: Only create subitem if the column has courses in it ---
         if source_of_truth_ids:
             id_to_name_map = get_item_names(source_of_truth_ids)
             source_of_truth_names = {f"'{name}'" for name in id_to_name_map.values()}
@@ -1132,7 +1137,6 @@ def reconcile_subitems(plp_item_id, creator_id, db_cursor, dry_run=True):
     for subitem_name, column_id in PLP_PEOPLE_COLUMNS_MAP.items():
         staff_val = get_column_value(plp_item_id, int(PLP_BOARD_ID), column_id)
 
-        # --- NEW: Only create subitem if the column has a person assigned ---
         if staff_val and staff_val.get('text'):
             source_of_truth_staff = {f"'{name.strip()}'" for name in staff_val.get('text', '').split(',')}
             
