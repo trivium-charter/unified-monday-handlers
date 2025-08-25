@@ -84,7 +84,7 @@ PLP_PEOPLE_COLUMNS_MAP = {
     "TOR Assignments": "person",
     "Case Manager Assignments": "multiple_person_mks1hqnj",
     "Connect Teacher Assignments": "multiple_person_mks1hzcz",
-    "ACE Teacher Assignments": "multiple_person_mks1w5fc"
+    "ACE Assignments": "multiple_person_mks1w5fc"
 }
 
 # ==============================================================================
@@ -357,7 +357,7 @@ def find_canvas_user(student_details, cursor):
     canvas_api = initialize_canvas_api()
     if not canvas_api: return None
     plp_item_id = student_details.get('plp_id')
-    if plp_item_id:
+    if plp_item_id and cursor:
         cursor.execute("SELECT canvas_id FROM processed_students WHERE student_id = %s", (plp_item_id,))
         result = cursor.fetchone()
         if result and result[0]:
@@ -433,7 +433,7 @@ def find_or_create_canvas_user(student_details, db_cursor):
     print(f"INFO: Canvas user not found for {student_details['email']}. Attempting to create new user.")
     try:
         user = create_canvas_user(student_details, db_cursor=db_cursor)
-        if user:
+        if user and db_cursor:
              # If creation succeeds, update the DB cache immediately
             db_cursor.execute("UPDATE processed_students SET canvas_id = %s WHERE student_id = %s", (str(user.id), student_details['plp_id']))
         return user
@@ -717,7 +717,7 @@ def sync_study_hall_enrollment(course_id, student_details, target_section_name, 
                 else:
                     # Get section name for logging before removing
                     try:
-                        old_section = canvas.get_section(enrollment.course_section_id)
+                        old_section = canvas_api.get_section(enrollment.course_section_id)
                         print(f"  ACTION: Removing student from incorrect section '{old_section.name}'.")
                     except ResourceDoesNotExist:
                         print(f"  ACTION: Removing student from old/deleted section ID {enrollment.course_section_id}.")
@@ -812,10 +812,7 @@ def process_student_special_enrollments(plp_item, db_cursor, dry_run=True):
             print(f"  Processing ACE Study Hall enrollment for 6-12th grader, section: {tor_last_name}")
             sync_study_hall_enrollment(ace_sh_canvas_id, student_details, tor_last_name, db_cursor, dry_run=dry_run)
         else:
-            # Unenroll K-5 students if they are found in the course.
-            print(f"  -> Student grade '{grade_text}' is not 6-12. Ensuring they are UNENROLLED from ACE Study Hall.")
-            if not dry_run:
-                unenroll_student_from_course(ace_sh_canvas_id, student_details)
+            print(f"  -> Student grade '{grade_text}' is not 6-12. No action needed for ACE Study Hall.")
 
 def run_hs_roster_sync_for_student(hs_roster_item, dry_run=True):
     parent_item_id = int(hs_roster_item['id'])
@@ -1060,22 +1057,26 @@ def deduplicate_subitems_for_student(plp_item_id, creator_id_to_check, dry_run=T
     items_to_delete = set()
 
     # Case 1: Specific 'Other Curriculum' vs 'Other/Elective'
-    other_curr_items = subitems_by_name.get("Other Curriculum", [])
     other_elec_items = subitems_by_name.get("Other/Elective", [])
-
-    if other_curr_items and other_elec_items:
-        print("     [DEBUG] Found both 'Other Curriculum' and 'Other/Elective'. Checking creators.")
-        for item in other_curr_items:
-            creator = item.get('creator') or {}
-            if str(creator.get('id')) == str(creator_id_to_check):
-                items_to_delete.add(int(item['id']))
-                print(f"     MARKING FOR DELETION: 'Other Curriculum' (ID: {item['id']}) created by target user.")
-            else:
-                print(f"     SKIPPING: 'Other Curriculum' (ID: {item['id']}) not created by target user (Creator ID: {creator.get('id')}).")
+    other_curr_items = subitems_by_name.get("Other Curriculum", [])
+    other_elec_curr_items = subitems_by_name.get("Other/Elective Curriculum", [])
+    
+    if other_elec_items:
+        items_to_check_for_deletion = other_curr_items + other_elec_curr_items
+        if items_to_check_for_deletion:
+            print("     [DEBUG] Found 'Other/Elective' and other variations. Checking creators.")
+            for item in items_to_check_for_deletion:
+                creator = item.get('creator') or {}
+                if str(creator.get('id')) == str(creator_id_to_check):
+                    items_to_delete.add(int(item['id']))
+                    print(f"     MARKING FOR DELETION: '{item.get('name')}' (ID: {item['id']}) created by target user.")
+                else:
+                    print(f"     SKIPPING: '{item.get('name')}' (ID: {item['id']}) not created by target user (Creator ID: {creator.get('id')}).")
 
     # Case 2: General duplicates created by the target user
     for name, items in subitems_by_name.items():
         if len(items) > 1:
+            # filter for items created by Sarah Bruce
             items_by_creator = [item for item in items if str((item.get('creator') or {}).get('id')) == str(creator_id_to_check)]
             if len(items_by_creator) > 1:
                 print(f"     [DEBUG] Found {len(items_by_creator)} duplicates for '{name}' created by target user.")
@@ -1266,7 +1267,7 @@ def sync_canvas_teachers_and_tas(db_cursor, dry_run=True):
 if __name__ == '__main__':
     # Set this to True to run the script on ALL students, not just recently updated ones.
     # Should only be used for a one-time full sync after a cleanup.
-    FORCE_FULL_SYNC = True
+    FORCE_FULL_SYNC = False
     
     DRY_RUN = False
     TARGET_USER_NAME = "Sarah Bruce"
