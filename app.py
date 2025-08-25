@@ -28,7 +28,7 @@ PLP_CANVAS_SYNC_COLUMN_ID = os.environ.get("PLP_CANVAS_SYNC_COLUMN_ID")
 PLP_CANVAS_SYNC_STATUS_VALUE = os.environ.get("PLP_CANVAS_SYNC_STATUS_VALUE", "Done")
 PLP_ALL_CLASSES_CONNECT_COLUMNS_STR = os.environ.get("PLP_ALL_CLASSES_CONNECT_COLUMNS_STR", "")
 PLP_TO_MASTER_STUDENT_CONNECT_COLUMN = os.environ.get("PLP_TO_MASTER_STUDENT_CONNECT_COLUMN")
-PLP_TO_HS_ROSTER_CONNECT_COLUMN = os.environ.get("PLP_TO_HS_ROSTER_CONNECT_COLUMN")
+PLP_TO_HS_ROSTER_CONNECT_COLUMN = os.environ.get("PLP_TO_HS_ROSTER_CONNECT_COLUMN") 
 PLP_M_SERIES_LABELS_COLUMN = os.environ.get("PLP_M_SERIES_LABELS_COLUMN")
 MASTER_STUDENT_BOARD_ID = os.environ.get("MASTER_STUDENT_BOARD_ID")
 MASTER_STUDENT_SSID_COLUMN = os.environ.get("MASTER_STUDENT_SSID_COLUMN")
@@ -418,35 +418,29 @@ def find_canvas_teacher(teacher_details):
 
     canvas_id = teacher_details.get('canvas_id')
     
-    # --- NEW: Improved Canvas ID handling ---
     if canvas_id:
         try:
-            # First, try to use it as an integer ID
             return canvas_api.get_user(int(canvas_id))
         except (ValueError, TypeError):
-            # If that fails, it's likely a username (login_id)
             try:
                 return canvas_api.get_user(canvas_id, 'login_id')
             except ResourceDoesNotExist:
-                pass # Continue to the next check
+                pass 
         except ResourceDoesNotExist:
-            pass # Continue to the next check
+            pass 
 
-    # Search by SIS ID
     if teacher_details.get('sis_id'):
         try:
             return canvas_api.get_user(teacher_details['sis_id'], 'sis_user_id')
         except ResourceDoesNotExist:
             pass
 
-    # Search by email
     if teacher_details.get('email'):
         try:
             return canvas_api.get_user(teacher_details['email'], 'login_id')
         except ResourceDoesNotExist:
             pass
 
-    # Broader email search (fallback)
     if teacher_details.get('email'):
         try:
             users = [u for u in canvas_api.get_account(1).get_users(search_term=teacher_details['email'])]
@@ -463,14 +457,13 @@ def create_canvas_user(user_details, role='student'):
     if not canvas_api: return None
     try:
         account = canvas_api.get_account(1)
-        # This payload is now aligned with the more robust version from the nightly sync script
         user_payload = {
             'user': {'name': user_details['name'], 'terms_of_use': True},
             'pseudonym': {
                 'unique_id': user_details['email'],
                 'sis_user_id': user_details.get('sis_id') or user_details.get('ssid') or user_details.get('email'),
                 'login_id': user_details['email'],
-                'authentication_provider_id': '112' # <-- The required ID is now added
+                'authentication_provider_id': '112'
             },
             'communication_channel': {
                 'type': 'email',
@@ -482,7 +475,7 @@ def create_canvas_user(user_details, role='student'):
     except CanvasException as e:
         if "is already in use" in str(e) or "ID already in use" in str(e):
             print(f"INFO: User creation failed because ID is in use. Searching again for existing user.")
-            return find_canvas_teacher(user_details) if role == 'teacher' else find_canvas_user(user_details)
+            return find_canvas_teacher(user_details) if role == 'teacher' else find_canvas_user(student_details)
         print(f"ERROR: A critical error occurred during user creation: {e}")
         raise
 
@@ -492,7 +485,6 @@ def update_user_ssid(user, new_ssid):
     """
     try:
         canvas_api = initialize_canvas_api()
-        # This line ensures the full, detailed user object is fetched
         full_user_obj = canvas_api.get_user(user.id)
         logins = full_user_obj.get_logins()
         if logins:
@@ -593,16 +585,16 @@ def get_canvas_section_name(plp_item_id, class_item_id, class_name, student_deta
     """
     # Rule for Connect Math Study Hall
     if "Connect Math Study Hall" in class_name:
-        for course_id, category in class_id_to_category_map.items():
-            course_name = id_to_name_map.get(course_id, "")
+        for c_id, category in class_id_to_category_map.items():
+            course_name = id_to_name_map.get(c_id, "")
             if category == "Math" and "Connect" in course_name:
                 return course_name
         return "General Math Connect"
 
     # Rule for Connect English Study Hall
     if "Connect English Study Hall" in class_name:
-        for course_id, category in class_id_to_category_map.items():
-            course_name = id_to_name_map.get(course_id, "")
+        for c_id, category in class_id_to_category_map.items():
+            course_name = id_to_name_map.get(c_id, "")
             if category == "ELA" and "Connect" in course_name:
                 return course_name
         return "General English Connect"
@@ -610,8 +602,8 @@ def get_canvas_section_name(plp_item_id, class_item_id, class_name, student_deta
     # Rule for Prep Math and ELA Study Hall
     if "Prep Math and ELA Study Hall" in class_name:
         prep_subjects = []
-        for course_id, category in class_id_to_category_map.items():
-            course_name = id_to_name_map.get(course_id, "")
+        for c_id, category in class_id_to_category_map.items():
+            course_name = id_to_name_map.get(c_id, "")
             if category in ["Math", "ELA"] and "Connect" in course_name:
                 prep_subjects.append(course_name)
         if not prep_subjects:
@@ -653,6 +645,14 @@ def enroll_or_create_and_enroll(course_id, section_id, student_details):
     if user:
         try:
             full_user = canvas_api.get_user(user.id)
+            # *** NEW: Explicitly check for active enrollment before proceeding ***
+            course_obj = canvas_api.get_course(course_id)
+            enrollments = course_obj.get_enrollments(user_id=full_user.id)
+            for enrollment in enrollments:
+                if enrollment.course_section_id == section_id and enrollment.enrollment_state == 'active':
+                    print(f"  -> INFO: Student is already active in section {section_id}. No action needed.")
+                    return "Already Enrolled"
+
             if student_details.get('ssid') and hasattr(full_user, 'sis_user_id') and full_user.sis_user_id != student_details['ssid']:
                 update_user_ssid(full_user, student_details['ssid'])
             return enroll_student_in_section(course_id, full_user.id, section_id)
@@ -919,6 +919,26 @@ def process_canvas_delta_sync_from_course_change(event_data):
         class_name = id_to_name_map.get(aid, "")
         section_name = get_canvas_section_name(plp_item_id, aid, class_name, student_details, course_to_track_map, class_id_to_category_map, id_to_name_map)
         manage_class_enrollment("enroll", plp_item_id, aid, student_details, section_name=section_name)
+        
+        # --- NEW: Sync teacher from course to Master Student list ---
+        class_name_lower = class_name.lower()
+        if "ace" in class_name_lower or "connect" in class_name_lower:
+            master_student_id = student_details.get('master_id')
+            if master_student_id:
+                linked_canvas_item_ids = get_linked_items_from_board_relation(aid, int(ALL_COURSES_BOARD_ID), ALL_COURSES_TO_CANVAS_CONNECT_COLUMN_ID)
+                if linked_canvas_item_ids:
+                    canvas_item_id = list(linked_canvas_item_ids)[0]
+                    teacher_person_value = get_teacher_person_value_from_canvas_board(canvas_item_id)
+                    if teacher_person_value:
+                        target_col_id = None
+                        if "ace" in class_name_lower:
+                            target_col_id = MASTER_STUDENT_ACE_PEOPLE_COLUMN_ID
+                        elif "connect" in class_name_lower:
+                            target_col_id = MASTER_STUDENT_CONNECT_PEOPLE_COLUMN_ID
+                        
+                        if target_col_id:
+                            update_people_column(master_student_id, int(MASTER_STUDENT_BOARD_ID), target_col_id, teacher_person_value, "multiple-person")
+
 
 @celery_app.task(name='app.process_master_student_person_sync_webhook')
 def process_master_student_person_sync_webhook(event_data):
