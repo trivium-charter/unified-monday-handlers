@@ -675,6 +675,14 @@ def enroll_or_create_and_enroll(course_id, section_id, student_details, db_curso
         try:
             # Re-fetch the full user object to ensure all attributes are present
             full_user = canvas_api.get_user(user.id)
+            # *** NEW: Explicitly check for active enrollment before proceeding ***
+            course_obj = canvas_api.get_course(course_id)
+            enrollments = course_obj.get_enrollments(user_id=full_user.id)
+            for enrollment in enrollments:
+                if enrollment.course_section_id == section_id and enrollment.enrollment_state == 'active':
+                    print(f"  -> INFO: Student is already active in section {section_id}. No action needed.")
+                    return "Already Enrolled"
+
             db_cursor.execute("UPDATE processed_students SET canvas_id = %s WHERE student_id = %s", (str(full_user.id), student_details['plp_id']))
             if student_details.get('ssid') and hasattr(full_user, 'sis_user_id') and full_user.sis_user_id != student_details['ssid']:
                 update_user_ssid(full_user, student_details['ssid'])
@@ -805,14 +813,14 @@ def process_student_special_enrollments(plp_item, db_cursor, dry_run=True):
         print(f"  Processing Jumpstart enrollment, section: {tor_last_name}")
         sync_study_hall_enrollment(jumpstart_canvas_id, student_details, tor_last_name, db_cursor, dry_run=dry_run)
 
-    # --- ACE STUDY HALL ENROLLMENT/UNENROLLMENT ---
+    # --- ACE STUDY HALL ENROLLMENT ---
     ace_sh_canvas_id = SPECIAL_COURSE_CANVAS_IDS.get("ACE Study Hall")
     if ace_sh_canvas_id:
         if is_middle_or_high_school(grade_text):
             print(f"  Processing ACE Study Hall enrollment for 6-12th grader, section: {tor_last_name}")
             sync_study_hall_enrollment(ace_sh_canvas_id, student_details, tor_last_name, db_cursor, dry_run=dry_run)
         else:
-            print(f"  -> Student grade '{grade_text}' is not 6-12. No action needed for ACE Study Hall.")
+            print(f"  SKIPPING: Student grade '{grade_text}' is not 6-12. No action needed for ACE Study Hall.")
 
 def run_hs_roster_sync_for_student(hs_roster_item, dry_run=True):
     parent_item_id = int(hs_roster_item['id'])
@@ -1267,7 +1275,7 @@ def sync_canvas_teachers_and_tas(db_cursor, dry_run=True):
 if __name__ == '__main__':
     # Set this to True to run the script on ALL students, not just recently updated ones.
     # Should only be used for a one-time full sync after a cleanup.
-    FORCE_FULL_SYNC = True
+    FORCE_FULL_SYNC = False
     
     DRY_RUN = False
     TARGET_USER_NAME = "Sarah Bruce"
