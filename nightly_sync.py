@@ -1267,7 +1267,7 @@ def sync_canvas_teachers_and_tas(db_cursor, dry_run=True):
 if __name__ == '__main__':
     # Set this to True to run the script on ALL students, not just recently updated ones.
     # Should only be used for a one-time full sync after a cleanup.
-    FORCE_FULL_SYNC = False
+    FORCE_FULL_SYNC = True
     
     DRY_RUN = False
     TARGET_USER_NAME = "Sarah Bruce"
