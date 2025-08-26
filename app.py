@@ -623,28 +623,37 @@ def get_canvas_section_name(plp_item_id, class_item_id, class_name, student_deta
     m_series_val = None
     master_student_id = student_details.get('master_id')
     
-    # This will only run if a Master Student item is actually linked.
     if master_student_id:
-        # Query the SOURCE column ("status_12__1") on the Master Student board directly.
+        print(f"[DEBUG] Found Master Student ID: {master_student_id}. Querying for M-Series status.")
         m_series_val = get_column_value(master_student_id, int(MASTER_STUDENT_BOARD_ID), "status_12__1")
-
+    else:
+        print("[DEBUG] No Master Student ID was linked. Skipping M-Series check.")
+        
     m_series_text = m_series_val.get('text') if m_series_val else None
+    print(f"[DEBUG] Text read from M-Series column: '{m_series_text}'")
     
     if m_series_text:
         match = re.search(r'M\d|Op\d', m_series_text)
         if match:
-            # If found, use it immediately for any student and we are done.
-            return match.group(0)
-
-    # --- END OF MODIFICATION ---
-
+            final_section = match.group(0)
+            print(f"[DEBUG] SUCCESS: Pattern found. Final section name is '{final_section}'.")
+            return final_section
+        else:
+            print("[DEBUG] M-Series text existed, but the pattern 'M# or Op#' was NOT found.")
+    
     # === PRIORITY 3: High School Specific Fallback ===
     if is_high_school_student(student_details.get('grade_text')):
-        # This only runs if the M-Series check above fails for any reason
-        return course_to_track_map.get(class_item_id, "General Enrollment")
+        print("[DEBUG] M-Series check failed. Falling back to HS Roster Track.")
+        final_section = course_to_track_map.get(class_item_id, "General Enrollment")
+        print(f"[DEBUG] HS Roster track returned section name: '{final_section}'.")
+        return final_section
 
     # === PRIORITY 4: Default for all other cases ===
+    print("[DEBUG] All checks failed. Using default 'General Enrollment'.")
     return "General Enrollment"
+#
+# ----- END: DEBUG-ENABLED FUNCTION -----
+#
 
 def enroll_or_create_and_enroll(course_id, section_id, student_details):
     canvas_api = initialize_canvas_api()
