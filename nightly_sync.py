@@ -622,52 +622,53 @@ def parse_flexible_timestamp(ts_string):
 # ==============================================================================
 # 3. CORE LOGIC FUNCTIONS
 # ==============================================================================
+# Make sure 'import re' is at the top of the script
+
 def get_canvas_section_name(plp_item_id, class_item_id, class_name, student_details, course_to_track_map, class_id_to_category_map, id_to_name_map):
     """
-    Determines the correct Canvas section name for a student based on a clear priority order.
+    Determines the correct Canvas section name for a student. (FULLY CORRECTED)
     """
-    # Rule for Connect Math Study Hall
+    # === PRIORITY 1: Handle Special Study Hall Sectioning ===
     if "Connect Math Study Hall" in class_name:
         for c_id, category in class_id_to_category_map.items():
             course_name = id_to_name_map.get(c_id, "")
             if category == "Math" and "Connect" in course_name:
-                return course_name
-        return "General Math Connect"
+                return course_name # Use the actual Connect Math class name
+        return "General Math Connect" # Fallback
 
-    # Rule for Connect English Study Hall
     if "Connect English Study Hall" in class_name:
         for c_id, category in class_id_to_category_map.items():
             course_name = id_to_name_map.get(c_id, "")
             if category == "ELA" and "Connect" in course_name:
-                return course_name
-        return "General English Connect"
+                return course_name # Use the actual Connect ELA class name
+        return "General English Connect" # Fallback
 
-    # Rule for Prep Math and ELA Study Hall
     if "Prep Math and ELA Study Hall" in class_name:
         prep_subjects = []
         for c_id, category in class_id_to_category_map.items():
             course_name = id_to_name_map.get(c_id, "")
-            if category in ["Math", "ELA"] and "Connect" in course_name:
+            if category in ["Math", "ELA"] and "Prep" in course_name:
                 prep_subjects.append(course_name)
         if not prep_subjects:
-            return "General Prep"
-        return " & ".join(sorted(prep_subjects))
+            return "General Prep" # Fallback
+        return " & ".join(sorted(prep_subjects)) # Use the actual Prep class names
 
-    # Default for K-8 students or if no other rules apply
-    section_name = "General Enrollment"
+    # === PRIORITY 2: Check M-Series/Op2 Column for ALL Students ===
+    m_series_val = get_column_value(plp_item_id, int(PLP_BOARD_ID), PLP_M_SERIES_LABELS_COLUMN)
+    m_series_text = m_series_val.get('text') if m_series_val else None
     
+    if m_series_text:
+        match = re.search(r'M\d|Op\d', m_series_text) # Find patterns like M3 or Op2
+        if match:
+            return match.group(0) # If found, use it immediately for any student
+
+    # === PRIORITY 3: High School Specific Fallback ===
     if is_high_school_student(student_details.get('grade_text')):
-        # PRIORITY 1: Check M-Series/Op2 column on the PLP board
-        m_series_val = get_column_value(plp_item_id, int(PLP_BOARD_ID), PLP_M_SERIES_LABELS_COLUMN)
-        m_series_text = m_series_val.get('text') if m_series_val else None
-        
-        if m_series_text:
-            section_name = m_series_text
-        else:
-            # PRIORITY 2: Fallback to the HS Roster "Track" status column
-            section_name = course_to_track_map.get(class_item_id, "General Enrollment")
-            
-    return section_name
+        # This only runs if the M-Series check above fails
+        return course_to_track_map.get(class_item_id, "General Enrollment")
+
+    # === PRIORITY 4: Default for all other cases ===
+    return "General Enrollment"
 
 def enroll_or_create_and_enroll(course_id, section_id, student_details, db_cursor):
     canvas_api = initialize_canvas_api()
