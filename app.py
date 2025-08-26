@@ -530,16 +530,31 @@ def create_section_if_not_exists(course_id, section_name):
         return None
 
 def enroll_student_in_section(course_id, user_id, section_id):
+    """
+    Enrolls a student in a specific course section with detailed logging for proof.
+    """
     canvas_api = initialize_canvas_api()
     if not canvas_api: return "Failed: Canvas API not initialized"
     try:
         course = canvas_api.get_course(course_id)
         user = canvas_api.get_user(user_id)
+        
+        # --- START: DETAILED LOGGING FOR PROOF ---
+        print(f"\n--- FINAL ENROLLMENT ATTEMPT ---")
+        print(f"  - Course ID:  {course_id}")
+        print(f"  - User ID:    {user_id}")
+        print(f"  - Section ID: {section_id}")
+        # --- END: DETAILED LOGGING FOR PROOF ---
+
         enrollment = course.enroll_user(user, 'StudentEnrollment', enrollment_state='active', course_section_id=section_id, notify=False)
+        
+        print(f"  - CANVAS API RESPONSE: SUCCESS (New Enrollment ID: {enrollment.id})\n")
         return "Success" if enrollment else "Failed"
-    except Conflict: return "Already Enrolled"
+    except Conflict:
+        print("  - CANVAS API RESPONSE: CONFLICT (Already Enrolled)")
+        return "Already Enrolled"
     except CanvasException as e:
-        print(f"ERROR: Failed to enroll user {user_id} in section {section_id}. Details: {e}")
+        print(f"  - CANVAS API RESPONSE: FAILED ({e})")
         return "Failed"
 
 def unenroll_student_from_course(course_id, student_details):
