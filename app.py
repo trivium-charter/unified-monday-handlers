@@ -597,7 +597,25 @@ def get_canvas_section_name(plp_item_id, class_item_id, class_name, student_deta
             if category == "Math" and "Connect" in course_name:
                 return course_name
         return "General Math Connect"
-    # ... (etc. for other study halls) ...
+
+    # Rule for Connect English Study Hall
+    if "Connect English Study Hall" in class_name:
+        for c_id, category in class_id_to_category_map.items():
+            course_name = id_to_name_map.get(c_id, "")
+            if category == "ELA" and "Connect" in course_name:
+                return course_name
+        return "General English Connect"
+
+    # Rule for Prep Math and ELA Study Hall
+    if "Prep Math and ELA Study Hall" in class_name:
+        prep_subjects = []
+        for c_id, category in class_id_to_category_map.items():
+            course_name = id_to_name_map.get(c_id, "")
+            if category in ["Math", "ELA"] and "Connect" in course_name:
+                prep_subjects.append(course_name)
+        if not prep_subjects:
+            return "General Prep"
+        return " & ".join(sorted(prep_subjects))
 
     # --- START OF MODIFICATION ---
 
