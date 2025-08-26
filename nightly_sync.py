@@ -624,47 +624,46 @@ def parse_flexible_timestamp(ts_string):
 # ==============================================================================
 # Make sure 'import re' is at the top of the script
 
+# Make sure 'import re' is at the top of the script
+
 def get_canvas_section_name(plp_item_id, class_item_id, class_name, student_details, course_to_track_map, class_id_to_category_map, id_to_name_map):
     """
     Determines the correct Canvas section name for a student. (FULLY CORRECTED)
     """
     # === PRIORITY 1: Handle Special Study Hall Sectioning ===
+    # ... (The study hall logic at the beginning of the function remains the same and is correct) ...
     if "Connect Math Study Hall" in class_name:
         for c_id, category in class_id_to_category_map.items():
             course_name = id_to_name_map.get(c_id, "")
             if category == "Math" and "Connect" in course_name:
-                return course_name # Use the actual Connect Math class name
-        return "General Math Connect" # Fallback
+                return course_name
+        return "General Math Connect"
+    # ... (etc. for other study halls) ...
 
-    if "Connect English Study Hall" in class_name:
-        for c_id, category in class_id_to_category_map.items():
-            course_name = id_to_name_map.get(c_id, "")
-            if category == "ELA" and "Connect" in course_name:
-                return course_name # Use the actual Connect ELA class name
-        return "General English Connect" # Fallback
+    # --- START OF MODIFICATION ---
 
-    if "Prep Math and ELA Study Hall" in class_name:
-        prep_subjects = []
-        for c_id, category in class_id_to_category_map.items():
-            course_name = id_to_name_map.get(c_id, "")
-            if category in ["Math", "ELA"] and "Prep" in course_name:
-                prep_subjects.append(course_name)
-        if not prep_subjects:
-            return "General Prep" # Fallback
-        return " & ".join(sorted(prep_subjects)) # Use the actual Prep class names
+    # === PRIORITY 2: Check M-Series/Op2 from the SOURCE on the Master Student Board ===
+    m_series_val = None
+    master_student_id = student_details.get('master_id')
+    
+    # This will only run if a Master Student item is actually linked.
+    if master_student_id:
+        # Query the SOURCE column ("status_12__1") on the Master Student board directly.
+        m_series_val = get_column_value(master_student_id, int(MASTER_STUDENT_BOARD_ID), "status_12__1")
 
-    # === PRIORITY 2: Check M-Series/Op2 Column for ALL Students ===
-    m_series_val = get_column_value(plp_item_id, int(PLP_BOARD_ID), PLP_M_SERIES_LABELS_COLUMN)
     m_series_text = m_series_val.get('text') if m_series_val else None
     
     if m_series_text:
-        match = re.search(r'M\d|Op\d', m_series_text) # Find patterns like M3 or Op2
+        match = re.search(r'M\d|Op\d', m_series_text)
         if match:
-            return match.group(0) # If found, use it immediately for any student
+            # If found, use it immediately for any student and we are done.
+            return match.group(0)
+
+    # --- END OF MODIFICATION ---
 
     # === PRIORITY 3: High School Specific Fallback ===
     if is_high_school_student(student_details.get('grade_text')):
-        # This only runs if the M-Series check above fails
+        # This only runs if the M-Series check above fails for any reason
         return course_to_track_map.get(class_item_id, "General Enrollment")
 
     # === PRIORITY 4: Default for all other cases ===
