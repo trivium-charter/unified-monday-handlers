@@ -508,13 +508,15 @@ def create_section_if_not_exists(course_id, section_name):
         print(f"ERROR: Canvas section creation/check failed: {e}")
         return None
 
+# This is the corrected function for nightly_sync.py
 def enroll_student_in_section(course_id, user_id, section_id):
     canvas_api = initialize_canvas_api()
     if not canvas_api: return "Failed"
     try:
         course = canvas_api.get_course(course_id)
         user = canvas_api.get_user(user_id)
-        course.enroll_user(user, 'StudentEnrollment', enrollment={'course_section_id': section_id, 'notify': False})
+        # This line adds the critical 'enrollment_state' parameter
+        course.enroll_user(user, 'StudentEnrollment', enrollment_state='active', enrollment={'course_section_id': section_id, 'notify': False})
         return "Success"
     except Conflict: return "Already Enrolled"
     except CanvasException as e:
