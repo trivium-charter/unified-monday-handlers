@@ -752,7 +752,13 @@ if broker_use_ssl_config:
     celery_app.conf.broker_use_ssl = broker_use_ssl_config
     celery_app.conf.redis_backend_use_ssl = broker_use_ssl_config
 celery_app.conf.timezone = 'America/Los_Angeles'
-celery_app.conf.broker_transport_options = { 'health_check_interval': 30, 'socket_keepalive': True, }
+celery_app.conf.broker_transport_options = {
+    'visibility_timeout': 3600,  # 1 hour
+    'health_check_interval': 60,
+    'socket_keepalive': True,
+    'socket_connect_timeout': 30,
+    'socket_timeout': 30
+}
 celery_app.conf.broker_connection_retry_on_startup = True
 
 @celery_app.task(name='app.process_general_webhook')
