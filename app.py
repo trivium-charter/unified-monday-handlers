@@ -587,8 +587,10 @@ def get_teacher_person_value_from_canvas_board(canvas_item_id):
 
 def get_canvas_section_name(plp_item_id, class_item_id, class_name, student_details, course_to_track_map, class_id_to_category_map, id_to_name_map):
     """
-    Determines the correct Canvas section name for a student. (FULLY CORRECTED)
+    Determines the correct Canvas section name for a student. (DEBUG ENABLED)
     """
+    print(f"\n[DEBUG] Starting section name calculation for course '{class_name}' (PLP ID: {plp_item_id})")
+
     # === PRIORITY 1: Handle Special Study Hall Sectioning ===
     # ... (The study hall logic at the beginning of the function remains the same and is correct) ...
     if "Connect Math Study Hall" in class_name:
