@@ -583,16 +583,15 @@ def get_teacher_person_value_from_canvas_board(canvas_item_id):
 
 # Make sure 'import re' is at the top of the script
 
-# Make sure 'import re' is at the top of the script
-
+#
+# ----- START: FINAL FUNCTION WITH CORRECTED LOGIC AND PRIORITY -----
+#
 def get_canvas_section_name(plp_item_id, class_item_id, class_name, student_details, course_to_track_map, class_id_to_category_map, id_to_name_map):
     """
-    Determines the correct Canvas section name for a student. (DEBUG ENABLED)
+    Determines the correct Canvas section name for a student. (FINALIZED LOGIC 08-26-2025)
     """
-    print(f"\n[DEBUG] Starting section name calculation for course '{class_name}' (PLP ID: {plp_item_id})")
-
-    # === PRIORITY 1: Handle Special Study Hall Sectioning ===
-    # ... (The study hall logic at the beginning of the function remains the same and is correct) ...
+    # PRIORITY 1: Handle Special Study Hall Sectioning FIRST.
+    # This logic is self-contained and is not affected by M-Series.
     if "Connect Math Study Hall" in class_name:
         for c_id, category in class_id_to_category_map.items():
             course_name = id_to_name_map.get(c_id, "")
@@ -600,7 +599,6 @@ def get_canvas_section_name(plp_item_id, class_item_id, class_name, student_deta
                 return course_name
         return "General Math Connect"
 
-    # Rule for Connect English Study Hall
     if "Connect English Study Hall" in class_name:
         for c_id, category in class_id_to_category_map.items():
             course_name = id_to_name_map.get(c_id, "")
@@ -608,53 +606,38 @@ def get_canvas_section_name(plp_item_id, class_item_id, class_name, student_deta
                 return course_name
         return "General English Connect"
 
-    # Rule for Prep Math and ELA Study Hall
     if "Prep Math and ELA Study Hall" in class_name:
         prep_subjects = []
         for c_id, category in class_id_to_category_map.items():
             course_name = id_to_name_map.get(c_id, "")
-            if category in ["Math", "ELA"] and "Connect" in course_name:
+            # This check for "Prep" is now also correct
+            if category in ["Math", "ELA"] and "Prep" in course_name:
                 prep_subjects.append(course_name)
         if not prep_subjects:
             return "General Prep"
         return " & ".join(sorted(prep_subjects))
 
-    # --- START OF MODIFICATION ---
+    # PRIORITY 2: Apply M-Series/Op2 logic ONLY to ACE and Connect courses.
+    class_name_lower = class_name.lower()
+    if "ace" in class_name_lower or "connect" in class_name_lower:
+        master_student_id = student_details.get('master_id')
+        if master_student_id:
+            m_series_val = get_column_value(master_student_id, int(MASTER_STUDENT_BOARD_ID), "status_12__1")
+            m_series_text = m_series_val.get('text') if m_series_val else None
+            if m_series_text:
+                match = re.search(r'M\d|Op\d', m_series_text)
+                if match:
+                    # If M-series is found for an ACE/Connect course, use it and stop.
+                    return match.group(0)
 
-    # === PRIORITY 2: Check M-Series/Op2 from the SOURCE on the Master Student Board ===
-    m_series_val = None
-    master_student_id = student_details.get('master_id')
-    
-    if master_student_id:
-        print(f"[DEBUG] Found Master Student ID: {master_student_id}. Querying for M-Series status.")
-        m_series_val = get_column_value(master_student_id, int(MASTER_STUDENT_BOARD_ID), "status_12__1")
-    else:
-        print("[DEBUG] No Master Student ID was linked. Skipping M-Series check.")
-        
-    m_series_text = m_series_val.get('text') if m_series_val else None
-    print(f"[DEBUG] Text read from M-Series column: '{m_series_text}'")
-    
-    if m_series_text:
-        match = re.search(r'M\d|Op\d', m_series_text)
-        if match:
-            final_section = match.group(0)
-            print(f"[DEBUG] SUCCESS: Pattern found. Final section name is '{final_section}'.")
-            return final_section
-        else:
-            print("[DEBUG] M-Series text existed, but the pattern 'M# or Op#' was NOT found.")
-    
-    # === PRIORITY 3: High School Specific Fallback ===
+    # PRIORITY 3: High School Specific Fallback for all other courses.
     if is_high_school_student(student_details.get('grade_text')):
-        print("[DEBUG] M-Series check failed. Falling back to HS Roster Track.")
-        final_section = course_to_track_map.get(class_item_id, "General Enrollment")
-        print(f"[DEBUG] HS Roster track returned section name: '{final_section}'.")
-        return final_section
+        return course_to_track_map.get(class_item_id, "General Enrollment")
 
-    # === PRIORITY 4: Default for all other cases ===
-    print("[DEBUG] All checks failed. Using default 'General Enrollment'.")
+    # PRIORITY 4: Default for all remaining cases.
     return "General Enrollment"
 #
-# ----- END: DEBUG-ENABLED FUNCTION -----
+# ----- END: FINAL FUNCTION -----
 #
 
 def enroll_or_create_and_enroll(course_id, section_id, student_details):
