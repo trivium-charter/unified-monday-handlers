@@ -10,11 +10,11 @@ from canvasapi.exceptions import CanvasException
 #    (e.g., in "yourschool.instructure.com/courses/12345", the ID is 12345).
 # 3. Use a fake email address for the test student.
 # ==============================================================================
-CANVAS_API_URL = "https://yourschool.instructure.com"
-CANVAS_API_KEY = "PASTE_YOUR_NEW_API_KEY_HERE"
+CANVAS_API_URL = "https://triviumcharter.instructure.com"
+CANVAS_API_KEY = "11194~8VXv74ywW7mt7UcxHE3WVx7UxvLte29tLXTWMfA3FYMCUWLNRhLnTu7498hemHYf"
 
-TEST_COURSE_ID = 12345  # <-- CHANGE THIS to your test course's ID
-TEST_STUDENT_EMAIL = "test-student-12345@example.com" # A fake email is fine
+TEST_COURSE_ID = 10128  # <-- CHANGE THIS to your test course's ID
+TEST_STUDENT_EMAIL = "samplestudent@student.triviumcharter.org" # A fake email is fine
 # ==============================================================================
 
 def test_api_key():
