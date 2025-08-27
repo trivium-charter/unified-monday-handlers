@@ -5,24 +5,23 @@ from canvasapi.exceptions import CanvasException
 # ==============================================================================
 # ## CONFIGURATION
 # 1. Fill in your Canvas URL and your NEWEST API Key.
-# 2. Find a safe, non-critical course (like a sandbox or test course)
-#    and paste its ID below. You can get the ID from the course URL
-#    (e.g., in "yourschool.instructure.com/courses/12345", the ID is 12345).
-# 3. Use a fake email address for the test student.
+# 2. Add your test course's ID.
+# 3. Use a NEW, UNIQUE fake email address for the test student.
 # ==============================================================================
 CANVAS_API_URL = "https://triviumcharter.instructure.com"
 CANVAS_API_KEY = "11194~Y7L9E3U2uwneC4vzDe24A7RYQENN7cWn92HFFhXutFHCG6QkvBJNJz8NNmkzW2ev"
 
 TEST_COURSE_ID = 10128  # <-- Use your test course's ID
-TEST_STUDENT_EMAIL = "samplestudent@student.org" # A fake email is fine
+TEST_STUDENT_EMAIL = "samplestudent@student.org" # <-- Use a new, unique email
 # ==============================================================================
 
 
 def test_api_key():
     """
     Tests if the API key has the correct permissions to enroll and accept.
+    The cleanup step is DISABLED so you can verify the result in Canvas.
     """
-    print("--- Starting API Key Test ---")
+    print("--- Starting API Key Test (Cleanup Disabled) ---")
     
     try:
         canvas = Canvas(CANVAS_API_URL, CANVAS_API_KEY)
@@ -36,12 +35,10 @@ def test_api_key():
     enrollment = None
     
     try:
-        # Step 1: Find the test course
         print(f"1. Finding test course {TEST_COURSE_ID}...")
         course = canvas.get_course(TEST_COURSE_ID)
         print(f"   -> Found course: '{course.name}'")
 
-        # Step 2: Create a temporary test user
         print(f"2. Creating temporary user '{TEST_STUDENT_EMAIL}'...")
         user_payload = {
             'user': {'name': 'API Test Student', 'terms_of_use': True},
@@ -50,12 +47,10 @@ def test_api_key():
         test_user = account.create_user(**user_payload)
         print(f"   -> Created user with ID: {test_user.id}")
 
-        # Step 3: Enroll the user, which creates the invitation
         print(f"3. Enrolling user in course (creating invitation)...")
         enrollment = course.enroll_user(test_user, 'StudentEnrollment')
         print(f"   -> Enrollment created with state: '{enrollment.enrollment_state}'")
 
-        # Step 4: The critical test - try to accept the invitation
         print("4. ATTEMPTING TO ACCEPT THE INVITATION...")
         if enrollment.enrollment_state == 'invited':
             enrollment.accept()
@@ -69,23 +64,10 @@ def test_api_key():
         print("   -> This means the 'Scopes' on your Developer Key are incorrect OR you are using an old API token.")
     
     finally:
-        # Step 5: Clean up the test user and enrollment
-        print("\n5. Cleaning up...")
-        if enrollment:
-            try:
-                print(f"   -> Deleting enrollment for test user...")
-                enrollment.deactivate(task='delete')
-            except CanvasException:
-                pass 
-        if test_user:
-            try:
-                print(f"   -> Deleting test user...")
-                # *** THIS IS THE CORRECTED LINE ***
-                account.delete_user(test_user)
-            except CanvasException as e:
-                print(f"      -> Could not delete test user. You may need to do this manually. Error: {e}")
-        
-        print("--- Test complete ---")
+        # The cleanup step has been intentionally disabled for manual verification.
+        print("\n5. SKIPPING CLEANUP STEP.")
+        print("--- Test complete. You can now check for the user in your Canvas course. ---")
+
 
 if __name__ == '__main__':
     test_api_key()
