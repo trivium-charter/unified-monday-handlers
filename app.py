@@ -602,14 +602,11 @@ def get_teacher_person_value_from_canvas_board(canvas_item_id):
 #
 def get_canvas_section_name(plp_item_id, class_item_id, class_name, student_details, course_to_track_map, class_id_to_category_map, id_to_name_map):
     """
-    Determines the correct Canvas section name for a student based on a clear priority order.
-    1.  Specialized Study Halls (Connect, Prep).
-    2.  For ALL students (K-12): M-Series/Op status from the Master Student list.
-    3.  For High Schoolers without M-Series: A-G/Grad track from the HS Roster.
-    4.  Default for all others (e.g., K-8 without M-Series).
+    Determines the Canvas section name.
+    - Handles special study halls with specific section names.
+    - All other courses are placed in a generic section to avoid interfering with manual assignments.
     """
     # PRIORITY 1: Handle Special Study Hall Sectioning FIRST.
-    # This logic is self-contained and is not affected by other rules.
     if "Connect Math Study Hall" in class_name:
         for c_id, category in class_id_to_category_map.items():
             course_name = id_to_name_map.get(c_id, "")
@@ -634,31 +631,8 @@ def get_canvas_section_name(plp_item_id, class_item_id, class_name, student_deta
             return "General Prep"
         return " & ".join(sorted(prep_subjects))
 
-    # --- New Logic Block for General and High School Sectioning ---
-
-    # PRIORITY 2: Check for M-Series/Op status for ALL students (K-12). This is the primary override.
-    master_student_id = student_details.get('master_id')
-    if master_student_id:
-        m_series_val = get_column_value(master_student_id, int(MASTER_STUDENT_BOARD_ID), MASTER_STUDENT_M_SERIES_COLUMN_ID)
-        m_series_text = m_series_val.get('text') if m_series_val else None
-        if m_series_text:
-            match = re.search(r'M\d|Op\d', m_series_text)
-            if match:
-                # Found a valid M-series/Op status; this is the section name for any student.
-                return match.group(0)
-
-    # If we are here, it means the student does NOT have an M-Series/Op status.
-    # Now we apply grade-specific fallbacks.
-
-    # PRIORITY 3: For High Schoolers ONLY, the fallback is the A-G/Grad track status.
-    if is_high_school_student(student_details.get('grade_text')):
-        return course_to_track_map.get(class_item_id, "General Enrollment")
-
-    # PRIORITY 4: Default for all other cases (e.g., K-8 students without M-series).
+    # PRIORITY 2: For ANY other course, use the generic default section name.
     return "General Enrollment"
-#
-# ----- END: FINAL FUNCTION -----
-#
 
 def enroll_or_create_and_enroll(course_id, section_id, student_details):
     canvas_api = initialize_canvas_api()
