@@ -4,18 +4,19 @@ from canvasapi.exceptions import CanvasException
 
 # ==============================================================================
 # ## CONFIGURATION
-# 1. Fill in your Canvas URL and your NEW API Key.
+# 1. Fill in your Canvas URL and your NEWEST API Key.
 # 2. Find a safe, non-critical course (like a sandbox or test course)
 #    and paste its ID below. You can get the ID from the course URL
 #    (e.g., in "yourschool.instructure.com/courses/12345", the ID is 12345).
 # 3. Use a fake email address for the test student.
 # ==============================================================================
-CANVAS_API_URL = "https://triviumcharter.instructure.com"
-CANVAS_API_KEY = "11194~8VXv74ywW7mt7UcxHE3WVx7UxvLte29tLXTWMfA3FYMCUWLNRhLnTu7498hemHYf"
+CANVAS_API_URL = "https://yourschool.instructure.com"
+CANVAS_API_KEY = "PASTE_YOUR_NEWEST_API_KEY_HERE"
 
-TEST_COURSE_ID = 10128  # <-- CHANGE THIS to your test course's ID
-TEST_STUDENT_EMAIL = "samplestudent@student.triviumcharter.org" # A fake email is fine
+TEST_COURSE_ID = 10128  # <-- Use your test course's ID
+TEST_STUDENT_EMAIL = "test-student-67890@example.com" # A fake email is fine
 # ==============================================================================
+
 
 def test_api_key():
     """
@@ -65,7 +66,7 @@ def test_api_key():
     except CanvasException as e:
         print(f"\n❌ FAILED: The API call was blocked by Canvas.")
         print(f"   -> Error message: {e}")
-        print("   -> This likely means the 'Scopes' on your Developer Key are still incorrect.")
+        print("   -> This means the 'Scopes' on your Developer Key are incorrect OR you are using an old API token.")
     
     finally:
         # Step 5: Clean up the test user and enrollment
@@ -75,11 +76,12 @@ def test_api_key():
                 print(f"   -> Deleting enrollment for test user...")
                 enrollment.deactivate(task='delete')
             except CanvasException:
-                pass # May fail if user is already gone, that's fine
+                pass 
         if test_user:
             try:
                 print(f"   -> Deleting test user...")
-                test_user.delete()
+                # *** THIS IS THE CORRECTED LINE ***
+                account.delete_user(test_user)
             except CanvasException as e:
                 print(f"      -> Could not delete test user. You may need to do this manually. Error: {e}")
         
