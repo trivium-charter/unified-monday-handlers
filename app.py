@@ -28,7 +28,7 @@ PLP_CANVAS_SYNC_COLUMN_ID = os.environ.get("PLP_CANVAS_SYNC_COLUMN_ID")
 PLP_CANVAS_SYNC_STATUS_VALUE = os.environ.get("PLP_CANVAS_SYNC_STATUS_VALUE", "Done")
 PLP_ALL_CLASSES_CONNECT_COLUMNS_STR = os.environ.get("PLP_ALL_CLASSES_CONNECT_COLUMNS_STR", "")
 PLP_TO_MASTER_STUDENT_CONNECT_COLUMN = os.environ.get("PLP_TO_MASTER_STUDENT_CONNECT_COLUMN")
-PLP_TO_HS_ROSTER_CONNECT_COLUMN = os.environ.get("PLP_TO_HS_ROSTER_CONNECT_COLUMN") 
+PLP_TO_HS_ROSTER_CONNECT_COLUMN = os.environ.get("PLP_TO_HS_ROSTER_CONNECT_COLUMN")
 PLP_M_SERIES_LABELS_COLUMN = os.environ.get("PLP_M_SERIES_LABELS_COLUMN")
 MASTER_STUDENT_BOARD_ID = os.environ.get("MASTER_STUDENT_BOARD_ID")
 MASTER_STUDENT_SSID_COLUMN = os.environ.get("MASTER_STUDENT_SSID_COLUMN")
@@ -36,6 +36,7 @@ MASTER_STUDENT_EMAIL_COLUMN = os.environ.get("MASTER_STUDENT_EMAIL_COLUMN")
 MASTER_STUDENT_CANVAS_ID_COLUMN = "text_mktgs1ax"
 MASTER_STUDENT_TOR_COLUMN_ID = os.environ.get("MASTER_STUDENT_TOR_COLUMN_ID")
 MASTER_STUDENT_GRADE_COLUMN_ID = "color_mksy8hcw"
+MASTER_STUDENT_M_SERIES_COLUMN_ID = "status_12__1" # M-Series/Op Status Column
 MASTER_STUDENT_ACE_PEOPLE_COLUMN_ID = os.environ.get("MASTER_STUDENT_ACE_PEOPLE_COLUMN_ID")
 MASTER_STUDENT_CONNECT_PEOPLE_COLUMN_ID = os.environ.get("MASTER_STUDENT_CONNECT_PEOPLE_COLUMN_ID")
 ALL_COURSES_BOARD_ID = os.environ.get("ALL_COURSES_BOARD_ID")
@@ -596,17 +597,19 @@ def get_teacher_person_value_from_canvas_board(canvas_item_id):
 # CORE LOGIC FUNCTIONS
 # ==============================================================================
 
-# Make sure 'import re' is at the top of the script
-
 #
 # ----- START: FINAL FUNCTION WITH CORRECTED LOGIC AND PRIORITY -----
 #
 def get_canvas_section_name(plp_item_id, class_item_id, class_name, student_details, course_to_track_map, class_id_to_category_map, id_to_name_map):
     """
-    Determines the correct Canvas section name for a student. (FINALIZED LOGIC 08-26-2025)
+    Determines the correct Canvas section name for a student based on a clear priority order.
+    1.  Specialized Study Halls (Connect, Prep).
+    2.  For ALL students (K-12): M-Series/Op status from the Master Student list.
+    3.  For High Schoolers without M-Series: A-G/Grad track from the HS Roster.
+    4.  Default for all others (e.g., K-8 without M-Series).
     """
     # PRIORITY 1: Handle Special Study Hall Sectioning FIRST.
-    # This logic is self-contained and is not affected by M-Series.
+    # This logic is self-contained and is not affected by other rules.
     if "Connect Math Study Hall" in class_name:
         for c_id, category in class_id_to_category_map.items():
             course_name = id_to_name_map.get(c_id, "")
@@ -625,31 +628,33 @@ def get_canvas_section_name(plp_item_id, class_item_id, class_name, student_deta
         prep_subjects = []
         for c_id, category in class_id_to_category_map.items():
             course_name = id_to_name_map.get(c_id, "")
-            # This check for "Prep" is now also correct
             if category in ["Math", "ELA"] and "Prep" in course_name:
                 prep_subjects.append(course_name)
         if not prep_subjects:
             return "General Prep"
         return " & ".join(sorted(prep_subjects))
 
-    # PRIORITY 2: Apply M-Series/Op2 logic ONLY to ACE and Connect courses.
-    class_name_lower = class_name.lower()
-    if "ace" in class_name_lower or "connect" in class_name_lower:
-        master_student_id = student_details.get('master_id')
-        if master_student_id:
-            m_series_val = get_column_value(master_student_id, int(MASTER_STUDENT_BOARD_ID), "status_12__1")
-            m_series_text = m_series_val.get('text') if m_series_val else None
-            if m_series_text:
-                match = re.search(r'M\d|Op\d', m_series_text)
-                if match:
-                    # If M-series is found for an ACE/Connect course, use it and stop.
-                    return match.group(0)
+    # --- New Logic Block for General and High School Sectioning ---
 
-    # PRIORITY 3: High School Specific Fallback for all other courses.
+    # PRIORITY 2: Check for M-Series/Op status for ALL students (K-12). This is the primary override.
+    master_student_id = student_details.get('master_id')
+    if master_student_id:
+        m_series_val = get_column_value(master_student_id, int(MASTER_STUDENT_BOARD_ID), MASTER_STUDENT_M_SERIES_COLUMN_ID)
+        m_series_text = m_series_val.get('text') if m_series_val else None
+        if m_series_text:
+            match = re.search(r'M\d|Op\d', m_series_text)
+            if match:
+                # Found a valid M-series/Op status; this is the section name for any student.
+                return match.group(0)
+
+    # If we are here, it means the student does NOT have an M-Series/Op status.
+    # Now we apply grade-specific fallbacks.
+
+    # PRIORITY 3: For High Schoolers ONLY, the fallback is the A-G/Grad track status.
     if is_high_school_student(student_details.get('grade_text')):
         return course_to_track_map.get(class_item_id, "General Enrollment")
 
-    # PRIORITY 4: Default for all remaining cases.
+    # PRIORITY 4: Default for all other cases (e.g., K-8 students without M-series).
     return "General Enrollment"
 #
 # ----- END: FINAL FUNCTION -----
@@ -1180,8 +1185,8 @@ def monday_unified_webhooks():
         if str(rule.get("trigger_board_id")) == board_id:
             if (webhook_type == "update_column_value" and rule.get("trigger_column_id") == col_id) or \
                (webhook_type == "create_pulse" and not rule.get("trigger_column_id")):
-                 process_general_webhook.delay(event, rule)
-                 return jsonify({"message": f"General task '{rule.get('log_type')}' queued."}), 202
+                   process_general_webhook.delay(event, rule)
+                   return jsonify({"message": f"General task '{rule.get('log_type')}' queued."}), 202
     return jsonify({"status": "ignored"}), 200
 
 @app.route('/')
