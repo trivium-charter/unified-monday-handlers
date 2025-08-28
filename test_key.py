@@ -12,7 +12,7 @@ CANVAS_API_URL = "https://triviumcharter.instructure.com"
 CANVAS_API_KEY = "11194~3kYCrnakTrxch3AFxYtxm3ZZQFTAFnQfWzycWFxDFM9L9FRR3rFFZFyGEk6F9uGY"
 
 TEST_COURSE_ID = 10128  # <-- Use your test course's ID
-TEST_STUDENT_EMAIL = "test-student-0828@example.com" # <-- Use a new, unique email
+TEST_STUDENT_EMAIL = "test-student-0829@example.com" # <-- Use a new, unique email
 # ==============================================================================
 
 
