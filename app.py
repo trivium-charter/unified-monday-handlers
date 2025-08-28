@@ -640,8 +640,6 @@ def get_canvas_section_name(plp_item_id, class_item_id, class_name, student_deta
 def enroll_or_create_and_enroll(course_id, section_id, student_details):
     canvas_api = initialize_canvas_api()
     if not canvas_api: return "Failed"
-
-    # Find or create the Canvas user
     user = find_canvas_user(student_details)
     if not user:
         print(f"INFO: Canvas user not found for {student_details['email']}. Attempting to create new user.")
@@ -654,39 +652,33 @@ def enroll_or_create_and_enroll(course_id, section_id, student_details):
             else:
                 print(f"ERROR: A critical error occurred during user creation: {e}")
                 user = None
-
     if not user:
         print(f"ERROR: Could not find or create a Canvas user for {student_details.get('name')}. Final enrollment failed.")
         return "Failed"
-
-    # If the user was found or created, proceed with the safe enrollment check
     try:
         full_user = canvas_api.get_user(user.id)
         course_obj = canvas_api.get_course(course_id)
         
-        # --- NEW: Intelligent Enrollment Check ---
         enrollments = course_obj.get_enrollments(user_id=full_user.id, state=['active', 'invited'])
-        
         has_active_enrollment = any(e.enrollment_state == 'active' for e in enrollments)
         
         if has_active_enrollment:
             print(f"  -> INFO: Student {full_user.id} already has an active enrollment in course {course_id}. No action taken.")
             return "Already Enrolled"
 
-        # If we are here, there's no active enrollment. Check for pending invitations.
         pending_invitations = [e for e in enrollments if e.enrollment_state == 'invited']
         if pending_invitations:
             try:
                 invitation_to_accept = pending_invitations[0]
-                print(f"  -> INFO: Found pending invitation {invitation_to_accept.id} for student {full_user.id}. Accepting it now.")
-                invitation_to_accept.accept()
+                print(f"  -> INFO: Found pending invitation {invitation_to_accept.id}. Accepting it now.")
+                # *** THIS IS THE CORRECTED LINE ***
+                invitation_to_accept.accept(as_user_id=invitation_to_accept.user_id)
                 print(f"  -> SUCCESS: Invitation accepted. Enrollment is now active.")
                 return "Success"
             except CanvasException as e:
-                print(f"  -> WARNING: Failed to accept pending invitation {pending_invitations[0].id}: {e}. Will attempt to create a new enrollment.")
+                print(f"  -> WARNING: Failed to accept pending invitation {pending_invitations[0].id}: {e}.")
         
-        # If we reach here, there were no enrollments or accepting a pending one failed. Create a new one.
-        print(f"  -> INFO: Student {full_user.id} has no valid enrollment in course {course_id}. Creating new enrollment.")
+        print(f"  -> INFO: Student {full_user.id} has no valid enrollment. Creating new enrollment.")
         if student_details.get('ssid') and hasattr(full_user, 'sis_user_id') and full_user.sis_user_id != student_details['ssid']:
             update_user_ssid(full_user, student_details['ssid'])
         return enroll_student_in_section(course_id, full_user.id, section_id)
