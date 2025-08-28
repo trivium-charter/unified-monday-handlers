@@ -9,7 +9,7 @@ from canvasapi.exceptions import CanvasException
 # 3. Use a NEW, UNIQUE fake email address for the test student.
 # ==============================================================================
 CANVAS_API_URL = "https://triviumcharter.instructure.com"
-CANVAS_API_KEY = "11194~9NK27k2cD3KhcPVr37fCBXLLtH4yD3E9E7vPZfwvW839hy9YkvWMnaWcL3NREDZ3"
+CANVAS_API_KEY = "11194~6et97xQtJ9NcNkBFuhJk893EDWnfzCCQa2HXBJDaMGNR2H4E8kHn9L7UXehVPucX"
 
 TEST_COURSE_ID = 10128  # <-- Use your test course's ID
 TEST_STUDENT_EMAIL = "test-student-0828@example.com" # <-- Use a new, unique email
