@@ -34,7 +34,7 @@ TERM_ID = os.getenv("CANVAS_TERM_ID")
 ACCOUNT_ID = os.getenv("CANVAS_SUBACCOUNT_ID")
 SEARCH_ROOT = os.getenv("SEARCH_ROOT_ACCOUNT", "false").lower() == "true"
 # Safety first: Default to dry run unless explicitly set to "false".
-DRY_RUN = os.getenv("DRY_RUN", "true").lower() != "false"
+DRY_RUN = os.getenv("DRY_RUN", "false").lower() != "false"
 
 
 # --- Users to Unenroll ---
