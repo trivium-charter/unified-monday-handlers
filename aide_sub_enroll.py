@@ -17,7 +17,8 @@
 # 1. CANVAS_API_URL: Your institution's Canvas URL (e.g., "https://triviumcharter.instructure.com")
 # 2. CANVAS_API_KEY: Your Canvas API access token.
 # 3. CANVAS_TERM_ID: The ID of the term you want to process courses from.
-# 4. CANVAS_SUBACCOUNT_ID: The account ID to search within.
+# 4. CANVAS_SUBACCOUNT_ID: The account ID to search for users within.
+# 5. SEARCH_ROOT_ACCOUNT (optional): Set to "true" to search for courses across the entire institution.
 
 import os
 import requests
@@ -29,6 +30,8 @@ CANVAS_DOMAIN = os.getenv("CANVAS_API_URL")
 API_TOKEN = os.getenv("CANVAS_API_KEY")
 TERM_ID = os.getenv("CANVAS_TERM_ID")
 ACCOUNT_ID = os.getenv("CANVAS_SUBACCOUNT_ID")
+SEARCH_ROOT = os.getenv("SEARCH_ROOT_ACCOUNT", "false").lower() == "true"
+
 
 # --- Users to Enroll ---
 # The email addresses of the users you want to add as TAs.
@@ -85,6 +88,7 @@ def get_user_id(email):
     Finds the Canvas user ID for a given email address.
     """
     print(f"Searching for user with email: {email}...")
+    # User search is generally done at the account level specified
     url = f"{CANVAS_DOMAIN}/api/v1/accounts/{ACCOUNT_ID}/users"
     params = {"search_term": email}
     
@@ -108,8 +112,11 @@ def get_courses_in_term(term_id):
     """
     Retrieves a list of all courses for a specific term ID.
     """
-    print(f"\nFetching all courses for Term ID: {term_id}...")
-    url = f"{CANVAS_DOMAIN}/api/v1/accounts/{ACCOUNT_ID}/courses"
+    # Determine which account to search for courses in.
+    course_search_account_id = "1" if SEARCH_ROOT else ACCOUNT_ID
+    
+    print(f"\nFetching all courses for Term ID: {term_id} within Account ID: {course_search_account_id}...")
+    url = f"{CANVAS_DOMAIN}/api/v1/accounts/{course_search_account_id}/courses"
     params = {"enrollment_term_id": term_id, "per_page": 100} # Fetch 100 at a time
     
     courses = make_paginated_request(url, params)
