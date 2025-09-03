@@ -943,8 +943,21 @@ def process_canvas_delta_sync_from_course_change(event_data):
         create_monday_update(subitem_id, final_update)
     
     # --- CANVAS ACTIONS ---
+    # Get the column ID that triggered this specific change event
+    trigger_column_id = event_data.get('columnId')
+
     for rid in removed_ids:
-        manage_class_enrollment("unenroll", plp_item_id, rid, student_details)
+        # --- DOUBLE-CHECK LOGIC ---
+        # Before unenrolling, perform a live check to see what's currently on the board.
+        print(f"INFO: A change event reported course {rid} was removed. Double-checking current state...")
+        currently_linked_course_ids = get_linked_items_from_board_relation(plp_item_id, int(PLP_BOARD_ID), trigger_column_id)
+    
+        # Only unenroll if the course is CONFIRMED to be missing from the live data.
+        if rid not in currently_linked_course_ids:
+            print(f"  -> CONFIRMED: Course {rid} is not linked. Proceeding with unenrollment.")
+            manage_class_enrollment("unenroll", plp_item_id, rid, student_details)
+        else:
+            print(f"  -> CANCELLED: Course {rid} is still linked on the board. Skipping unenrollment.")
 
     for aid in added_ids:
         class_name = id_to_name_map.get(aid, "")
