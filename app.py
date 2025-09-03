@@ -562,18 +562,22 @@ def enroll_student_in_section(course_id, user_id, section_id):
         return "Failed"
 
 def unenroll_student_from_course(course_id, student_details):
-    canvas_api = initialize_canvas_api()
-    if not canvas_api: return False
-    user = find_canvas_user(student_details)
-    if not user: return True
-    try:
-        course = canvas_api.get_course(course_id)
-        for enrollment in course.get_enrollments(user_id=user.id):
-            enrollment.deactivate(task='conclude')
-        return True
-    except CanvasException as e:
-        print(f"ERROR: Canvas unenrollment failed: {e}")
-        return False
+    ### ALL UNENROLLMENT LOGIC HAS BEEN PERMANENTLY DISABLED ###
+    print(f"INFO: An unenrollment for course {course_id} was requested but the function is DISABLED. No action was taken.")
+    return True
+    ### PREVIOUS LOGIC - NOW DEACTIVATED
+    # canvas_api = initialize_canvas_api()
+    # if not canvas_api: return False
+    # user = find_canvas_user(student_details)
+    # if not user: return True
+    # try:
+    #     course = canvas_api.get_course(course_id)
+    #     for enrollment in course.get_enrollments(user_id=user.id):
+    #         enrollment.deactivate(task='conclude')
+    #     return True
+    # except CanvasException as e:
+    #     print(f"ERROR: Canvas unenrollment failed: {e}")
+    #     return False
 
 def enroll_teacher_in_course(course_id, teacher_details, role='TeacherEnrollment'):
     canvas_api = initialize_canvas_api()
@@ -943,21 +947,10 @@ def process_canvas_delta_sync_from_course_change(event_data):
         create_monday_update(subitem_id, final_update)
     
     # --- CANVAS ACTIONS ---
-    # Get the column ID that triggered this specific change event
-    trigger_column_id = event_data.get('columnId')
-
+    # The 'removed_ids' list is now only used for logging purposes above.
+    # The call to unenroll has been permanently disabled in the unenroll_student_from_course function.
     for rid in removed_ids:
-        # --- DOUBLE-CHECK LOGIC ---
-        # Before unenrolling, perform a live check to see what's currently on the board.
-        print(f"INFO: A change event reported course {rid} was removed. Double-checking current state...")
-        currently_linked_course_ids = get_linked_items_from_board_relation(plp_item_id, int(PLP_BOARD_ID), trigger_column_id)
-    
-        # Only unenroll if the course is CONFIRMED to be missing from the live data.
-        if rid not in currently_linked_course_ids:
-            print(f"  -> CONFIRMED: Course {rid} is not linked. Proceeding with unenrollment.")
-            manage_class_enrollment("unenroll", plp_item_id, rid, student_details)
-        else:
-            print(f"  -> CANCELLED: Course {rid} is still linked on the board. Skipping unenrollment.")
+        manage_class_enrollment("unenroll", plp_item_id, rid, student_details)
 
     for aid in added_ids:
         class_name = id_to_name_map.get(aid, "")
@@ -1189,8 +1182,8 @@ def monday_unified_webhooks():
         if str(rule.get("trigger_board_id")) == board_id:
             if (webhook_type == "update_column_value" and rule.get("trigger_column_id") == col_id) or \
                (webhook_type == "create_pulse" and not rule.get("trigger_column_id")):
-                   process_general_webhook.delay(event, rule)
-                   return jsonify({"message": f"General task '{rule.get('log_type')}' queued."}), 202
+                    process_general_webhook.delay(event, rule)
+                    return jsonify({"message": f"General task '{rule.get('log_type')}' queued."}), 202
     return jsonify({"status": "ignored"}), 200
 
 @app.route('/')
