@@ -818,21 +818,26 @@ def process_canvas_full_sync_from_status(event_data):
         # Check for Connect Math
         has_connect_math = any("Connect" in id_to_name_map.get(cid, "") for cid, cat in class_id_to_category_map.items() if cat == "Math")
         if not has_connect_math:
-            print("  -> Student does NOT have 'Connect Math'. Enrolling in 6-8th Grade Math.")
-            section = create_section_if_not_exists(MIDDLE_SCHOOL_MATH_CANVAS_ID, "Middle School General")
+            # --- MODIFICATION START ---
+            print(f"  -> Student does NOT have 'Connect Math'. Enrolling in 6-8th Grade Math, section '{tor_last_name}'.")
+            section = create_section_if_not_exists(MIDDLE_SCHOOL_MATH_CANVAS_ID, tor_last_name)
+            # --- MODIFICATION END ---
             if section:
                 enroll_or_create_and_enroll(MIDDLE_SCHOOL_MATH_CANVAS_ID, section.id, student_details)
 
         # Check for Connect ELA
         has_connect_ela = any("Connect" in id_to_name_map.get(cid, "") for cid, cat in class_id_to_category_map.items() if cat == "ELA")
         if not has_connect_ela:
-            print("  -> Student does NOT have 'Connect ELA'. Enrolling in 6-8th Grade ELA.")
-            section = create_section_if_not_exists(MIDDLE_SCHOOL_ELA_CANVAS_ID, "Middle School General")
+            # --- MODIFICATION START ---
+            print(f"  -> Student does NOT have 'Connect ELA'. Enrolling in 6-8th Grade ELA, section '{tor_last_name}'.")
+            section = create_section_if_not_exists(MIDDLE_SCHOOL_ELA_CANVAS_ID, tor_last_name)
+            # --- MODIFICATION END ---
             if section:
                 enroll_or_create_and_enroll(MIDDLE_SCHOOL_ELA_CANVAS_ID, section.id, student_details)
     # --- END: NEW MIDDLE SCHOOL LOGIC ---
 
     # --- 2. PRE-COMPUTE HS SECTION NAMES ---
+    # ... (rest of the function remains the same) ...
     course_to_track_map = {}
     if is_high_school_student(student_details.get('grade_text')):
         hs_roster_ids = get_linked_items_from_board_relation(plp_item_id, int(PLP_BOARD_ID), PLP_TO_HS_ROSTER_CONNECT_COLUMN)
