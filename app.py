@@ -661,18 +661,16 @@ def enroll_or_create_and_enroll(course_id, section_id, student_details):
     canvas_api = initialize_canvas_api()
     if not canvas_api: return "Failed"
     
+    # --- MODIFICATION START ---
+    # The script now ONLY finds users. It will no longer create them.
     user = find_canvas_user(student_details)
+    
     if not user:
-        print(f"INFO: Canvas user not found for {student_details['email']}. Attempting to create new user.")
-        try:
-            user = create_canvas_user(student_details)
-        except CanvasException as e:
-            print(f"ERROR: A critical error occurred during user creation: {e}")
-            user = None
-            
-    if not user:
-        print(f"ERROR: Could not find or create a Canvas user for {student_details.get('name')}. Final enrollment failed.")
-        return "Failed"
+        # If the user is not found, log a clear error and stop immediately.
+        student_identifier = student_details.get('email') or student_details.get('ssid') or student_details.get('name')
+        print(f"  -> ERROR: Canvas user '{student_identifier}' could not be found. No enrollment will be attempted. Please verify the student's details on the Master Student board.")
+        return "Failed: User Not Found"
+    # --- MODIFICATION END ---
 
     try:
         course_obj = canvas_api.get_course(course_id)
@@ -691,7 +689,6 @@ def enroll_or_create_and_enroll(course_id, section_id, student_details):
             return "Already Enrolled in Correct Section"
         else:
             # CASE 3: Student is enrolled but in the WRONG section.
-            # This is the only scenario where we attempt a new enrollment for an already-enrolled student.
             print(f"  -> WARNING: Student {user.id} is in the wrong section. Attempting to update by creating a new enrollment in section {section_id}.")
             return enroll_student_in_section(course_id, user.id, section_id)
 
