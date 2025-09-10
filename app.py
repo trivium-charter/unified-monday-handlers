@@ -643,7 +643,18 @@ def get_canvas_section_name(plp_item_id, class_item_id, class_name, student_deta
             return "General Prep"
         return " & ".join(sorted(prep_subjects))
 
-    # PRIORITY 2: For ANY other course, use the generic default section name.
+    # --- NEW LOGIC START ---
+    # PRIORITY 2: Handle Middle School Courses by name.
+    # NOTE: You'll need to ensure the names here exactly match the item names in Monday.com
+    if class_name in ["6th-8th Grade Math", "6th-8th Grade ELA"]:
+        master_student_id = student_details.get('master_id')
+        if master_student_id:
+            tor_last_name = get_roster_teacher_name(master_student_id)
+            # Use the teacher's name, with "Orientation" as a fallback
+            return tor_last_name or "Orientation"
+    # --- NEW LOGIC END ---
+
+    # PRIORITY 3: For ANY other course, use the generic default section name.
     return "General Enrollment"
 
 def enroll_or_create_and_enroll(course_id, section_id, student_details):
