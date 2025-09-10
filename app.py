@@ -1,5 +1,5 @@
 # ==============================================================================
-# FINAL CONSOLIDATED APPLICATION (All Original Logic Restored and Bugs Fixed)
+# FINAL CONSOLIDATED APPLICATION (All Corrections Applied)
 # ==============================================================================
 import os
 import json
@@ -63,6 +63,10 @@ CANVAS_TO_STAFF_CONNECT_COLUMN_ID = os.environ.get("CANVAS_TO_STAFF_CONNECT_COLU
 CANVAS_TERM_ID = os.environ.get("CANVAS_TERM_ID")
 CANVAS_SUBACCOUNT_ID = os.environ.get("CANVAS_SUBACCOUNT_ID")
 CANVAS_TEMPLATE_COURSE_ID = os.environ.get("CANVAS_TEMPLATE_COURSE_ID")
+
+# TODO: Add your actual Canvas Course IDs for the Middle School courses here
+MIDDLE_SCHOOL_MATH_CANVAS_ID = 12345 # <--- REPLACE WITH YOUR 6th-8th GRADE MATH COURSE ID
+MIDDLE_SCHOOL_ELA_CANVAS_ID = 12346   # <--- REPLACE WITH YOUR 6th-8th GRADE ELA COURSE ID
 
 SPECIAL_COURSE_CANVAS_IDS = { "Jumpstart": 10069, "ACE Study Hall": 10128, "Connect English Study Hall": 10109, "Connect Math Study Hall": 9966, "Prep Math and ELA Study Hall": 9960, "EL Support Study Hall": 10046 }
 
@@ -164,6 +168,17 @@ def execute_monday_graphql(query):
             else: print("ERROR: Final retry failed."); return None
     return None
 
+def get_latest_update_body(item_id):
+    """Fetches the body text of the most recent update on an item."""
+    if not item_id:
+        return ""
+    query = f"query {{ items(ids: [{item_id}]) {{ updates(limit: 1) {{ body }} }} }}"
+    result = execute_monday_graphql(query)
+    try:
+        return result['data']['items'][0]['updates'][0].get('body', '')
+    except (TypeError, KeyError, IndexError):
+        return ""
+
 def get_user_email(user_id):
     if user_id is None: return None
     query = f"query {{ users(ids: [{user_id}]) {{ email }} }}"
@@ -191,8 +206,6 @@ def get_item_names(item_ids):
         return {int(item['id']): item['name'] for item in result['data']['items']}
     except (TypeError, KeyError, IndexError):
         return {}
-
-
         
 def get_user_name(user_id):
     if user_id is None or user_id == -4: return None
@@ -381,6 +394,15 @@ def is_middle_or_high_school(grade_text):
         grade_level = int(match.group(0))
         return 6 <= grade_level <= 12
     return False
+
+def is_middle_school(grade_text):
+    """Checks if a student is in middle school (grades 6-8)."""
+    if not grade_text: return False
+    match = re.search(r'\d+', grade_text)
+    if match:
+        grade_level = int(match.group(0))
+        return 6 <= grade_level <= 8
+    return False
     
 def is_high_school_student(grade_text):
     """Checks if a student is in high school based on their grade text."""
@@ -565,19 +587,6 @@ def unenroll_student_from_course(course_id, student_details):
     ### ALL UNENROLLMENT LOGIC HAS BEEN PERMANENTLY DISABLED ###
     print(f"INFO: An unenrollment for course {course_id} was requested but the function is DISABLED. No action was taken.")
     return True
-    ### PREVIOUS LOGIC - NOW DEACTIVATED
-    # canvas_api = initialize_canvas_api()
-    # if not canvas_api: return False
-    # user = find_canvas_user(student_details)
-    # if not user: return True
-    # try:
-    #     course = canvas_api.get_course(course_id)
-    #     for enrollment in course.get_enrollments(user_id=user.id):
-    #         enrollment.deactivate(task='conclude')
-    #     return True
-    # except CanvasException as e:
-    #     print(f"ERROR: Canvas unenrollment failed: {e}")
-    #     return False
 
 def enroll_teacher_in_course(course_id, teacher_details, role='TeacherEnrollment'):
     canvas_api = initialize_canvas_api()
@@ -603,10 +612,6 @@ def get_teacher_person_value_from_canvas_board(canvas_item_id):
 # ==============================================================================
 # CORE LOGIC FUNCTIONS
 # ==============================================================================
-
-#
-# ----- START: FINAL FUNCTION WITH CORRECTED LOGIC AND PRIORITY -----
-#
 def get_canvas_section_name(plp_item_id, class_item_id, class_name, student_details, course_to_track_map, class_id_to_category_map, id_to_name_map):
     """
     Determines the Canvas section name.
@@ -644,51 +649,43 @@ def get_canvas_section_name(plp_item_id, class_item_id, class_name, student_deta
 def enroll_or_create_and_enroll(course_id, section_id, student_details):
     canvas_api = initialize_canvas_api()
     if not canvas_api: return "Failed"
+    
     user = find_canvas_user(student_details)
     if not user:
         print(f"INFO: Canvas user not found for {student_details['email']}. Attempting to create new user.")
         try:
             user = create_canvas_user(student_details)
         except CanvasException as e:
-            if "already in use" in str(e):
-                print("INFO: User creation failed due to conflict. Searching again for existing user.")
-                user = find_canvas_user(student_details)
-            else:
-                print(f"ERROR: A critical error occurred during user creation: {e}")
-                user = None
+            print(f"ERROR: A critical error occurred during user creation: {e}")
+            user = None
+            
     if not user:
         print(f"ERROR: Could not find or create a Canvas user for {student_details.get('name')}. Final enrollment failed.")
         return "Failed"
-    try:
-        full_user = canvas_api.get_user(user.id)
-        course_obj = canvas_api.get_course(course_id)
-        
-        enrollments = course_obj.get_enrollments(user_id=full_user.id, state=['active', 'invited'])
-        has_active_enrollment = any(e.enrollment_state == 'active' for e in enrollments)
-        
-        if has_active_enrollment:
-            print(f"  -> INFO: Student {full_user.id} already has an active enrollment in course {course_id}. No action taken.")
-            return "Already Enrolled"
 
-        pending_invitations = [e for e in enrollments if e.enrollment_state == 'invited']
-        if pending_invitations:
-            try:
-                invitation_to_accept = pending_invitations[0]
-                print(f"  -> INFO: Found pending invitation {invitation_to_accept.id}. Accepting it now.")
-                # *** THIS IS THE CORRECTED LINE ***
-                invitation_to_accept.accept(as_user_id=invitation_to_accept.user_id)
-                print(f"  -> SUCCESS: Invitation accepted. Enrollment is now active.")
-                return "Success"
-            except CanvasException as e:
-                print(f"  -> WARNING: Failed to accept pending invitation {pending_invitations[0].id}: {e}.")
+    try:
+        course_obj = canvas_api.get_course(course_id)
+        enrollments = course_obj.get_enrollments(user_id=user.id, state=['active', 'invited'])
         
-        print(f"  -> INFO: Student {full_user.id} has no valid enrollment. Creating new enrollment.")
-        if student_details.get('ssid') and hasattr(full_user, 'sis_user_id') and full_user.sis_user_id != student_details['ssid']:
-            update_user_ssid(full_user, student_details['ssid'])
-        return enroll_student_in_section(course_id, full_user.id, section_id)
+        # CASE 1: Student has no enrollment in this course at all.
+        if not enrollments:
+            print(f"  -> INFO: No enrollment found for student {user.id}. Creating a new one in section {section_id}.")
+            return enroll_student_in_section(course_id, user.id, section_id)
+
+        # CASE 2: Student is enrolled. Now we must check if the section is correct.
+        is_in_correct_section = any(e.course_section_id == section_id for e in enrollments)
+        
+        if is_in_correct_section:
+            print(f"  -> INFO: Student {user.id} is already enrolled in the correct section ({section_id}). No action needed.")
+            return "Already Enrolled in Correct Section"
+        else:
+            # CASE 3: Student is enrolled but in the WRONG section.
+            # This is the only scenario where we attempt a new enrollment for an already-enrolled student.
+            print(f"  -> WARNING: Student {user.id} is in the wrong section. Attempting to update by creating a new enrollment in section {section_id}.")
+            return enroll_student_in_section(course_id, user.id, section_id)
 
     except CanvasException as e:
-        print(f"ERROR: Could not retrieve or enroll user ID {user.id}: {e}")
+        print(f"ERROR: A Canvas API error occurred: {e}")
         return "Failed"
 
 def get_student_details_from_plp(plp_item_id):
@@ -814,9 +811,26 @@ def process_canvas_full_sync_from_status(event_data):
             section = create_section_if_not_exists(ace_sh_canvas_id, tor_last_name)
             if section:
                 enroll_or_create_and_enroll(ace_sh_canvas_id, section.id, student_details)
-        else:
-            print(f"  -> Student is K-5th grade. Unenrolling from ACE Study Hall.")
-            unenroll_student_from_course(ace_sh_canvas_id, student_details)
+
+    # --- START: NEW MIDDLE SCHOOL LOGIC (WITH UNENROLLMENTS REMOVED) ---
+    print(f"INFO: Checking middle school conditional enrollments for PLP ID {plp_item_id}.")
+    if is_middle_school(grade_text):
+        # Check for Connect Math
+        has_connect_math = any("Connect" in id_to_name_map.get(cid, "") for cid, cat in class_id_to_category_map.items() if cat == "Math")
+        if not has_connect_math:
+            print("  -> Student does NOT have 'Connect Math'. Enrolling in 6-8th Grade Math.")
+            section = create_section_if_not_exists(MIDDLE_SCHOOL_MATH_CANVAS_ID, "Middle School General")
+            if section:
+                enroll_or_create_and_enroll(MIDDLE_SCHOOL_MATH_CANVAS_ID, section.id, student_details)
+
+        # Check for Connect ELA
+        has_connect_ela = any("Connect" in id_to_name_map.get(cid, "") for cid, cat in class_id_to_category_map.items() if cat == "ELA")
+        if not has_connect_ela:
+            print("  -> Student does NOT have 'Connect ELA'. Enrolling in 6-8th Grade ELA.")
+            section = create_section_if_not_exists(MIDDLE_SCHOOL_ELA_CANVAS_ID, "Middle School General")
+            if section:
+                enroll_or_create_and_enroll(MIDDLE_SCHOOL_ELA_CANVAS_ID, section.id, student_details)
+    # --- END: NEW MIDDLE SCHOOL LOGIC ---
 
     # --- 2. PRE-COMPUTE HS SECTION NAMES ---
     course_to_track_map = {}
@@ -859,8 +873,8 @@ def process_canvas_full_sync_from_status(event_data):
                 section_name = get_canvas_section_name(plp_item_id, class_item_id, class_name, student_details, course_to_track_map, class_id_to_category_map, id_to_name_map)
                 manage_class_enrollment("enroll", plp_item_id, class_item_id, student_details, section_name=section_name)
 
-    # --- 4. POST CONSOLIDATED MONDAY.COM LOGS ---
-    print(f"INFO: Posting consolidated logs for PLP ID {plp_item_id}.")
+    # --- 4. POST CONSOLIDATED MONDAY.COM LOGS (WITH DUPLICATE CHECK) ---
+    print(f"INFO: Checking and posting consolidated logs for PLP ID {plp_item_id}.")
     
     category_to_class_ids_map_logs = defaultdict(list)
     for class_id, category in class_id_to_category_map.items():
@@ -870,9 +884,19 @@ def process_canvas_full_sync_from_status(event_data):
         subitem_name = f"{category} Curriculum"
         subitem_id = find_or_create_subitem(plp_item_id, subitem_name)
         if subitem_id:
+            # Create the string representing the current state
             current_names_str = ", ".join([f"'{id_to_name_map.get(cid)}'" for cid in sorted(class_ids) if id_to_name_map.get(cid)]) or "Blank"
-            update_text = f"Full Canvas Sync triggered by {changer_name}. Current {category} curriculum is now: {current_names_str}."
-            create_monday_update(subitem_id, update_text)
+            
+            # Get the last log and check if it already reflects the current state
+            latest_log = get_latest_update_body(subitem_id)
+            state_declaration = f"curriculum is now: {current_names_str}"
+
+            if state_declaration not in latest_log:
+                print(f"  -> State for '{category}' has changed. Posting new log.")
+                update_text = f"Full Canvas Sync triggered by {changer_name}. Current {category} {state_declaration}."
+                create_monday_update(subitem_id, update_text)
+            else:
+                print(f"  -> State for '{category}' is already accurately logged. No update needed.")
 
 @celery_app.task(name='app.process_canvas_delta_sync_from_course_change')
 def process_canvas_delta_sync_from_course_change(event_data):
@@ -947,8 +971,6 @@ def process_canvas_delta_sync_from_course_change(event_data):
         create_monday_update(subitem_id, final_update)
     
     # --- CANVAS ACTIONS ---
-    # The 'removed_ids' list is now only used for logging purposes above.
-    # The call to unenroll has been permanently disabled in the unenroll_student_from_course function.
     for rid in removed_ids:
         manage_class_enrollment("unenroll", plp_item_id, rid, student_details)
 
