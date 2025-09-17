@@ -132,8 +132,6 @@ def get_canvas_stats(course_id):
     print(f"  Found {len(published_assignments)} published assignments.")
     
     
-    ## --- START OF CORRECTED SECTION ---
-
     # Initialize lists for statistics
     grading_times_days = []
     last_graded_date = None
@@ -190,9 +188,6 @@ def get_canvas_stats(course_id):
                     grading_times_days.append(time_diff.total_seconds() / (60 * 60 * 24))
                     graded_submission_count += 1
 
-    ## --- END OF CORRECTED SECTION ---
-
-
     # 4. Calculate and assign final stats
     stats['graded_submissions6__1'] = graded_submission_count
     stats['numeric6__1'] = waiting_for_grading_count
@@ -227,7 +222,7 @@ def get_canvas_stats(course_id):
 
 def main():
     """Main function to run the grade analysis."""
-    print("--- Starting Canvas Grade Analyzer ---") # NEW: Start of run
+    print("--- Starting Canvas Grade Analyzer ---")
     if not all([CANVAS_KEY, MONDAY_API_KEY, CANVAS_BOARD_ID, CANVAS_COURSE_ID_COLUMN_ID]):
         print("FATAL: Missing one or more required environment variables.")
         return
@@ -238,7 +233,6 @@ def main():
         print("No courses found on the Monday.com board to process.")
         return
 
-    # NEW: Log how many courses were found
     print(f"Found {len(courses_to_process)} courses to analyze from board ID {CANVAS_BOARD_ID}.")
 
     for course_info in courses_to_process:
@@ -246,10 +240,10 @@ def main():
         
         if stats:
             update_payload = {k: str(v) for k, v in stats.items() if v is not None}
-            if update_payload: # NEW: Only update if there's something to update
+            if update_payload:
                 update_monday_board(CANVAS_BOARD_ID, course_info['monday_item_id'], update_payload)
 
-    print("\n--- Analysis complete. ---") # NEW: End of run
+    print("\n--- Analysis complete. ---")
 
 if __name__ == "__main__":
     main()
