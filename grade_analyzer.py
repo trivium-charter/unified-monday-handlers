@@ -101,7 +101,7 @@ def get_canvas_stats(course_id):
     try:
         course = canvas.get_course(course_id)
         stats['text65__1'] = course.name
-        print(f"  Analyzing course: '{course.name}'") # NEW: Log course name
+        print(f"  Analyzing course: '{course.name}'")
     except Exception as e:
         print(f"  ERROR: Could not fetch course. Skipping. Reason: {e}")
         return None
@@ -111,10 +111,10 @@ def get_canvas_stats(course_id):
     active_students = [e for e in enrollments if e.user['name'] not in STUDENTS_TO_IGNORE and e.enrollment_state == 'active']
     student_ids_to_include = {s.user_id for s in active_students}
     stats['numeric3__1'] = len(active_students)
-    print(f"  Found {len(active_students)} active, non-test students.") # NEW: Log student count
+    print(f"  Found {len(active_students)} active, non-test students.")
 
     if not active_students:
-        print("  WARNING: No active students found. Ending analysis for this course.") # NEW: Warning
+        print("  WARNING: No active students found. Ending analysis for this course.")
         return stats
 
     # 2. Get class grades for active students
@@ -129,11 +129,11 @@ def get_canvas_stats(course_id):
     
     published_assignments = [a for a in assignments if a.published and not a.omit_from_final_grade]
     stats['total_assignments3__1'] = len(published_assignments)
-    print(f"  Found {len(published_assignments)} published assignments.") # NEW: Log assignment count
-
-    all_submissions = course.get_submissions(include=['assignment'])
-    print(f"  Processing {len(all_submissions)} total submissions.") # NEW: Log submission count
+    print(f"  Found {len(published_assignments)} published assignments.")
     
+    
+    ## --- START OF CORRECTED SECTION ---
+
     # Initialize lists for statistics
     grading_times_days = []
     last_graded_date = None
@@ -143,41 +143,55 @@ def get_canvas_stats(course_id):
     
     all_scores = []
     category_scores = {'Learn': [], 'Practice': [], 'SYK': []}
+    
+    print(f"  Gathering submissions for each assignment...")
+    
+    # Correctly loop through each assignment to get its submissions
+    for assignment in published_assignments:
+        submissions = assignment.get_submissions()
+        for sub in submissions:
+            # Filter for submissions from active, non-test students
+            if sub.user_id not in student_ids_to_include:
+                continue
 
-    for sub in all_submissions:
-        if sub.user_id not in student_ids_to_include:
-            continue
+            # Check for waiting submissions
+            if sub.workflow_state == 'submitted':
+                waiting_for_grading_count += 1
+                
+            # Check for past-due ungraded (0 score)
+            due_at = assignment.due_at
+            if due_at and datetime.fromisoformat(due_at.replace('Z', '')) < datetime.utcnow() and sub.score is None:
+                past_due_ungraded_count += 1
 
-        if sub.workflow_state == 'submitted':
-            waiting_for_grading_count += 1
-            
-        due_at = sub.assignment.get('due_at')
-        if due_at and datetime.fromisoformat(due_at.replace('Z', '')) < datetime.utcnow() and sub.score is None:
-            past_due_ungraded_count += 1
+            # Process graded submissions for more detailed stats
+            if sub.workflow_state == 'graded' and sub.score is not None and sub.submitted_at and sub.graded_at:
+                all_scores.append(sub.score)
+                
+                # Find assignment category and map it to our keys
+                group_id = assignment.assignment_group_id
+                if group_id and group_id in assignment_groups:
+                    category_name = assignment_groups[group_id]
+                    if category_name == 'Learn':
+                        category_scores['Learn'].append(sub.score)
+                    elif category_name == 'Practice':
+                        category_scores['Practice'].append(sub.score)
+                    elif category_name in ['SYK', 'Show You Know']:
+                        category_scores['SYK'].append(sub.score)
 
-        if sub.workflow_state == 'graded' and sub.score is not None and sub.submitted_at and sub.graded_at:
-            all_scores.append(sub.score)
-            
-            group_id = sub.assignment.get('assignment_group_id')
-            if group_id and group_id in assignment_groups:
-                category_name = assignment_groups[group_id]
-                if category_name == 'Learn':
-                    category_scores['Learn'].append(sub.score)
-                elif category_name == 'Practice':
-                    category_scores['Practice'].append(sub.score)
-                elif category_name in ['SYK', 'Show You Know']:
-                    category_scores['SYK'].append(sub.score)
+                # Calculate human grading time
+                submitted_at = datetime.fromisoformat(sub.submitted_at.replace('Z', ''))
+                graded_at = datetime.fromisoformat(sub.graded_at.replace('Z', ''))
+                
+                if last_graded_date is None or graded_at > last_graded_date:
+                    last_graded_date = graded_at
 
-            submitted_at = datetime.fromisoformat(sub.submitted_at.replace('Z', ''))
-            graded_at = datetime.fromisoformat(sub.graded_at.replace('Z', ''))
-            
-            if last_graded_date is None or graded_at > last_graded_date:
-                last_graded_date = graded_at
+                time_diff = graded_at - submitted_at
+                if time_diff.total_seconds() > MIN_HUMAN_GRADING_TIME_SECONDS:
+                    grading_times_days.append(time_diff.total_seconds() / (60 * 60 * 24))
+                    graded_submission_count += 1
 
-            time_diff = graded_at - submitted_at
-            if time_diff.total_seconds() > MIN_HUMAN_GRADING_TIME_SECONDS:
-                grading_times_days.append(time_diff.total_seconds() / (60 * 60 * 24))
-                graded_submission_count += 1
+    ## --- END OF CORRECTED SECTION ---
+
 
     # 4. Calculate and assign final stats
     stats['graded_submissions6__1'] = graded_submission_count
@@ -205,7 +219,6 @@ def get_canvas_stats(course_id):
         stats['numbers2__1'] = round(np.median(category_scores['SYK']), 2)
         stats['numbers20__1'] = round(np.mean(category_scores['SYK']), 2)
         
-    # NEW: Log a summary of key stats before updating Monday.com
     print(f"  - STATS SUMMARY: Mean Grade={stats.get('mean_class_grade__1', 'N/A')}, Waiting={stats.get('numeric6__1', 0)}, Mean Grading Time={stats.get('numeric0__1', 'N/A')} days")
     print(f"  Processing complete for course '{course.name}'.")
     return stats
