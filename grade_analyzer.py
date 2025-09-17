@@ -24,7 +24,7 @@ CANVAS_COURSE_ID_COLUMN_ID = os.getenv('CANVAS_COURSE_ID_COLUMN_ID') # Column co
 
 # --- Constants ---
 # Add any variations of test/sample student names here
-STUDENTS_TO_IGNORE = ["Test Student", "Sample Student", "Student, Test", "Student, Sample", "zz_Student", "Test"]
+STUDENTS_TO_IGNORE = ["Test Student", "Sample Student", "Student, Test", "Student, Sample", "zz_Student"]
 # Submissions graded in less than this time will be considered auto-graded
 MIN_HUMAN_GRADING_TIME_SECONDS = 60
 
@@ -100,7 +100,8 @@ def get_canvas_stats(course_id):
     
     try:
         course = canvas.get_course(course_id)
-        stats['text65__1'] = course.name # Canvas Course Title
+        stats['text65__1'] = course.name
+        print(f"  Analyzing course: '{course.name}'") # NEW: Log course name
     except Exception as e:
         print(f"  ERROR: Could not fetch course. Skipping. Reason: {e}")
         return None
@@ -110,9 +111,10 @@ def get_canvas_stats(course_id):
     active_students = [e for e in enrollments if e.user['name'] not in STUDENTS_TO_IGNORE and e.enrollment_state == 'active']
     student_ids_to_include = {s.user_id for s in active_students}
     stats['numeric3__1'] = len(active_students)
+    print(f"  Found {len(active_students)} active, non-test students.") # NEW: Log student count
 
     if not active_students:
-        print("  No active students found. Skipping further analysis.")
+        print("  WARNING: No active students found. Ending analysis for this course.") # NEW: Warning
         return stats
 
     # 2. Get class grades for active students
@@ -127,8 +129,10 @@ def get_canvas_stats(course_id):
     
     published_assignments = [a for a in assignments if a.published and not a.omit_from_final_grade]
     stats['total_assignments3__1'] = len(published_assignments)
+    print(f"  Found {len(published_assignments)} published assignments.") # NEW: Log assignment count
 
     all_submissions = course.get_submissions(include=['assignment'])
+    print(f"  Processing {len(all_submissions)} total submissions.") # NEW: Log submission count
     
     # Initialize lists for statistics
     grading_times_days = []
@@ -138,27 +142,22 @@ def get_canvas_stats(course_id):
     past_due_ungraded_count = 0
     
     all_scores = []
-    category_scores = {'Learn': [], 'Practice': [], 'SYK': []} # Names must match your Canvas categories
+    category_scores = {'Learn': [], 'Practice': [], 'SYK': []}
 
     for sub in all_submissions:
-        # Filter for submissions from active, non-test students
         if sub.user_id not in student_ids_to_include:
             continue
 
-        # Check for waiting submissions
         if sub.workflow_state == 'submitted':
             waiting_for_grading_count += 1
             
-        # Check for past-due ungraded (0 score)
         due_at = sub.assignment.get('due_at')
         if due_at and datetime.fromisoformat(due_at.replace('Z', '')) < datetime.utcnow() and sub.score is None:
             past_due_ungraded_count += 1
 
-        # Process graded submissions for more detailed stats
         if sub.workflow_state == 'graded' and sub.score is not None and sub.submitted_at and sub.graded_at:
             all_scores.append(sub.score)
             
-            # Find assignment category and map it to our keys
             group_id = sub.assignment.get('assignment_group_id')
             if group_id and group_id in assignment_groups:
                 category_name = assignment_groups[group_id]
@@ -169,7 +168,6 @@ def get_canvas_stats(course_id):
                 elif category_name in ['SYK', 'Show You Know']:
                     category_scores['SYK'].append(sub.score)
 
-            # Calculate human grading time
             submitted_at = datetime.fromisoformat(sub.submitted_at.replace('Z', ''))
             graded_at = datetime.fromisoformat(sub.graded_at.replace('Z', ''))
             
@@ -197,7 +195,6 @@ def get_canvas_stats(course_id):
         stats['numeric__1'] = round(np.median(grading_times_days), 2)
         stats['numeric0__1'] = round(np.mean(grading_times_days), 2)
 
-    # Category stats
     if category_scores['Learn']:
         stats['numbers6__1'] = round(np.median(category_scores['Learn']), 2)
         stats['numbers784__1'] = round(np.mean(category_scores['Learn']), 2)
@@ -208,6 +205,8 @@ def get_canvas_stats(course_id):
         stats['numbers2__1'] = round(np.median(category_scores['SYK']), 2)
         stats['numbers20__1'] = round(np.mean(category_scores['SYK']), 2)
         
+    # NEW: Log a summary of key stats before updating Monday.com
+    print(f"  - STATS SUMMARY: Mean Grade={stats.get('mean_class_grade__1', 'N/A')}, Waiting={stats.get('numeric6__1', 0)}, Mean Grading Time={stats.get('numeric0__1', 'N/A')} days")
     print(f"  Processing complete for course '{course.name}'.")
     return stats
 
@@ -215,7 +214,7 @@ def get_canvas_stats(course_id):
 
 def main():
     """Main function to run the grade analysis."""
-    print("Starting Canvas Grade Analyzer...")
+    print("--- Starting Canvas Grade Analyzer ---") # NEW: Start of run
     if not all([CANVAS_KEY, MONDAY_API_KEY, CANVAS_BOARD_ID, CANVAS_COURSE_ID_COLUMN_ID]):
         print("FATAL: Missing one or more required environment variables.")
         return
@@ -226,19 +225,18 @@ def main():
         print("No courses found on the Monday.com board to process.")
         return
 
-    print(f"Found {len(courses_to_process)} courses to analyze.")
+    # NEW: Log how many courses were found
+    print(f"Found {len(courses_to_process)} courses to analyze from board ID {CANVAS_BOARD_ID}.")
 
     for course_info in courses_to_process:
         stats = get_canvas_stats(course_info['canvas_course_id'])
         
         if stats:
-            # We need to remove any keys for stats that couldn't be calculated
-            # to avoid overwriting existing Monday data with null values.
-            # Convert all numeric values to strings for the Monday API as a safeguard.
             update_payload = {k: str(v) for k, v in stats.items() if v is not None}
-            update_monday_board(CANVAS_BOARD_ID, course_info['monday_item_id'], update_payload)
+            if update_payload: # NEW: Only update if there's something to update
+                update_monday_board(CANVAS_BOARD_ID, course_info['monday_item_id'], update_payload)
 
-    print("\nAnalysis complete.")
+    print("\n--- Analysis complete. ---") # NEW: End of run
 
 if __name__ == "__main__":
     main()
