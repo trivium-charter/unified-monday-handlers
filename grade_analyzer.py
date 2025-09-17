@@ -24,7 +24,7 @@ CANVAS_COURSE_ID_COLUMN_ID = os.getenv('CANVAS_COURSE_ID_COLUMN_ID') # Column co
 
 # --- Constants ---
 # Add any variations of test/sample student names here
-STUDENTS_TO_IGNORE = ["Test Student", "Sample Student"]
+STUDENTS_TO_IGNORE = ["Test Student", "Sample Student", "Student, Test", "Student, Sample", "zz_Student", "Test"]
 # Submissions graded in less than this time will be considered auto-graded
 MIN_HUMAN_GRADING_TIME_SECONDS = 60
 
@@ -158,12 +158,16 @@ def get_canvas_stats(course_id):
         if sub.workflow_state == 'graded' and sub.score is not None and sub.submitted_at and sub.graded_at:
             all_scores.append(sub.score)
             
-            # Find assignment category
+            # Find assignment category and map it to our keys
             group_id = sub.assignment.get('assignment_group_id')
             if group_id and group_id in assignment_groups:
                 category_name = assignment_groups[group_id]
-                if category_name in category_scores:
-                    category_scores[category_name].append(sub.score)
+                if category_name == 'Learn':
+                    category_scores['Learn'].append(sub.score)
+                elif category_name == 'Practice':
+                    category_scores['Practice'].append(sub.score)
+                elif category_name in ['SYK', 'Show You Know']:
+                    category_scores['SYK'].append(sub.score)
 
             # Calculate human grading time
             submitted_at = datetime.fromisoformat(sub.submitted_at.replace('Z', ''))
