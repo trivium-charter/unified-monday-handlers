@@ -6,3 +6,4 @@ gevent==23.9.1
 pytz==2024.1
 canvasapi==3.3.0
 mysql-connector-python==8.0.33
+numpy
